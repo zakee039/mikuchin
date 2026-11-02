@@ -30,3 +30,17 @@ Both the official text encoder path and the native Qwen reference picture path w
 The **Settings → Global settings → Chat image model** selector is independent from the Images tab selector. Its selected ID is validated on the server against the available model profiles, saved in the SessionV1 character-card `options` SQLite table under `chat_image_profile`, and used by the Chat image tool for **each subsequent request** (including existing conversations). Old clients that omit the field preserve the previously selected model. The default `default` alias resolves to the currently configured Official model. The API key and local-first origin protections apply to changing the global setting.
 
 When Chat selects an SDXL profile, it uses that profile's steps/CFG and English prompt guidance. A character reference is **not** silently sent as SDXL img2img: that would be strong scene reference, contrary to the user-requested weak visual reference. Role images are automatically added only for the official Qwen model with native weak image reference and an explicitly character-related tool call. Other models generate based on the chat prompt alone, including the specified holiday, outfit, pose and scene. The direct Images page retains its own explicit SDXL img2img upload option.
+
+## Persistent generated image URLs (2026-11-03 fix)
+
+The first-party Chat image tool and the Images page use the **same durable**
+`<session_v1_dir>/generated-images/` directory when SessionV1 is enabled.
+The image retrieval route `/v1/images/files/<32-hex>.png` must resolve that
+server-owned directory **first**, independent of the selected image profile and
+across Manager/server restarts. Every `ImageGen` starts with a different temporary
+directory, which previously led to false 404s for existing PNGs after restart or
+when a non-default profile had generated the image. The URL itself contains only
+an opaque 128-bit image id, never an input filesystem path; strict file-name
+validation remains in place. Deployments without SessionV1 still use the older
+in-process output directories. Images stored under SessionV1 remain available
+until explicitly deleted or the underlying storage disappears.
