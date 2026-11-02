@@ -1,25 +1,26 @@
-# Mikuchin — Independent model profiles in the Images page
+# Mikuchin — four image profiles (Qwen Turbo official/uncensored, Animagine, SDXL)
 
-The **Images** tab has its own image model selector; the chat image tool intentionally keeps the old default `images` model and ignores this selection.
+## Model truth and provenance
 
-## Installed models
+`qwen_image_2.1-Q4_K.gguf` newly downloaded from `leejet/Qwen-Image-2.1-GGUF` is **Qwen Image 2.1 Base** (NOT Turbo). It is retained under `E:/LLM/models/Qwen-Image-2.1-Official-Components/` but deliberately not exposed as the Turbo profile. Base requires different recommended denoising parameters (about 40 steps) and should not use the Turbo 8-step sigma schedule.
 
-| ID | Model | Weights | Default steps | CFG |
-| --- | --- | --- | --- | --- |
-| `default` | Existing Qwen Turbo | `E:/LLM/models/Qwen-Image-2.1-Turbo-Uncensored-AD-Q4_K/` | 8 | 1.0 |
-| `qwen-turbo-standard` | Standard Qwen Turbo AD-Q4_K | `E:/LLM/models/Qwen-Image-2.1-Turbo-Standard-AD-Q4_K/Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` | 8 | 1.0 |
-| `animagine-xl-4-opt` | Animagine XL 4.0 Opt | `E:/LLM/models/Animagine-XL-4.0-Opt/animagine-xl-4.0-opt.safetensors` | 28 | 7.0 |
-| `sdxl-base-1` | SDXL Base 1.0 | `E:/LLM/models/SDXL-Base-1.0/sd_xl_base_1.0.safetensors` | 30 | 7.0 |
+The Turbo DiT file `Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` is the pre-existing **community-quantized** Turbo main model (AtomicChat lineage). `E:/LLM/models/Qwen-Image-2.1-Official-Components/` contains a hard link to it; this avoids duplicating ~4.2 GB. **It is not a vendor-published original-precision Turbo checkpoint.** The two Turbo profiles share the same DiT main tensors but use different Qwen3-VL text encoders, so this is a genuine unmodified-encoder vs modified-encoder comparison, not two independent DiT checkpoints.
 
-SHA256 verification showed the newly downloaded standard Qwen Turbo GGUF is **byte-for-byte identical** to the currently deployed default Qwen Turbo main GGUF. These two selections therefore produce the same results when paired with the same encoder, VAE and parameters. The standard Qwen Turbo profile reuses the existing Qwen3-VL Q4 text encoder and official BF16 VAE. It is **not** an entirely original official BF16 end-to-end pipeline. Both SDXL checkpoints are self-contained and run through `sd-cli --model` with Euler sampling and no Qwen Turbo sigmas.
+- `qwen-image-2.1-turbo-official` (default; Chat image tool): community Turbo DiT, new Qwen official `Qwen3VL-8B-Instruct-Q4_K_M.gguf` + `mmproj-Qwen3VL-8B-Instruct-F16.gguf`, shared BF16 Qwen Image 2.1 VAE. Text-to-image and native reference-image edit via sd-cli `--llm_vision` and `--ref-image`. 8 steps, CFG 1, Turbo sigma schedule.
+- `qwen-image-2.1-turbo-uncensored`: same Turbo DiT, legacy modified/unrestricted Qwen3-VL 8B encoder, shared BF16 VAE. Text-to-image; no visual projector connected to this profile.
+- `animagine-xl-4-opt`: unchanged standalone SDXL checkpoint, 28 steps, CFG 7.
+- `sdxl-base-1`: unchanged standalone SDXL checkpoint, 30 steps, CFG 7.
 
-The currently running Windows Manager points to `E:/LLM/deploy/benchmark/configs/reserve1024-128-v1.json`, **not** `config/active.json`. Accordingly, the `images.profiles` mapping was merged into that active registered config without changing any other top-level setting; the original is backed up as `reserve1024-128-v1.json.before-mikuchin-image-profiles.bak`. The project-local `config/active.json` also retains the same profiles as a separate reference and is backed up as `config/active.json.pre-image-profiles.bak`. These live configuration files and backups are not committed to Git. The original chat image model remains the default.
+The active Windows Manager registered configuration is `E:/LLM/deploy/benchmark/configs/reserve1024-128-v1.json`; project-local `config/active.json` is only a reference. Both files are locally backed up before mutation and are not committed to Git. `images.profile_id` exposes the default profile as `qwen-image-2.1-turbo-official` in the browser while the API still accepts the legacy `default` alias. This is per-deployment configuration, not a public API model change.
 
-## API / safety
+## Role-linked Chat images: weak reference policy
 
-- Authenticated `GET /v1/mikuchin/image-models` reveals configured profile names, families, and existence checks (no arbitrary file paths).
-- `POST /v1/images/generations` accepts optional `strata_image_profile`; absent means the existing default. Only configured IDs are accepted; arbitrary paths and options cannot be submitted.
-- The profile is selected per request; no GPU weights are permanently held by the image process. The shared FIFO and `gpu_turn` logic are retained.
-- Actual model quality is not established by API tests; SDXL Base / Animagine output should be checked visually with representative prompts.
+Only the authenticated first-party Chat tool can use private character reference images. For a named, assigned character with a stored reference picture, the model can mark a tool request `character_related: true` **only when the image subject is the assigned role**. The server independently verifies the session-to-character assignment and reads a bounded picture directly from the trusted SessionV1 store; the client cannot supply a filesystem path or impersonate a role. Stateless and ordinary assistants never get character references; generic landscape/art requests do not get a reference.
 
-No chat model picker integration is included in this change.
+The role image is a **weak identity/style reference**, not a prompt or scene instruction. The generated tool prompt explicitly prioritizes the user's current turn and established conversation context: special events/holidays, clothing, pose, environment, subject and composition override any conflicting visual elements in the role art. The native Qwen runner uses `--ref-image` and an experimentally conservative `--img-cfg-scale 0.7`; this mitigates but cannot strictly guarantee reference strength. Never use the role picture as a global fixed image init or blindly copy its background/clothing.
+
+Image-page manual reference and SDXL img2img behavior are independent; ordinary third-party OpenAI-compatible API calls without a role/session remain unaffected.
+
+## Validation
+
+Both the official text encoder path and the native Qwen reference picture path were executed with the actual local `sd-cli`: 256×256, 1-step smoke tests returned PNG images. These tests prove loading and API wiring, not final 8-step visual quality or identity fidelity. Automated tests cover profile ID routing, no unrelated reference, no stateless/ordinary reference, text prompt priority, and CLI arguments.

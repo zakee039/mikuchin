@@ -100,8 +100,14 @@
       btn.hidden = true;
       return;
     }
-    if (model()?.reference_mode === "img2img") {
-      hint.textContent = "此模型支持图生图：生成时直接引用当前图片，默认重绘强度 0.65。";
+    if (["img2img", "qwen_edit"].includes(model()?.reference_mode)) {
+      hint.textContent = model()?.reference_mode === "qwen_edit" ?
+        tr("当前 Qwen 模型支持参考图片：文字指令优先，图片仅作视觉参考。",
+           "Qwen supports a reference image. Text instructions take priority; the image guides appearance only.",
+           "Qwenは参照画像に対応しています。テキスト指示を優先し、画像は外観の補助にのみ使用します。") :
+        tr("此模型支持图生图：生成时直接引用当前图片，默认重绘强度 0.65。",
+           "This model supports image-to-image (denoise strength: 0.65).",
+           "このモデルはimg2imgに対応しています（ノイズ除去強度0.65）。");
       btn.hidden = true;
     } else {
       hint.textContent = health.images ?
@@ -233,16 +239,16 @@
     const steps = Number(get("img-steps").value);
     if (!Number.isInteger(steps) || steps < 1 || steps > 100) {toast("warn", "步数错误", "步数应为 1–100 的整数。");return;}
     const selected = model();
-    if (reference && selected?.reference_mode !== "img2img") {
+    if (reference && !["img2img", "qwen_edit"].includes(selected?.reference_mode)) {
       if (!window.confirm("当前模型不支持直接引用图片。可先点击「立即转换」将图片转为 Prompt；继续只会使用文本 Prompt，确定生成吗？")) return;
     }
     const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
       size: get("img-size").value, response_format: "b64_json",
       strata_upscale: get("img-upscale").value, strata_image_profile: current};
     if (get("img-seed").value !== "") body.seed = Number(get("img-seed").value);
-    if (reference && selected?.reference_mode === "img2img") {
+    if (reference && ["img2img", "qwen_edit"].includes(selected?.reference_mode)) {
       body.strata_reference_image = reference.url;
-      body.strata_denoise_strength = 0.65;
+      if (selected.reference_mode === "img2img") body.strata_denoise_strength = 0.65;
     }
     saveDraft();
     working = true;
