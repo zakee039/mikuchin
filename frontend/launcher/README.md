@@ -97,3 +97,10 @@ Run the compiled native executable with `--self-test` to verify a real start/sto
 - Tray clicks select their monitor; normal desktop startup uses the primary monitor. Coordinates use physical pixels for mixed-DPI monitors; the resulting top-left position is clamped to stay within the work area.
 - The placement is intentionally recalculated on show, so closing the window to the tray and reopening it does not preserve an off-screen location.
 - Verification on a 1707x960 desktop with a 1707x920 taskbar-free work area: window rectangle `(916,117)-(1371,804)`, center `(1143.5,460.5)`; target `(1144,460)`, fully inside the work area.
+
+## Overview dashboard and avatar
+
+- The Overview page uses a flexible, viewport-filling card layout; the main dashboard is not independently scrollable. The model, 2x2 metrics, KV cache / Cloudflare status, and bottom action row share the available space.
+- `View runtime log` sits directly underneath the status pill in the header and remains accessible in all tabs.
+- Five consecutive clicks (with no gap longer than 2.5 seconds) on the header avatar show `assets/half.png` in a full-window lightbox; clicking anywhere on the lightbox or pressing Escape closes it. This uses the original image with transparency, not a newly generated variant.
+- The desktop app bundles that image as `frontend/launcher/public/mikuchin-half.png`. The copy must remain identical to `assets/half.png`.

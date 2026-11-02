@@ -168,3 +168,35 @@
 .compact-settings .setting-inline>label{font-weight:600;font-size:13px}
 .compact-settings .idle-input{flex:none;width:70px;max-width:70px;margin-left:auto}
 .compact-settings .idle-control .outline-small{flex:none;max-width:none;min-width:130px;height:36px}
+
+/* Overview uses the usable viewport with elastic cards, no internal scrollbar. */
+#content:has(> .overview-page){overflow:hidden;display:flex;flex-direction:column}
+#content > .overview-page{height:100%;min-height:0;min-width:0;flex:1;display:flex;flex-direction:column;gap:clamp(10px,1.9vh,15px)}
+.overview-page .model-card{flex:1 1 95px;min-height:92px;min-width:0;margin:0;padding:12px 15px 10px}
+.overview-page .metrics{flex:1.85 1 178px;min-height:166px;min-width:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:9px;margin:0}
+.overview-page .metric{height:auto;min-height:0;min-width:0;padding:11px 13px}
+.overview-page .monitor-bottom{flex:1.1 1 104px;min-height:98px;min-width:0;gap:9px;margin:0}
+.overview-page .monitor-bottom .half-card{min-height:0;min-width:0;height:100%;overflow:hidden}
+.overview-page .actions{flex:0 0 42px;min-height:42px;min-width:0;gap:9px}
+.overview-page .actions button{height:42px}
+.overview-page .tunnel-monitor-latency{margin:7px 0 5px}
+.overview-page .monitor-bottom .track{margin:12px 0 8px}
+/* Status and log shortcut remain visible on every tab. */
+.header-status{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px;flex:0 0 auto}
+.header-log{padding:0 2px;background:transparent;border:0;color:#368e85;font-size:10.5px;line-height:1.2;cursor:pointer}
+.header-log:hover{text-decoration:underline}
+.header-log:focus-visible,.avatar-trigger:focus-visible{outline:2px solid #39c5bb;outline-offset:3px}
+/* Five avatar clicks reveal the authoritative half-body portrait. */
+.brand-symbol.avatar-trigger{border:0;padding:0;flex-shrink:0;cursor:pointer;appearance:none}
+.avatar-trigger:hover{box-shadow:0 4px 12px #2aaca334}
+.miku-portrait-overlay{position:fixed;inset:0;z-index:100000;background:rgba(16,37,39,.63);display:flex;justify-content:center;align-items:center;padding:18px;cursor:pointer;animation:miku-portrait-in .16s ease-out}
+.miku-portrait-overlay img{display:block;width:auto;height:auto;max-width:min(92vw,540px);max-height:88vh;object-fit:contain;pointer-events:none;user-select:none;filter:drop-shadow(0 10px 23px #06191a6b)}
+@keyframes miku-portrait-in{from{opacity:0}to{opacity:1}}
+@media (max-height:690px){
+ #content > .overview-page{gap:9px}
+ .overview-page .model-card{min-height:87px;padding-top:9px;padding-bottom:7px}
+ .overview-page .metrics{min-height:156px;gap:8px}
+ .overview-page .monitor-bottom{min-height:90px}
+ .overview-page .actions{flex-basis:39px;min-height:39px}
+ .overview-page .actions button{height:39px}
+}

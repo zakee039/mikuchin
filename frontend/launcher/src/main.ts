@@ -11,6 +11,29 @@ type Metrics={engine?:Record<string,unknown>;live?:Record<string,unknown>;hardwa
 type Status={phase:string;managed:boolean;desired:boolean;error:string;restarts:number;settings:Prefs;metrics:Metrics|null;host_gpu?:Record<string,number>|null;cf_running:boolean;cf_connections:number|null;cf_error:string;cf_latency_ms:number|null;cf_test_status:string;cf_token_present:boolean;api_key_present:boolean;lan_chat_url?:string|null};
 let prefs:Prefs|null=null, status:Status|null=null, models:Model[]=[], tab="overview", busy=false, toast="";
 let idleSeconds=900;let idleBusy=false;
+let avatarTapCount=0;
+let avatarTapLast=0;
+function showPortrait():void{
+ if(document.getElementById('miku-portrait-overlay'))return;
+ const overlay=document.createElement('div');
+ overlay.id='miku-portrait-overlay';
+ overlay.className='miku-portrait-overlay';
+ overlay.setAttribute('role','dialog');
+ overlay.setAttribute('aria-modal','true');
+ overlay.setAttribute('aria-label','Mikuchin');
+ overlay.innerHTML='<img src="/mikuchin-half.png" alt="Mikuchin" draggable="false">';
+ const close=()=>{overlay.remove();document.removeEventListener('keydown',onKey);};
+ const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')close();};
+ overlay.addEventListener('pointerdown',close,{once:true});
+ document.addEventListener('keydown',onKey);
+ document.body.appendChild(overlay);
+}
+function onAvatarTap():void{
+ const now=performance.now();
+ if(now-avatarTapLast>2500)avatarTapCount=0;
+ avatarTapLast=now;
+ if(++avatarTapCount>=5){avatarTapCount=0;showPortrait();}
+}
 const root=document.getElementById("app")!;
 const esc=(x:unknown)=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]||c));
 const fmt=(v:unknown,d=0)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("zh-CN",{maximumFractionDigits:d}):"—";
@@ -25,10 +48,12 @@ async function copyText(value:string){try{await navigator.clipboard.writeText(va
 function mark(s:string){toast=s;const e=document.getElementById("notice");if(e)e.textContent=s;}
 function badge(){const [s,c]=phases[status?.phase||"stopped"]||["异常","bad"];return `<span class="badge ${c}"><i></i>${s}</span>`;}
 function render(){
- root.innerHTML=`<header class="head"><div class="brand"><div class="brand-symbol"><img src="/mikuchin-icon.png" width="43" height="43" alt=""></div><div><h1>Mikuchin</h1><small>LOCAL MODEL MANAGER</small></div></div><span id="phase">${badge()}</span></header>
+ root.innerHTML=`<header class="head"><div class="brand"><button type="button" class="brand-symbol avatar-trigger" id="avatar-trigger" aria-label="Mikuchin" title="Mikuchin"><img src="/mikuchin-icon.png" width="43" height="43" alt="Mikuchin"></button><div><h1>Mikuchin</h1><small>LOCAL MODEL MANAGER</small></div></div><div class="header-status"><span id="phase">${badge()}</span><button id="btn-log" class="header-log">查看运行日志</button></div></header>
  <nav class="tabs">${Object.keys(names).map(t=>`<button class="tab ${tab===t?"selected":""}" data-tab="${t}">${names[t]}</button>`).join("")}</nav>
  <main id="content"></main><footer><span id="notice">${esc(toast||"本机服务管理 · Windows")}</span><span>v0.2.0</span></footer>`;
  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>{tab=b.dataset.tab!;render();});
+ document.getElementById("avatar-trigger")?.addEventListener("click",onAvatarTap);
+ document.getElementById("btn-log")?.addEventListener("click",()=>void showLogs());
  content();
 }
 function metric(title:string,val:string,unit:string){return `<div class="metric"><div class="hint-label">${title}</div><div class="figure">${val}<small>${unit}</small></div></div>`;}
@@ -67,7 +92,7 @@ function overview(){
   <div class="monitor-buttons"><button data-cf-action="test">测试</button><button data-cf-action="restart">重启</button></div>
  </div></div>
  <div class="actions"><button id="btn-service" class="primary" title="${modelLoaded?"卸载模型，API 保持常驻":"加载模型，API 保持常驻"}" ${busy||!owned||phase==="starting"||phase==="stopping"||phase==="external"||phase==="error"?"disabled":""}>${modelLoaded?"■ 停止服务":"▶ 启动服务"}</button><button class="secondary" id="btn-chat">打开 Chat ↗</button></div>
- <div class="subactions"><button id="btn-log">查看运行日志</button></div></section>`;
+ </section>`;
 }
 function modelPage(){
  return `<div class="config-picker-intro"><p>只显示已注册的配置文件。</p></div>
@@ -158,7 +183,6 @@ function content(){
   void action(loaded?"unload_model":"load_model",loaded?"模型已卸载，API 保持在线":"模型已加载");
  });
  document.getElementById("btn-chat")?.addEventListener("click",()=>void invoke("open_chat").catch(e=>mark(String(e))));
- document.getElementById("btn-log")?.addEventListener("click",()=>void showLogs());
  document.getElementById("home-config-detail")?.addEventListener("click",()=>{const c=activeConfig();if(c)showConfig(c);});
  document.getElementById("choose-config")?.addEventListener("click",()=>void openConfigPicker());
 
