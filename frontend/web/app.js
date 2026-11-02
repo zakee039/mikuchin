@@ -74,14 +74,14 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 
 let tab = "chat";
 function showTab(name) {
-  tab = ["chat", "images", "characters", "monitor", "about"].includes(name) ? name : "chat";
+  tab = ["chat", "images", "characters", "monitor", "settings", "about"].includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "images", "characters", "monitor", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of ["chat", "images", "characters", "monitor", "settings", "about"]) $(`view-${v}`).hidden = v !== tab;
   if (tab === "images") $("img-prompt").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
-  if (tab === "about") loadConfig();
+  if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.();}
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
   if (lastMetrics) render(lastMetrics);
 }
@@ -201,7 +201,7 @@ async function poll() {
     const r = await fetch(reqShowAll ? "metrics?requests=all" : "metrics", {headers: headers()});
     if (r.status === 401) {
       setPill("error", "API key needed");
-      if (!keyWarned) { keyWarned = true; toast("warn", "API key needed", "This server needs a key: add it under About > Settings.", 6000); }
+      if (!keyWarned) { keyWarned = true; toast("warn", "API key needed", "This server needs a key: add it under Settings.", 6000); }
     } else if (r.ok) {
       lastMetrics = await r.json();
       metricsFailures = 0;
@@ -236,7 +236,7 @@ function render(m) {
   if (live.queued > 0) setPill("queued", `${live.queued} ${ui("Queued")}`);
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
-  if (tab === "about") renderAbout(eng, hw, st);
+  if (tab === "about" || tab === "settings") renderAbout(eng, hw, st);
 }
 
 // #596: the conversation cache - the prompt's state the engine keeps between requests (always), and the whole
@@ -767,7 +767,7 @@ async function streamInto(m, el, signal) {
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
       try { msg = (await r.json()).error.message || msg; } catch (e) { /* not json */ }
-      if (r.status === 401) msg = "This server needs an API key: add it under About > Settings.";
+      if (r.status === 401) msg = "This server needs an API key: add it under Settings.";
       throw new Error(msg);
     }
     const reader = r.body.getReader(), dec = new TextDecoder();

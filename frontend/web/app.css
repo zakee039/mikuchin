@@ -169,7 +169,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .chip .st-btn--icon .st-icon { width: 14px; height: 14px; }
 
 /* ---------------------------------------------------------------- monitor */
-.view--monitor, .view--about { overflow-y: auto; }
+.view--monitor, .view--about, .view--settings { overflow-y: auto; }
 .monitor, .about { max-width: 1240px; width: 100%; margin: 0 auto; padding: var(--st-s-6); display: flex; flex-direction: column;
                    gap: var(--st-s-5); }
 .state-card { display: flex; flex-direction: column; gap: var(--st-s-3); }
@@ -407,3 +407,24 @@ main { flex: 1; min-height: 0; display: flex; }
 .chat-role-picker #role-picker-btn{display:inline-flex;align-items:center;gap:5px;width:auto;max-width:190px;min-width:35px;padding:4px 8px}
 #role-picker-name{max-width:135px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .character-subtab:disabled{opacity:.48;cursor:not-allowed}
+
+/* Settings: shared identity, API credentials, and model configuration. */
+.settings-identity .character-panel-heading{margin-bottom:16px}
+.settings-identity .character-editor-grid{max-width:100%}
+.character-reference{display:grid;gap:10px;padding:15px;border:1px solid var(--st-line);border-radius:12px}
+.character-reference-heading{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.character-reference-heading strong{margin-right:auto}
+#card-reference-preview{display:block;max-width:min(100%,440px);max-height:520px;object-fit:contain;border-radius:10px;border:1px solid var(--st-line)}
+#card-reference-preview[hidden]{display:none}
+
+/* Session role identifiers as subtle translucent italic watermarks. */
+.session-row{isolation:isolate}
+.session-title{position:relative;z-index:1}
+.session-dots,.session-state{position:relative;z-index:2}
+.session-role-watermark{position:absolute;z-index:0;right:35px;top:50%;pointer-events:none;
+ transform:translateY(-50%) rotate(-10deg);transform-origin:center;max-width:58%;
+ overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+ font-style:italic;font-weight:800;font-size:25px;letter-spacing:.03em;line-height:1;
+ opacity:.35;text-shadow:0 1px 0 rgba(255,255,255,.15)}
+.session-role-watermark--stateless{color:#9199a2;opacity:.42;font-size:17px;font-weight:600}
+.session-row.selected .session-role-watermark{opacity:.30}

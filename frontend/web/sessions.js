@@ -1,6 +1,19 @@
 // PolyStrata service-owned conversation history. Runs after app.js in same page.
 "use strict";
 let historyRecords = [];
+const histTr = text => window.MikuchinI18n?.translate(text) || text;
+function historyRoleLabel(sessionId){
+  const data=window.polyHistoryRole?.(sessionId);
+  if(!data || data.id==='ordinary')return null;
+  if(data.id==='stateless')return {name:histTr('无状态'),gray:true};
+  return {name:data.name || '',gray:false};
+}
+function historyRoleColor(name){
+  let sum=0;
+  for(const ch of name)sum=((sum*31)+ch.codePointAt(0))>>>0;
+  return `hsl(${sum%360} 55% 43%)`;
+}
+
 function historySidebarSet(open) {
   if (!sessionV1) return;
   $("session-sidebar").classList.toggle("collapsed", !open);
@@ -19,12 +32,12 @@ function renderHistorySidebar(list) {
     if (group[0] === "Pinned" && !group[1].length) continue;
     const heading = document.createElement("div");
     heading.className = "session-heading";
-    heading.textContent = group[0];
+    heading.textContent = histTr(group[0]);
     wrapper.appendChild(heading);
     if (!group[1].length) {
       const none = document.createElement("div");
       none.className = "session-none";
-      none.textContent = "No conversations yet";
+      none.textContent = histTr("No conversations yet");
       wrapper.appendChild(none);
     }
     for (const item of group[1]) {
@@ -41,17 +54,27 @@ function renderHistorySidebar(list) {
         catch (e) { toast("error", "Cannot open conversation", String(e)); }
       };
       row.appendChild(title);
+      const role=historyRoleLabel(item.id);
+      if(role && role.name){
+        const tag=document.createElement('span');
+        tag.className='session-role-watermark'+(role.gray?' session-role-watermark--stateless':'');
+        tag.textContent=role.name;
+        tag.title=role.name;
+        tag.setAttribute('aria-hidden','true');
+        if(!role.gray)tag.style.color=historyRoleColor(role.name);
+        row.appendChild(tag);
+      }
       if (item.kv_locked || item.kv_cached) {
         const flag = document.createElement("span");
         flag.className = "session-state";
         flag.textContent = item.kv_locked ? "♧" : "◈";
-        flag.title = item.kv_locked ? "KV locked for at least one model" : "KV cached";
+        flag.title = histTr(item.kv_locked ? "KV locked for at least one model" : "KV cached");
         row.appendChild(flag);
       }
       const more = document.createElement("button");
       more.type = "button";
       more.className = "session-dots";
-      more.title = more.ariaLabel = "Conversation actions";
+      more.title = more.ariaLabel = histTr("Conversation actions");
       more.textContent = "···";
       const menu = document.createElement("div");
       menu.className = "session-actions";
@@ -69,13 +92,13 @@ function renderHistorySidebar(list) {
         ["rename", "Rename"],
         ["pin", item.pinned ? "Unpin" : "Pin"],
         ["export", "Export Markdown"],
-        ["kv", item.kv_locked_current ? "Release current model KV" + sizeText : "Lock current model KV"],
+        ["kv", (item.kv_locked_current ? histTr("Release current model KV") + sizeText : histTr("Lock current model KV"))],
         ["delete", "Delete"]
       ];
       for (const pair of actions) {
         const action = document.createElement("button");
         action.type = "button";
-        action.textContent = pair[1];
+        action.textContent = histTr(pair[1]);
         action.onclick = async (e) => {
           e.stopPropagation();
           menu.hidden = true;
@@ -147,3 +170,7 @@ async function historyAction(record, action) {
     toast("error", "Conversation operation failed", String(e), 7500);
   }
 }
+
+document.addEventListener('mikuchin-language-changed',()=>{
+  if(historyRecords.length)renderHistorySidebar(historyRecords);
+});

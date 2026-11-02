@@ -3,7 +3,7 @@
  */
 "use strict";
 const characterState = {cards: [], global: {user_name:"",user_description:"",default_role:"stateless"}, assignments: {}, available: false, editId: "", stateless: false};
-const characterSubTabs = ["card", "world", "workflow", "global"];
+const characterSubTabs = ["card", "world", "workflow"];
 function isStatelessRole(){return characterState.stateless;}
 window.polyIsStateless = isStatelessRole;
 function globalUserIdentity(card) {
@@ -36,7 +36,7 @@ function showCharacterSubTab(name, focus = false) {
     tab.tabIndex = selected ? 0 : -1;
     panel.hidden = !selected;
     if (selected && focus) tab.focus();
-    if (key === "global") $("card-save").hidden = selected;
+
   }
   const current=$("card-list").value;
   $("character-builtin-note").hidden = active !== "card" || !["stateless","ordinary"].includes(current);
@@ -195,11 +195,20 @@ async function charactersLoad() {
       await applyNewSessionDefault();
     }
     characterRefreshPicker();
+    if(typeof renderHistorySidebar==='function' && historyRecords.length)renderHistorySidebar(historyRecords);
   } catch (err) {
     characterState.available = false;
     characterRefreshPicker();
   }
 }
+window.polyHistoryRole = id => {
+  if(!characterState.available)return null;
+  const role=characterState.assignments[id];
+  if(role==='stateless')return {id:role,name:'无状态'};
+  if(!role || role==='ordinary')return {id:'ordinary',name:''};
+  const card=characterState.cards.find(c=>c.id===role);
+  return card?{id:role,name:card.name}:null;
+};
 window.polyCharactersLoad = charactersLoad;
 
 async function characterPrompt(originalMessages) {
@@ -336,8 +345,78 @@ function sourceRow(value = {kind: "file", path: "", recursive: true}) {
   sync();
   $("source-entries").append(box);
 }
+// Reference artwork is stored in private SessionV1 character_images/<id>.png.
+// A draft can be previewed before it is committed; the upload happens after Save.
+let characterReferenceFile = null;
+let characterReferenceObjectUrl = "";
+function disposeReferencePreview() {
+  if (characterReferenceObjectUrl) URL.revokeObjectURL(characterReferenceObjectUrl);
+  characterReferenceObjectUrl = "";
+}
+function setReferencePreview(url,hasImage) {
+  const image=$("card-reference-preview");
+  image.hidden=!hasImage;
+  if(hasImage) image.src=url;
+  else image.removeAttribute("src");
+  $("card-reference-remove").hidden=!hasImage;
+}
+async function loadCharacterReference(card) {
+  disposeReferencePreview();
+  characterReferenceFile=null;
+  setReferencePreview("",false);
+  if(!card?.reference_image) return;
+  const expected=card.id;
+  try {
+    const response=await fetch("v1/strata/characters/reference/"+encodeURIComponent(expected),
+                                {headers:headers(),cache:"no-store"});
+    if(!response.ok) throw Error("HTTP "+response.status);
+    const blob=await response.blob();
+    if(characterState.editId!==expected)return;
+    characterReferenceObjectUrl=URL.createObjectURL(blob);
+    setReferencePreview(characterReferenceObjectUrl,true);
+  }catch(e){console.warn("Cannot load reference image",e);}
+}
+$("card-reference-upload").onclick=()=>$("card-reference-file").click();
+$("card-reference-file").onchange=()=>{
+  const file=$("card-reference-file").files?.[0];
+  if(!file)return;
+  $("card-reference-file").value="";
+  if(file.size>5*1024*1024 || !["image/jpeg","image/png","image/webp"].includes(file.type)){
+    toast("warn","请上传不超过 5 MB 的 PNG、JPEG 或 WebP 图片");return;
+  }
+  disposeReferencePreview();
+  characterReferenceFile=file;
+  characterReferenceObjectUrl=URL.createObjectURL(file);
+  setReferencePreview(characterReferenceObjectUrl,true);
+};
+$("card-reference-remove").onclick=async()=>{
+  if(characterReferenceFile){
+    characterReferenceFile=null;disposeReferencePreview();
+    const existing=characterState.cards.find(x=>x.id===characterState.editId);
+    if(existing?.reference_image) await loadCharacterReference(existing);
+    else setReferencePreview("",false);
+    return;
+  }
+  if(!characterState.editId)return;
+  try {
+    const response=await characterRequest("reference_remove",{id:characterState.editId});
+    const original=characterState.cards.find(x=>x.id===characterState.editId);
+    if(original)original.reference_image=false;
+    disposeReferencePreview();setReferencePreview("",false);
+    toast("success","参考图片已移除");
+  }catch(e){toast("error","移除失败",String(e));}
+};
+async function uploadCharacterReference(cardId,file){
+  const encoded=await new Promise((resolve,reject)=>{
+    const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]);
+    reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file);
+  });
+  return characterRequest("reference_upload",{id:cardId,data:encoded});
+}
+
 function editCharacter(card = null) {
   characterState.editId = card?.id || "";
+  void loadCharacterReference(card);
   $("card-workflow-path").value = card?.workflow_path || "";
   for (const [field, id] of Object.entries(characterFields)) $(id).value = card?.[field] || "";
   $("lore-entries").replaceChildren();
@@ -503,9 +582,16 @@ $("card-save").onclick = async () => {
   }
   try {
     const r = await characterRequest("save", {card: characterForm()});
+    characterState.editId=r.card.id;
+    let imageError=null;
+    if(characterReferenceFile){
+      try{await uploadCharacterReference(r.card.id,characterReferenceFile);characterReferenceFile=null;}
+      catch(e){imageError=e;}
+    }
     await charactersLoad();
-    editCharacter(r.card);
-    toast("success", "角色已保存", r.card.name);
+    editCharacter(characterState.cards.find(x=>x.id===r.card.id) || r.card);
+    if(imageError)toast("warn","角色已保存，但参考图片上传失败",String(imageError));
+    else toast("success", "角色已保存", r.card.name);
   } catch (e) {toast("error", "保存失败", String(e));}
 };
 $("card-delete").onclick = async () => {

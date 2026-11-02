@@ -29,6 +29,8 @@
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-character"/></svg>Characters</button>
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-activity"/></svg>Monitor</button>
+    <button class="st-tab" role="tab" id="tab-btn-settings" aria-controls="view-settings" aria-selected="false" data-tab="settings">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-settings"/></svg>Settings</button>
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
   </nav>
@@ -118,8 +120,7 @@
           aria-controls="character-panel-world" aria-selected="false" tabindex="-1">世界书</button>
         <button type="button" class="character-subtab" id="character-subtab-workflow" data-character-tab="workflow" role="tab"
           aria-controls="character-panel-workflow" aria-selected="false" tabindex="-1">工作流</button>
-        <button type="button" class="character-subtab" id="character-subtab-global" data-character-tab="global" role="tab"
-          aria-controls="character-panel-global" aria-selected="false" tabindex="-1">全局</button>
+
       </div>
 
       <div class="character-subpanel" id="character-panel-card" role="tabpanel" aria-labelledby="character-subtab-card">
@@ -155,22 +156,15 @@
             <p class="muted small" id="identity-hint">继承全局用户名字与介绍。</p>
           </fieldset>
           <p class="muted small">普通助手继承全局身份；无状态每轮独立推理。支持导入与导出酒馆格式的角色卡 JSON。</p>
-        </div>
-      </div>
-
-      <div class="character-subpanel" id="character-panel-global" role="tabpanel" aria-labelledby="character-subtab-global" hidden>
-        <div class="character-panel-heading"><div><h2>全局设置</h2><p>所有继承全局身份的角色都会使用这里的用户资料</p></div></div>
-        <div class="character-editor-grid">
-          <label>用户名字<input class="st-input" id="global-user-name" maxlength="80" placeholder="希望 AI 如何称呼你"></label>
-          <label>用户介绍<textarea class="st-input" id="global-user-description" rows="5" maxlength="4000" placeholder="关于你的身份、背景和个人偏好"></textarea></label>
-          <label>新会话默认角色
-            <select class="st-input" id="global-default-role">
-              <option value="stateless">无状态（内置）</option>
-              <option value="ordinary">普通助手</option>
-            </select>
-          </label>
-          <p class="muted small">只影响新会话。无状态模式保留聊天记录，但每轮推理只读取本次输入，不继承用户身份或会话 KV。</p>
-          <button type="button" class="st-btn st-btn--primary" id="global-save">保存全局设置</button>
+          <div class="character-reference">
+            <div class="character-reference-heading"><strong>参考图片</strong>
+              <button type="button" class="st-btn st-btn--secondary" id="card-reference-upload">上传图片</button>
+              <button type="button" class="st-btn st-btn--secondary" id="card-reference-remove" hidden>移除图片</button>
+              <input type="file" id="card-reference-file" accept="image/png,image/jpeg,image/webp" hidden>
+            </div>
+            <p class="muted small">支持 PNG、JPEG、WebP，最大 5 MB；保存角色卡时一同保存。</p>
+            <img id="card-reference-preview" alt="角色参考图片" hidden>
+          </div>
         </div>
       </div>
 
@@ -330,22 +324,25 @@
     </div>
   </section>
 
-  <!-- ============================ About ============================ -->
-  <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
-    <div class="about">
-      <div class="st-card">
-        <span class="card-title">Mikuchin · Model and engine</span>
-        <dl class="facts" id="facts-engine"></dl>
-        <div class="about-project-inline">
-          <span class="about-project-label">项目简介</span>
-          <p>Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。</p>
-          <a href="https://github.com/zakee039/mikuchin" target="_blank" rel="noopener noreferrer">Mikuchin GitHub</a>
+  <!-- ============================ Settings ============================ -->
+  <section class="view view--settings" id="view-settings" role="tabpanel" aria-labelledby="tab-btn-settings" hidden>
+    <div class="about settings-page">
+      <div class="st-card settings-identity" id="character-panel-global">
+        <div class="character-panel-heading"><div><h2>全局设置</h2><p>所有继承全局身份的角色都会使用这里的用户资料</p></div></div>
+        <div class="character-editor-grid">
+          <label>用户名字<input class="st-input" id="global-user-name" maxlength="80" placeholder="希望 AI 如何称呼你"></label>
+          <label>用户介绍<textarea class="st-input" id="global-user-description" rows="5" maxlength="4000" placeholder="关于你的身份、背景和个人偏好"></textarea></label>
+          <label>新会话默认角色
+            <select class="st-input" id="global-default-role">
+              <option value="stateless">无状态（内置）</option>
+              <option value="ordinary">普通助手</option>
+            </select>
+          </label>
+          <p class="muted small">只影响新会话。无状态模式保留聊天记录，但每轮推理只读取本次输入，不继承用户身份或会话 KV。</p>
+          <button type="button" class="st-btn st-btn--primary" id="global-save">保存全局设置</button>
         </div>
       </div>
-      <div class="st-card">
-        <span class="card-title">This PC</span>
-        <dl class="facts" id="facts-hw"></dl>
-      </div>
+
       <div class="st-card">
         <span class="card-title">Connect your tools</span>
         <p class="muted">Any OpenAI- or Anthropic-compatible client works with these addresses.</p>
@@ -368,6 +365,25 @@
         <form class="cfg-form" id="cfg-form"></form>
         <div class="cfg-actions"><button class="st-btn st-btn--primary" id="cfg-save" type="button">Save</button>
           <span class="muted small" id="cfg-msg" role="status"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ About ============================ -->
+  <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
+    <div class="about">
+      <div class="st-card">
+        <span class="card-title">Mikuchin · Model and engine</span>
+        <dl class="facts" id="facts-engine"></dl>
+        <div class="about-project-inline">
+          <span class="about-project-label">项目简介</span>
+          <p>Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。</p>
+          <a href="https://github.com/zakee039/mikuchin" target="_blank" rel="noopener noreferrer">Mikuchin GitHub</a>
+        </div>
+      </div>
+      <div class="st-card">
+        <span class="card-title">This PC</span>
+        <dl class="facts" id="facts-hw"></dl>
       </div>
     </div>
   </section>
