@@ -48,6 +48,75 @@ function selectedCharacter() {
   const id = characterState.assignments[sessionId];
   return characterState.cards.find((c) => c.id === id) || null;
 }
+// Compact role chooser in the composer, backed by the existing hidden <select>.
+// The existing character assignment handler remains the only writer of session state.
+function rolePickerClose(restoreFocus = false) {
+  const menu = $("chat-role-menu"), button = $("role-picker-btn");
+  menu.hidden = true;
+  button.setAttribute("aria-expanded", "false");
+  if (restoreFocus) button.focus();
+}
+function rolePickerRender() {
+  const menu = $("chat-role-menu"), select = $("chat-character");
+  const translate = (text) => window.MikuchinI18n?.translate(text) || text;
+  menu.replaceChildren();
+  const heading = document.createElement("div");
+  heading.className = "chat-role-menu__title";
+  heading.textContent = translate("选择角色");
+  menu.appendChild(heading);
+  for (const option of select.options) {
+    const entry = document.createElement("button");
+    entry.type = "button";
+    entry.className = "chat-role-menu__item";
+    entry.setAttribute("role", "menuitemradio");
+    entry.setAttribute("aria-checked", String(option.value === select.value));
+    entry.disabled = option.disabled;
+    const text = document.createElement("span");
+    text.textContent = option.value ? option.textContent : translate("普通助手（无角色）");
+    const check = document.createElement("b");
+    check.className = "chat-role-menu__check";
+    check.textContent = option.value === select.value ? "✓" : "";
+    check.setAttribute("aria-hidden", "true");
+    entry.append(text, check);
+    entry.onclick = () => {
+      rolePickerClose();
+      if (select.value !== option.value) {
+        select.value = option.value;
+        select.dispatchEvent(new Event("change", {bubbles: true}));
+      }
+      $("role-picker-btn").focus();
+    };
+    menu.appendChild(entry);
+  }
+}
+$("role-picker-btn").onclick = () => {
+  const menu = $("chat-role-menu"), button = $("role-picker-btn");
+  if (!menu.hidden) {rolePickerClose(true);return;}
+  rolePickerRender();
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  (menu.querySelector('[aria-checked="true"]') || menu.querySelector("button"))?.focus();
+};
+document.addEventListener("pointerdown", (event) => {
+  if (!$("chat-role-picker").contains(event.target)) rolePickerClose();
+});
+document.addEventListener("keydown", (event) => {
+  const menu = $("chat-role-menu");
+  if (menu.hidden) return;
+  if (event.key === "Escape") {event.preventDefault();rolePickerClose(true);return;}
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const items = [...menu.querySelectorAll("button:not([disabled])")];
+  if (!items.length) return;
+  const current = items.indexOf(document.activeElement);
+  const delta = event.key === "ArrowDown" ? 1 : -1;
+  items[(current + delta + items.length) % items.length].focus();
+  event.preventDefault();
+});
+document.addEventListener("mikuchin-language-changed", () => {
+  if (!$("chat-role-menu").hidden) rolePickerRender();
+  characterRefreshPicker();
+});
+
 function characterRefreshPicker() {
   const select = $("chat-character"), edit = $("card-list");
   const currentEdit = characterState.editId;
@@ -59,10 +128,14 @@ function characterRefreshPicker() {
   }
   select.value = selectedCharacter()?.id || "";
   edit.value = characterState.cards.some((x) => x.id === currentEdit) ? currentEdit : "";
-  $("character-chat-bar").hidden = !characterState.available;
-  const c = selectedCharacter();
-  $("character-chat-status").textContent = c
-    ? `${c.lorebook.length} 条世界书 · ${(c.sources || []).length} 个资料源${c.workflow_path ? " · 工作流" : ""}` : "";
+  const button = $("role-picker-btn");
+  const current = selectedCharacter();
+  button.disabled = !characterState.available;
+  button.classList.toggle("has-character", !!current);
+  const label = window.MikuchinI18n?.translate("选择角色") || "选择角色";
+  button.title = `${label} · ${current?.name || (window.MikuchinI18n?.translate("普通助手（无角色）") || "普通助手（无角色）")}`;
+  if (!characterState.available) rolePickerClose();
+  else if (!$("chat-role-menu").hidden) rolePickerRender();
 }
 window.polyCharacterRefresh = characterRefreshPicker;
 
@@ -262,9 +335,6 @@ function exportTavern(card) {
   };
 }
 
-$("character-manage").onclick = () => {
-  showTab("characters"); editCharacter(selectedCharacter()); showCharacterSubTab("card");
-};
 $("card-list").onchange = () => editCharacter(characterState.cards.find((c) => c.id === $("card-list").value));
 $("card-new").onclick = () => {editCharacter(); showCharacterSubTab("card"); $("card-name").focus();};
 $("lore-add").onclick = () => loreRow();

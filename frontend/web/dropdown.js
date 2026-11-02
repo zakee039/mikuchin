@@ -1,7 +1,7 @@
 /* Native <select> remains the canonical form value; the menu is a custom, keyboard-accessible overlay. */
 "use strict";
 (() => {
-  const targets='#chat-character,#card-list,#model-select,#img-size,#img-upscale,.source-kind';
+  const targets='#card-list,#model-select,#img-size,#img-upscale,.source-kind';
   const widgets=new WeakMap();
   let opened=null;
   const close=()=>{if(opened){opened.menu.remove();opened.button.setAttribute('aria-expanded','false');opened=null;}};

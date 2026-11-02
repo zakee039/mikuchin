@@ -329,5 +329,6 @@
   "While writing the answer: the share of the experts looked up that were already in VRAM. Experts the GPU read over PCIe (--pcie-frac) are not counted in it; their share of all routed experts is shown after it (+N% PCIe)": "生成时直接命中显存的专家比例；通过 PCIe 访问的专家不计入",
   "generated image": "生成图像",
   "Open Chat": "打开聊天",
-  "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。": "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。"
+  "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。": "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。",
+  "选择角色": "选择角色"
 }

@@ -55,11 +55,6 @@
     </aside>
     <div class="chat-main">
       <button type="button" class="session-expand" id="sidebar-expand" title="Show history" aria-label="Show history" hidden>☰</button>
-    <div class="character-chat-bar" id="character-chat-bar" hidden>
-      <select id="chat-character" class="st-input" aria-label="Current chat character"><option value="">普通助手（无角色）</option></select>
-      <button type="button" class="st-btn st-btn--secondary" id="character-manage">编辑</button>
-      <span class="character-chat-status" id="character-chat-status"></span>
-    </div>
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat" id="chat">
         <div class="chat-empty" id="chat-empty">
@@ -81,6 +76,13 @@
             <svg class="st-icon"><use href="web/sprite.svg#i-download"/></svg></button>
           <button type="button" class="st-btn st-btn--icon" id="sampling-btn" title="Sampling and thinking" aria-label="Sampling and thinking">
             <svg class="st-icon"><use href="web/sprite.svg#i-settings"/></svg></button>
+          <div class="chat-role-picker" id="chat-role-picker">
+            <button type="button" class="st-btn st-btn--icon" id="role-picker-btn" title="选择角色" aria-label="选择角色" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-role-menu" disabled>
+              <svg class="st-icon"><use href="web/sprite.svg#i-character"/></svg></button>
+            <select id="chat-character" hidden aria-label="Current chat character"><option value="">普通助手（无角色）</option></select>
+            <span id="character-chat-status" hidden aria-live="polite"></span>
+            <div class="chat-role-menu" id="chat-role-menu" role="menu" aria-label="选择角色" hidden></div>
+          </div>
           <span class="spacer"></span>
           <span class="composer-hint" id="composer-hint"></span>
           <button type="button" class="st-btn st-btn--secondary" id="stop-btn" hidden>

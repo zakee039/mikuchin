@@ -1,10 +1,5 @@
 
 /* Character cards / lightweight lorebook. No layout change for plain chats. */
-.character-chat-bar{display:flex;align-items:center;gap:10px;min-height:44px;
-  padding:6px 20px;border-bottom:1px solid var(--st-border);font-size:12px;color:var(--st-ink-muted)}
-.character-chat-bar .st-input{min-width:100px;max-width:245px;height:32px;font-size:12px}
-.character-chat-bar .st-btn{height:32px;padding:5px 12px}
-.character-chat-status{font-size:11px;color:var(--st-ink-muted)}
 .view--characters{overflow-y:auto;scrollbar-gutter:stable}
 .character-editor{width:min(830px,100%);margin:0 auto;padding:22px 26px 52px}
 .character-editor-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px}
@@ -78,9 +73,6 @@
 .workflow-step small{font-size:12px;color:var(--st-ink-muted)}
 @media(max-width:640px){
  .character-editor{padding:14px 12px 36px}
- .character-chat-bar{padding:6px 10px;gap:6px}
- .character-chat-bar .st-input{max-width:170px}
- .character-chat-status{display:none}
  .character-editor-head .st-btn{padding:6px}
  .character-editor-head{align-items:stretch}
  .character-editor-title{width:100%}
@@ -372,13 +364,29 @@ main { flex: 1; min-height: 0; display: flex; }
 .about-project-inline p{font-size:13px;color:var(--st-ink-muted);flex:1 1 100%;line-height:1.5}
 .about-project-inline a{font-size:13px;text-decoration:none;color:var(--st-accent)}
 
-/* Sidebar expansion and character selection must never occupy the same pixels.
-   The character control is self-labeling; no duplicate visible "角色" label. */
-.character-chat-bar .mk-dropdown{flex:0 1 245px;min-width:0;max-width:245px}
-.character-chat-bar #character-manage{flex:0 0 auto;white-space:nowrap}
-.chat-main:has(> #sidebar-expand:not([hidden])) .character-chat-bar{padding-left:54px}
+/* Sidebar expansion is unobstructed now that role selection lives in the composer. */
 .session-expand:not([hidden]){z-index:4;top:10px;left:11px;min-width:31px;min-height:31px}
-@media(max-width:640px){
- .character-chat-bar .mk-dropdown{flex:1 1 140px;min-width:0}
- .chat-main:has(> #sidebar-expand:not([hidden])) .character-chat-bar{padding-left:48px}
-}
+
+/* Images scroll within the clipped application frame; long results stay reachable. */
+.view--images{overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;scrollbar-gutter:stable}
+.view--images > .about{flex:0 0 auto;min-height:0}
+.view--images .img-results img{display:block;width:auto;height:auto;max-width:100%}
+
+/* Character chooser opens upwards from the composer settings toolbar. */
+.chat-role-picker{position:relative;display:flex;align-items:center;flex:0 0 auto}
+.chat-role-picker #role-picker-btn.has-character{color:var(--st-accent-text);background:var(--st-accent-tint)}
+.chat-role-picker #role-picker-btn:disabled{opacity:.45;cursor:not-allowed}
+.chat-role-menu{position:absolute;bottom:calc(100% + 10px);left:0;z-index:30;
+  width:max-content;min-width:240px;max-width:min(310px,calc(100vw - 24px));
+  max-height:min(330px,55vh);overflow-y:auto;padding:6px;
+  background:var(--st-surface);border:1px solid var(--st-line);border-radius:12px;
+  box-shadow:0 12px 34px rgba(0,0,0,.17)}
+.chat-role-menu[hidden]{display:none}
+.chat-role-menu__title{font-weight:650;font-size:12px;color:var(--st-ink-muted);padding:7px 10px 9px}
+.chat-role-menu__item{display:flex;align-items:center;gap:9px;width:100%;padding:10px 11px;border:0;border-radius:8px;
+  background:transparent;color:var(--st-ink);text-align:left;font:inherit;font-size:13px;cursor:pointer}
+.chat-role-menu__item span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-role-menu__item[aria-checked="true"]{color:var(--st-accent-text);background:var(--st-accent-tint);font-weight:650}
+.chat-role-menu__item:hover,.chat-role-menu__item:focus-visible{background:var(--st-surface-2);outline:none}
+.chat-role-menu__check{flex:0 0 auto;color:var(--st-accent);font-weight:700}
+@media(max-width:640px){.chat-role-menu{left:-55px;max-width:min(290px,calc(100vw - 24px))}}
