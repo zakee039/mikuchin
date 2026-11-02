@@ -104,7 +104,9 @@ async function loadHealth() {
     health = await (await fetch("health")).json();
     $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
-    $("chat-empty-sub").textContent = `${health.model} runs on this PC. Nothing leaves it.`;
+    $("chat-empty-sub").dataset.model = health.model;
+    const tail = window.MikuchinI18n?.translate("runs on this PC. Nothing leaves it.") || "runs on this PC. Nothing leaves it.";
+    $("chat-empty-sub").textContent = `${health.model} ${tail}`;
     $("tab-btn-images").hidden = !health.image_generation;
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
@@ -414,7 +416,7 @@ function renderAbout(eng, hw, st) {
   const kv = {int8: "8-bit", q4_0: "4-bit (Hadamard-rotated)", fp16: "16-bit"}[eng.kv] || eng.kv;
   facts($("facts-engine"), [
     ["Model", eng.model],
-    ["Engine", eng.version ? `v${eng.version}` : "built from source"],
+    ["Engine", eng.version ? `PolyStrata v${eng.version}` : "PolyStrata (built from source)"],
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens` : null],
     ["KV cache", kv ? `${kv}${eng.kv_resident ? `, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM` : ", all in VRAM"}` : null],
     ["Experts in VRAM", eng.expert_slots ? `${fmt(eng.expert_slots)} (${gb((eng.expert_cache_mib || 0) * 1048576)} GB)` : null],
@@ -1423,3 +1425,8 @@ $("img-form").onsubmit = async (ev) => {
     $("img-go").disabled = false;
   }
 };
+// Live language changes also update the model-specific welcome subtitle.
+document.addEventListener('mikuchin-language-changed', () => {
+  const line = document.getElementById('chat-empty-sub');
+  if (line?.dataset.model) line.textContent = line.dataset.model + ' ' + window.MikuchinI18n.translate('runs on this PC. Nothing leaves it.');
+});

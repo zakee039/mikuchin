@@ -150,3 +150,10 @@
 .overview-page .actions button{height:39px}
 .overview-page .subactions{margin-top:3px}
 .overview-page .subactions button{padding:4px 3px}
+
+.setting-inline{display:flex;align-items:center;gap:9px;margin-top:12px;justify-content:space-between}
+.setting-inline>span,.setting-note{color:#748c8e;font-size:11px;line-height:1.6}
+.setting-select{width:120px;max-width:130px;min-width:110px;flex:none}
+.idle-input{max-width:90px;width:90px;flex:none}
+.setting-inline .mini-primary{margin:0;flex:1;white-space:nowrap}
+.setting-note{display:block;margin:5px 0 0}

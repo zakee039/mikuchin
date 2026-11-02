@@ -3,12 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./style.css";
 import { modelIsLoaded } from "./model-state";
+import {getLocale,setLocale,observeLocale,translateDom} from "./i18n";
 
 type Prefs={autostart:boolean;auto_load_model:boolean;manual_model_hold:boolean;watchdog:boolean;lan_access:boolean;cf_enabled:boolean;cf_binary:string;cf_hostname:string;config_path:string;project_path:string;port:number};
 type Model={name:string;path:string;model:string;context:number|null;quantization:string|null;engine:string|null;tokenizer:string|null;draft_model:string|null;vision_projector:string|null;kv_type:string|null;vram_reserve_mib:number|null;idle_unload_s:number|null;conversation_cache_mib:string|null};
 type Metrics={engine?:Record<string,unknown>;live?:Record<string,unknown>;hardware?:Record<string,unknown>;totals?:Record<string,number>;requests?:Array<Record<string,number>>;conversation_cache?:{requests?:number;requests_reused?:number;reused_tokens?:number}};
 type Status={phase:string;managed:boolean;desired:boolean;error:string;restarts:number;settings:Prefs;metrics:Metrics|null;host_gpu?:Record<string,number>|null;cf_running:boolean;cf_connections:number|null;cf_error:string;cf_latency_ms:number|null;cf_test_status:string;cf_token_present:boolean;api_key_present:boolean;lan_chat_url?:string|null};
 let prefs:Prefs|null=null, status:Status|null=null, models:Model[]=[], tab="overview", busy=false, toast="";
+let idleSeconds=900;let idleBusy=false;
 const root=document.getElementById("app")!;
 const esc=(x:unknown)=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]||c));
 const fmt=(v:unknown,d=0)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("zh-CN",{maximumFractionDigits:d}):"—";
@@ -128,10 +130,24 @@ function settingsPage(){return `<section class="setting-page compact-settings"><
  ${toggle("autostart","开机自启","登录 Windows 时启动托盘管理器")}
  ${toggle("auto_load_model","启动后自动加载模型","启动 Manager 后自动载入模型")}
  ${toggle("watchdog","服务守护","异常退出最多自动重启三次")}
+ </div><div class="setting-card"><h3>全局语言</h3>
+ <div class="setting-inline"><span>网页、聊天与托盘菜单使用同一语言</span>
+ <select id="global-language" class="field setting-select">
+  <option value="zh-CN" ${getLocale()==="zh-CN"?"selected":""}>简体中文</option>
+  <option value="ja-JP" ${getLocale()==="ja-JP"?"selected":""}>日本語</option>
+  <option value="en-US" ${getLocale()==="en-US"?"selected":""}>English</option>
+ </select></div><small class="setting-note">静态界面语言不影响模型回复语言</small>
+ </div><div class="setting-card"><h3>空闲卸载时间</h3>
+ <p class="setting-note">空闲超时后自动卸载模型，API 继续运行</p>
+ <div class="setting-inline"><label for="idle-minutes">分钟</label>
+ <input id="idle-minutes" class="field idle-input" type="number" min="0" max="1440" step="1" value="${Math.round(idleSeconds/60)}" ${idleBusy?"disabled":""}>
+ <button id="save-idle-timeout" class="mini-primary" ${idleBusy?"disabled":""}>保存并重启服务</button></div>
+ <small class="setting-note">0 = 关闭自动卸载；保存后重启服务，原会话及 KV 保留。</small>
  </div></section>`;}
 function content(){
  const el=document.getElementById("content")!;
  el.innerHTML=tab==="overview"?overview():tab==="api"?apiPage():tab==="workflows"?workflowPage():settingsPage();
+ translateDom(el);
  if(tab==="api"){
   void invoke<string>("reveal_api_key").then(key=>{
    const field=document.getElementById("api-key-display") as HTMLInputElement|null;
@@ -149,6 +165,22 @@ function content(){
  document.getElementById("choose-config")?.addEventListener("click",()=>void openConfigPicker());
 
  document.querySelectorAll<HTMLInputElement>("[data-setting]").forEach(b=>b.onchange=()=>{if(!prefs)return;const k=b.dataset.setting as "autostart"|"auto_load_model"|"watchdog"|"lan_access"|"cf_enabled";void save({...prefs,[k]:b.checked});});
+ document.getElementById("global-language")?.addEventListener("change",async e=>{
+   const selected=(e.target as HTMLSelectElement).value;
+   try{await invoke<string>("set_language",{language:selected});setLocale(selected);render();}
+   catch(err){mark("Language change failed: "+String(err));render();}
+ });
+ document.getElementById("save-idle-timeout")?.addEventListener("click",async()=>{
+   const raw=(document.getElementById("idle-minutes") as HTMLInputElement).value;
+   const minutes=Number(raw);
+   if(raw.trim()===""||!Number.isInteger(minutes)||minutes<0||minutes>1440){mark("请输入 0–1440 分钟");return;}
+   if(idleBusy)return;
+   idleBusy=true;content();
+   try{idleSeconds=await invoke<number>("set_idle_unload",{seconds:minutes*60});
+      mark("空闲卸载时间已保存，服务已重启");await poll();}
+   catch(err){mark("更新空闲卸载失败："+String(err));}
+   finally{idleBusy=false;content();}
+ });
 
  document.getElementById("copy-key")?.addEventListener("click",async()=>{
    try{const key=await invoke<string>("reveal_api_key");await copyText(key);mark("API Key 已复制");}
@@ -202,7 +234,8 @@ function content(){
 async function save(v:Prefs){try{prefs=await invoke<Prefs>("save_settings",{incoming:v});mark("设置已保存");await refreshModels();await poll();content();}catch(e){mark("保存失败："+String(e));content();}}
 async function action(name:string,done:string){if(busy)return;busy=true;mark(name==="load_model"?"正在加载模型，请查看状态（首次加载可能较慢）":name==="unload_model"?"正在卸载模型…":"正在执行操作…");content();try{await invoke(name);mark(done);}catch(e){mark("操作失败："+String(e));}finally{busy=false;await poll();content();}}
 async function refreshModels(){try{models=await invoke<Model[]>("list_models");}catch(e){console.warn(e);}}
-async function poll(){try{status=await invoke<Status>("get_status");if(!prefs)prefs=status.settings;
+async function poll(){try{const latest=await invoke<string>("get_language");if(latest!==getLocale()){setLocale(latest);render();}
+ status=await invoke<Status>("get_status");if(!prefs)prefs=status.settings;
  const el=document.getElementById("phase");if(el)el.innerHTML=badge();
  if(tab==="overview"&&!busy)content();
  if(tab==="api"){
@@ -303,11 +336,14 @@ async function showLogs(){const bg=document.createElement("div");bg.className="m
  const close=()=>bg.remove();document.getElementById("close-log")!.addEventListener("click",close);
  bg.addEventListener("click",e=>{if(e.target===bg)close();});
  try{const raw=await invoke<string>("get_log");const el=document.getElementById("log-text")!;el.textContent=raw||"暂无日志";el.scrollTop=el.scrollHeight;}catch(e){document.getElementById("log-text")!.textContent=String(e);}}
-async function init(){try{prefs=await invoke<Prefs>("get_settings");await refreshModels();}catch(e){toast="初始化异常："+String(e);}
+async function init(){try{setLocale(await invoke<string>("get_language"));
+ idleSeconds=await invoke<number>("get_idle_unload");
+ prefs=await invoke<Prefs>("get_settings");await refreshModels();}catch(e){toast="初始化异常："+String(e);}
  render();
  void listen<string>("manager-error", event => {
    mark("服务管理异常：" + String(event.payload));
    void poll();
  }).catch(console.error);
  await poll();setInterval(()=>void poll(),2000);}
+observeLocale();
 void init();

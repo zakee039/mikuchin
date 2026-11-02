@@ -127,6 +127,57 @@ fn state_dir() -> PathBuf {
     }
     target
 }
+const LANGUAGES: [&str; 3] = ["zh-CN", "ja-JP", "en-US"];
+fn language_file() -> PathBuf {
+    let engine = project_root();
+    let product = engine.parent().and_then(Path::parent).unwrap_or(&engine);
+    product.join("config/ui-language.json")
+}
+fn current_language() -> String {
+    fs::read(language_file()).ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|v| v["language"].as_str().map(str::to_string))
+        .filter(|s| LANGUAGES.contains(&s.as_str()))
+        .unwrap_or_else(|| "zh-CN".into())
+}
+
+struct LocalizedTray {
+    items: Vec<MenuItem<tauri::Wry>>,
+    previous: Mutex<String>,
+}
+fn tray_strings(language: &str) -> [&'static str; 5] {
+    match language {
+        "ja-JP" => ["管理画面を開く", "モデルを読み込む", "モデルを解放", "チャットを開く", "Mikuchin を終了"],
+        "en-US" => ["Open Manager", "Load model", "Unload model", "Open Chat", "Quit Mikuchin"],
+        _ => ["打开控制面板", "加载模型", "卸载模型", "打开 Chat", "退出管理器"],
+    }
+}
+fn sync_tray_language(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<LocalizedTray>() {
+        let language = current_language();
+        if let Ok(mut previous) = state.previous.lock() {
+            if *previous != language {
+                for (item, value) in state.items.iter().zip(tray_strings(&language)) {
+                    let _ = item.set_text(value);
+                }
+                *previous = language;
+            }
+        }
+    }
+}
+#[tauri::command]
+fn get_language() -> String { current_language() }
+#[tauri::command]
+fn set_language(app: tauri::AppHandle, language: String) -> Result<String, String> {
+    if !LANGUAGES.contains(&language.as_str()) {return Err("Unsupported language".into());}
+    let path = language_file();
+    if let Some(parent) = path.parent() {fs::create_dir_all(parent).map_err(|e|e.to_string())?;}
+    fs::write(&path, serde_json::to_vec_pretty(&json!({"language": language})).map_err(|e|e.to_string())?)
+        .map_err(|e|e.to_string())?;
+    sync_tray_language(&app);
+    Ok(language)
+}
+
 fn log_path() -> PathBuf {
     state_dir().join("service.log")
 }
@@ -304,6 +355,7 @@ fn spawn_backend(p: &Preferences) -> Result<Child, String> {
     .ok();
     let errlog = logfile.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(python);
+    cmd.env("MIKUCHIN_LANGUAGE_FILE", language_file());
     if let Some(product) = root.parent().and_then(|p| p.parent()) {
         let web = product.join("frontend/web");
         if web.join("index.html").is_file() {
@@ -940,6 +992,64 @@ async fn tunnel_restart(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_idle_unload(state: State<'_, AppState>) -> Result<u64, String> {
+    let path = {
+        state.inner.lock().map_err(|e|e.to_string())?.prefs.config_path.clone()
+    };
+    let data: Value = serde_json::from_slice(&fs::read(path).map_err(|e|e.to_string())?)
+        .map_err(|e|e.to_string())?;
+    Ok(data["idle_unload_s"].as_f64().unwrap_or(0.0).max(0.0) as u64)
+}
+
+#[tauri::command]
+async fn set_idle_unload(app: tauri::AppHandle, seconds: u64) -> Result<u64, String> {
+    if seconds > 86400 { return Err("Timeout must be between 0 and 86400 seconds".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (path, running, port) = {
+            let guard = state.inner.lock().map_err(|e|e.to_string())?;
+            (guard.prefs.config_path.clone(), guard.child.is_some(), guard.prefs.port)
+        };
+        let original = fs::read(&path).map_err(|e|e.to_string())?;
+        let mut config: Value = serde_json::from_slice(&original).map_err(|e|e.to_string())?;
+        if config["idle_unload_s"].as_u64() == Some(seconds) { return Ok(seconds); }
+        let obj = config.as_object_mut().ok_or("Config must be a JSON object")?;
+        obj.insert("idle_unload_s".into(), json!(seconds));
+        // No hot change to model runtime; stop the API first, preserving its KV lifecycle.
+        if running {
+            api_get(port,"/metrics")?;
+            stop_backend(&state)?;
+        }
+        // Keep a rollback snapshot of the previous user config before changing it.
+        let _ = fs::write(PathBuf::from(&path).with_extension("json.bak"), &original);
+        let write = fs::write(&path, serde_json::to_vec_pretty(&config).map_err(|e|e.to_string())?);
+        if let Err(error) = write {
+            if running {let _ = start_backend(&state);}
+            return Err(format!("Failed to save idle timeout: {error}"));
+        }
+        if running {
+            if let Err(error) = start_backend(&state) {
+                let _ = fs::write(&path, &original);
+                let _ = start_backend(&state);
+                return Err(format!("Service restart failed; restored previous config: {error}"));
+            }
+            let mut ready = false;
+            for _ in 0..60 {
+                if api_get(port, "/metrics").is_ok() {ready = true;break;}
+                thread::sleep(Duration::from_millis(350));
+            }
+            if !ready {
+                let _ = stop_backend(&state);
+                let _ = fs::write(&path, &original);
+                let _ = start_backend(&state);
+                return Err("New service was not ready; previous idle config restored".into());
+            }
+        }
+        Ok(seconds)
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Result<Preferences, String> {
     Ok(state.inner.lock().map_err(|e| e.to_string())?.prefs.clone())
 }
@@ -1276,6 +1386,7 @@ fn request_show(app: &tauri::AppHandle, position: Option<(i32, i32)>) {
 fn watchdog(app: tauri::AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(2));
+        sync_tray_language(&app);
         let state = app.state::<AppState>();
         let restart = {
             let mut guard = match state.inner.lock() {
@@ -1440,6 +1551,10 @@ pub fn run() {
             get_status,
             get_settings,
             save_settings,
+            get_language,
+            set_language,
+            get_idle_unload,
+            set_idle_unload,
             reveal_api_key,
             replace_api_key,
             generate_api_key,
@@ -1457,16 +1572,15 @@ pub fn run() {
                 keep_close_button_only(&window);
             }
             let app_handle = app.handle().clone();
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &MenuItem::with_id(app, "open", "打开控制面板", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "load", "加载模型", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "unload", "卸载模型", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "chat", "打开 Chat", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "quit", "退出管理器", true, None::<&str>)?,
-                ],
-            )?;
+            let lang = current_language();
+            let texts = tray_strings(&lang);
+            let ids = ["open", "load", "unload", "chat", "quit"];
+            let items = ids.iter().zip(texts.iter())
+                .map(|(id, title)| MenuItem::with_id(app, *id, *title, true, None::<&str>))
+                .collect::<Result<Vec<_>, _>>()?;
+            let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = items.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+            let menu = Menu::with_items(app, &refs)?;
+            app.manage(LocalizedTray {items, previous: Mutex::new(lang)});
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("Mikuchin")

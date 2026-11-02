@@ -8,7 +8,9 @@
     "build": "tauri build",
     "web:build": "tsc --noEmit && vite build",
     "vite": "vite --host 127.0.0.1 --port 1420",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "preweb:build": "python ../../scripts/build-locales.py",
+    "previte": "python ../../scripts/build-locales.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
