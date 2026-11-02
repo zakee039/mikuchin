@@ -381,5 +381,10 @@
   "Delete": "Delete",
   "Conversation actions": "Conversation actions",
   "KV cached": "KV cached",
-  "KV locked for at least one model": "KV locked for at least one model"
+  "KV locked for at least one model": "KV locked for at least one model",
+  "生图模型": "Image model",
+  "当前默认模型": "Current default model",
+  "Unavailable": "Missing files",
+  "No image model files available": "No image model files available",
+  "Enter your API key to view available image models": "Enter your API key to view available image models"
 }

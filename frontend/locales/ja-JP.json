@@ -381,5 +381,10 @@
   "Delete": "削除",
   "Conversation actions": "会話操作",
   "KV cached": "KV キャッシュ済み",
-  "KV locked for at least one model": "少なくとも 1 つのモデルで KV が固定済み"
+  "KV locked for at least one model": "少なくとも 1 つのモデルで KV が固定済み",
+  "生图模型": "画像生成モデル",
+  "当前默认模型": "現在の既定モデル",
+  "Unavailable": "ファイルがありません",
+  "No image model files available": "利用可能な画像生成モデルがありません",
+  "Enter your API key to view available image models": "API キーを入力すると利用可能な画像モデルが表示されます"
 }

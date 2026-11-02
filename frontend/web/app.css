@@ -431,3 +431,7 @@ main { flex: 1; min-height: 0; display: flex; }
  opacity:.35;text-shadow:0 1px 0 rgba(255,255,255,.15)}
 .session-role-watermark--stateless{color:#9199a2;opacity:.42;font-size:17px;font-weight:600}
 .session-row.selected .session-role-watermark{opacity:.30}
+
+/* Image generation model is independent of the Chat tool's default model. */
+.img-model-field{flex:1 1 210px;min-width:185px;max-width:310px}
+.img-model-field select{width:100%;min-width:0}

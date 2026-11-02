@@ -228,6 +228,10 @@
         <span class="card-title" id="img-title">Make an image</span>
         <textarea class="st-input img-prompt" id="img-prompt" rows="3" placeholder="Describe the image&hellip;" aria-label="Prompt"></textarea>
         <div class="img-row">
+          <label class="st-field img-model-field">生图模型
+            <select class="st-input" id="img-model" aria-label="Image generation model">
+              <option value="default">当前默认模型</option>
+            </select></label>
           <label class="st-field">Size
             <select class="st-input" id="img-size">
               <option selected>768x768</option><option>1024x1024</option>

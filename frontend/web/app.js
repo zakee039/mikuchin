@@ -82,6 +82,7 @@ function showTab(name) {
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
   if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.();}
+  if (tab === "images") void refreshImageModels();
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
   if (lastMetrics) render(lastMetrics);
 }
@@ -1417,12 +1418,43 @@ showTab(location.hash.slice(1) || "chat");
 poll();
 
 // ------------------------------------------------------------------ images (POST /v1/images/generations)
+// Only the Images page can change image model; chat tool requests always use
+// the unchanged default ImageGen configuration on the server.
+async function refreshImageModels() {
+  const select = $("img-model");
+  const previous = select.value || store.get("image-profile", "default");
+  try {
+    const response = await fetch("v1/mikuchin/image-models", {headers: headers(), cache: "no-store"});
+    if (!response.ok) throw Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    if (!models.length) throw Error("No image models are configured");
+    select.replaceChildren();
+    for (const model of models) {
+      const item = new Option(model.name + (model.available ? "" : " · " + ui("Unavailable")), model.id);
+      item.disabled = !model.available;
+      select.add(item);
+    }
+    const saved = models.find(m => m.id === previous && m.available);
+    const fallback = models.find(m => m.available);
+    select.value = saved?.id || fallback?.id || "default";
+    select.disabled = !fallback;
+    $("img-go").disabled = !fallback;
+    if (!fallback) $("img-hint").textContent = ui("No image model files available");
+  } catch (error) {
+    console.warn("Image model discovery failed", error);
+    $("img-hint").textContent = ui("Enter your API key to view available image models");
+  }
+}
+$("img-model").onchange = () => store.set("image-profile", $("img-model").value);
+
 $("img-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const prompt = $("img-prompt").value.trim();
   if (!prompt) return;
   const body = {prompt, size: $("img-size").value, response_format: "b64_json",
-                strata_upscale: $("img-upscale").value};
+                strata_upscale: $("img-upscale").value,
+                strata_image_profile: $("img-model").value || "default"};
   if ($("img-seed").value !== "") body.seed = Number($("img-seed").value);
   $("img-go").disabled = true;
   const t0 = performance.now();

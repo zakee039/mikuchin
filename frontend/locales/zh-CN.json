@@ -381,5 +381,10 @@
   "Delete": "删除",
   "Conversation actions": "会话操作",
   "KV cached": "KV 已缓存",
-  "KV locked for at least one model": "至少一个模型的 KV 已锁定"
+  "KV locked for at least one model": "至少一个模型的 KV 已锁定",
+  "生图模型": "生图模型",
+  "当前默认模型": "当前默认模型",
+  "Unavailable": "文件缺失",
+  "No image model files available": "未找到可用的生图模型文件",
+  "Enter your API key to view available image models": "填写 API 密钥后可查看可用生图模型"
 }
