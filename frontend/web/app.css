@@ -417,11 +417,14 @@ main { flex: 1; min-height: 0; display: flex; }
 #card-reference-preview{display:block;max-width:min(100%,440px);max-height:520px;object-fit:contain;border-radius:10px;border:1px solid var(--st-line)}
 #card-reference-preview[hidden]{display:none}
 
-/* Session role identifiers as subtle translucent italic watermarks. */
+/* Session role identifiers as subtle translucent italic watermarks.
+   Raise the *entire row* while its actions are open: an individual menu
+   cannot escape the stacking context of a lower row on its own. */
 .session-row{isolation:isolate}
+.session-row:has(.session-actions:not([hidden])){z-index:20}
 .session-title{position:relative;z-index:1}
 .session-dots,.session-state{position:relative;z-index:2}
-.session-role-watermark{position:absolute;z-index:0;right:35px;top:50%;pointer-events:none;
+.session-role-watermark{position:absolute;z-index:0;right:88px;top:50%;pointer-events:none;
  transform:translateY(-50%) rotate(-10deg);transform-origin:center;max-width:58%;
  overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
  font-style:italic;font-weight:800;font-size:25px;letter-spacing:.03em;line-height:1;
