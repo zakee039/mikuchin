@@ -11,7 +11,7 @@ This is an **in-parallel migration**. Until validation and cutover, the old depl
 7. Start the new manager only after the old manager/service is stopped; two watchdogs must never control the same API port.
 8. Do not expose an unauthenticated API beyond 127.0.0.1. Preserve encrypted DPAPI tokens.
 
-**Status:** Layout and branding staged. Full runtime cutover requires engine binary/venv copy, verified data snapshot, configuration checks, application bootstrap, and smoke tests.
+**Status:** Runtime cutover and core regression checks completed on 2026-11-02. See `MIGRATION_REPORT_2026-11-02.md` for results and untested areas.
 
 ## Safe final cutover
 

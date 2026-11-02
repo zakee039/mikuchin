@@ -18,6 +18,6 @@ PolyStrata / Strata source attribution and licenses are retained in `backend/pol
 
 ## Preparing a checkout
 
-After cloning with submodules, run `powershell -ExecutionPolicy Bypass -File scripts/prepare-engine.ps1` to apply the small frontend-root compatibility patch to the PolyStrata checkout. The product Web UI is served from `frontend/web` only when `MIKUCHIN_WEB_DIR` is set; direct PolyStrata use is unchanged.
+Clone with `git clone --recurse-submodules` or run `git submodule update --init --recursive`. The engine submodule tracks the `mikuchin-webroot` branch of the PolyStrata fork; it contains a small optional `MIKUCHIN_WEB_DIR` override. The product Web UI is served from `frontend/web` only when that variable is set, and standalone PolyStrata still serves its original page.
 
 The current build includes local runtime data under Git-ignored paths and must not be pushed. Use `config/active.json` for a machine-local model config.
