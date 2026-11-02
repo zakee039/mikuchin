@@ -14,34 +14,43 @@ function historyRoleColor(name){
   return `hsl(${sum%360} 55% 43%)`;
 }
 
-const mobileHistoryMedia = compactMedia;
+function updateMobileHistoryLabels() {
+  $("mobile-history-btn").querySelector("span").textContent = histTr("History");
+  $("mobile-history-btn").setAttribute("aria-label", histTr("History"));
+  $("mobile-new-btn").textContent = "＋ " + histTr("New chat");
+}
+const mobileHistoryMedia = matchMedia("(max-width: 760px)");
 function historySidebarSet(open) {
   if (!sessionV1) return;
   const mobile = mobileHistoryMedia.matches;
   const sidebar = $("session-sidebar");
-  sidebar.classList.toggle("collapsed", !open);
+  sidebar.classList.toggle("collapsed", !mobile && !open);
   sidebar.classList.toggle("mobile-open", mobile && open);
-  $("sidebar-expand").hidden = open;
-  $("sidebar-expand").setAttribute("aria-expanded", String(open));
-  $("session-backdrop").hidden = !(mobile && open);
+  $("sidebar-expand").hidden = mobile || open;
+  $("session-backdrop").hidden = !mobile || !open;
+  $("mobile-history-btn").setAttribute("aria-expanded", String(mobile && open));
   if (!mobile) store.set("history-sidebar-open", open);
 }
 $("sidebar-toggle").onclick = () => historySidebarSet(false);
-$("sidebar-expand").onclick = () => {
-  historySidebarSet(true);
-  if (mobileHistoryMedia.matches) $("sidebar-toggle").focus();
+$("sidebar-expand").onclick = () => historySidebarSet(true);
+$("mobile-history-btn").onclick = () => {
+  if (sessionV1) historySidebarSet(true);
+  else toast("warn", "History needs API key", "Enter the API key under Settings.");
+};
+$("mobile-new-btn").onclick = () => {
+  $("new-btn").click();
+  historySidebarSet(false);
 };
 $("session-backdrop").onclick = () => historySidebarSet(false);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && mobileHistoryMedia.matches &&
-      $("session-sidebar").classList.contains("mobile-open")) {
-    historySidebarSet(false);
-    $("sidebar-expand").focus();
-  }
+  if (event.key === "Escape" && mobileHistoryMedia.matches) historySidebarSet(false);
 });
-mobileHistoryMedia.addEventListener("change", () => {
-  historySidebarSet(mobileHistoryMedia.matches ? false : store.get("history-sidebar-open", true) !== false);
-});
+document.querySelectorAll(".st-tab").forEach((button) =>
+  button.addEventListener("click", () => {
+    if (mobileHistoryMedia.matches) historySidebarSet(false);
+  }));
+mobileHistoryMedia.addEventListener("change", () =>
+  historySidebarSet(mobileHistoryMedia.matches ? false : store.get("history-sidebar-open", true) !== false));
 
 function renderHistorySidebar(list) {
   historyRecords = list.slice();
@@ -69,9 +78,10 @@ function renderHistorySidebar(list) {
       title.title = title.textContent = item.title || "New chat";
       title.onclick = async () => {
         if (busy) { toast("warn", "Wait for the response to finish"); return; }
-        if (item.id === sessionId) { if (mobileHistoryMedia.matches) historySidebarSet(false); return; }
-        try { await sessionSaveChain; await loadServerChat(item.id); if (mobileHistoryMedia.matches) historySidebarSet(false); }
+        if (item.id === sessionId) { historySidebarSet(false); return; }
+        try { await sessionSaveChain; await loadServerChat(item.id); }
         catch (e) { toast("error", "Cannot open conversation", String(e)); }
+        finally { historySidebarSet(false); }
       };
       row.appendChild(title);
       const role=historyRoleLabel(item.id);
@@ -130,9 +140,8 @@ function renderHistorySidebar(list) {
     }
   }
   $("session-sidebar").hidden = false;
-  historySidebarSet(mobileHistoryMedia.matches
-    ? $("session-sidebar").classList.contains("mobile-open")
-    : store.get("history-sidebar-open", true) !== false);
+  // Mobile starts with a fully-visible chat, never a half-width history pane.
+  historySidebarSet(!mobileHistoryMedia.matches && store.get("history-sidebar-open", true) !== false);
 }
 async function historyRequest(id, method = "GET", body = null) {
   const response = await fetch("v1/strata/sessions/" + encodeURIComponent(id), {
@@ -194,5 +203,6 @@ async function historyAction(record, action) {
 }
 
 document.addEventListener('mikuchin-language-changed',()=>{
+  updateMobileHistoryLabels();
   if(historyRecords.length)renderHistorySidebar(historyRecords);
 });

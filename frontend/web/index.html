@@ -2,12 +2,13 @@
 <html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Mikuchin</title>
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css">
+<link rel="stylesheet" href="web/app.css?v=20261103-mobile">
+<link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
   try {
@@ -57,10 +58,11 @@
       <div class="session-foot">Local conversations · KV stored per model</div>
     </aside>
     <div class="chat-main">
-      <div class="chat-mobile-toolbar">
-        <button type="button" class="session-expand" id="sidebar-expand" title="Show history" aria-label="Show history" aria-controls="session-sidebar" aria-expanded="false" hidden>☰ <span>History</span></button>
-        <span class="chat-mobile-toolbar__title">Chat</span>
-        <button type="button" class="session-mobile-new" id="mobile-new-btn" title="New chat" aria-label="New chat">＋ <span>New chat</span></button>
+      <button type="button" class="session-expand" id="sidebar-expand" title="Show history" aria-label="Show history" hidden>☰</button>
+      <div class="chat-mobile-bar">
+        <button type="button" id="mobile-history-btn" aria-label="打开历史记录">☰ <span>历史</span></button>
+        <span class="chat-mobile-bar__title">Mikuchin</span>
+        <button type="button" class="mobile-new-chat" id="mobile-new-btn">＋ 新对话</button>
       </div>
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat" id="chat">
@@ -480,9 +482,9 @@
 </aside>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/app.js"></script>
+<script src="web/app.js?v=20261103-mobile"></script>
 <script src="web/image-studio.js"></script>
-<script src="web/sessions.js"></script>
+<script src="web/sessions.js?v=20261103-mobile"></script>
 <script src="web/characters.js"></script>
 <script src="web/i18n-data.js"></script>
 <script src="web/i18n.js"></script>

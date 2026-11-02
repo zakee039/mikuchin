@@ -13,9 +13,6 @@ const kfmt = (n) => (n == null ? "–" : n >= 1000 ? `${fmt(n / 1000, n >= 10000
 const ctxfmt = (n) => (n && n % 1024 === 0 ? `${fmt(n / 1024)}K` : kfmt(n));
 const gb = (b, d = 1) => (b == null ? "–" : fmt(b / 1073741824, d));   // memory: binary GB, as Windows shows it
 
-// Shared across the navigation, mobile composer, and conversation drawer.
-const compactMedia = matchMedia("(max-width: 760px), (pointer: coarse) and (max-width: 1024px)");
-
 const store = {
   get(k, d) { try { const v = localStorage.getItem("strata." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("strata." + k, JSON.stringify(v)); } catch (e) { /* private mode: in memory only */ } },
@@ -82,11 +79,8 @@ function showTab(name) {
   for (const v of ["chat", "images", "characters", "monitor", "settings", "about"]) $(`view-${v}`).hidden = v !== tab;
   if (tab === "images") $("img-natural").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
-  if (tab === "chat" && !compactMedia.matches) $("input").focus();
-  if (tab !== "chat" && typeof historySidebarSet === "function") historySidebarSet(false);
-  if (compactMedia.matches) {
-    document.querySelector('.st-tab[aria-selected="true"]')?.scrollIntoView({block: "nearest", inline: "nearest"});
-  }
+  // Opening Chat on a phone should not summon the software keyboard.
+  if (tab === "chat" && !matchMedia("(max-width: 760px)").matches) $("input").focus();
   if (tab === "monitor") loadMcp();
   if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.();}
   if (tab === "images") void window.MikuchinImageStudio?.refresh();
@@ -1181,18 +1175,9 @@ async function send() {
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };
 $("stop-btn").onclick = () => { if (busy) busy.controller.abort(); };
 $("input").addEventListener("keydown", (e) => {
-  // Mobile virtual keyboards use Enter for a newline; the Send button submits.
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing &&
-      !matchMedia("(pointer: coarse) and (max-width: 1024px)").matches) {
-    e.preventDefault(); send();
-  }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
-function autosize() {
-  const t = $("input");
-  t.style.height = "auto";
-  const maxHeight = compactMedia.matches ? (window.visualViewport?.height || innerHeight) * 0.32 : innerHeight * 0.4;
-  t.style.height = Math.min(t.scrollHeight, maxHeight) + "px";
-}
+function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, innerHeight * 0.4)}px`; }
 $("input").addEventListener("input", autosize);
 
 $("new-btn").onclick = async () => {
@@ -1234,22 +1219,6 @@ $("new-btn").onclick = async () => {
   renderChat();
   toast("info", "New chat", "The last one was cleared.", 6000, {label: "Undo", run: () => { messages = backup; saveChat(); renderChat(); }});
 };
-$("mobile-new-btn").onclick = () => {
-  $("new-btn").click();
-  if (typeof historySidebarSet === "function") historySidebarSet(false);
-};
-
-// Keep the composer visible when the virtual keyboard resizes the visual viewport.
-if (window.visualViewport) {
-  const syncVisibleViewport = () => {
-    document.documentElement.style.setProperty("--mk-visual-height",
-      Math.max(200, window.visualViewport.height) + "px");
-  };
-  window.visualViewport.addEventListener("resize", syncVisibleViewport);
-  window.visualViewport.addEventListener("scroll", syncVisibleViewport);
-  window.addEventListener("orientationchange", syncVisibleViewport);
-  syncVisibleViewport();
-}
 $("export-btn").onclick = () => {
   if (!messages.length) { toast("info", "Nothing to save yet"); return; }
   const tools = (m) => (m.tools || []).filter((t) => t.result != null).map((t) =>
