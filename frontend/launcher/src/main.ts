@@ -91,7 +91,7 @@ function workflowPage(){return `<section><div class="workflow-label">Workflow Pr
  <div class="placeholder"><div class="placeholder-icon">◇</div><b>工作流功能预留</b><p>Miku Harness 将通过注册接口预计算前缀；后续调用自动复用缓存。当前尚未部署工作流 API。</p>
  <div class="checkline">✓ 工作流版本与 Token 指纹</div><div class="checkline">✓ 独立 KV 存储与调度</div><div class="checkline">✓ Miku Harness 注册并预热</div>
  <div class="planned">设计阶段 · 现在不会创建任何缓存</div></div></section>`;}
-function toggle(key:keyof Prefs,name:string,desc:string){return `<label class="toggle-row"><div><b>${name}</b><small>${desc}</small></div><input type="checkbox" data-setting="${key}" ${prefs?.[key]?"checked":""}><span class="switch"></span></label>`;}
+function toggle(key:keyof Prefs,name:string,_desc:string){return `<label class="toggle-row"><b>${name}</b><input type="checkbox" data-setting="${key}" ${prefs?.[key]?"checked":""}><span class="switch"></span></label>`;}
 function cfView(){
  const on=Boolean(prefs?.cf_enabled);
  const count=status?.cf_connections;
@@ -127,22 +127,20 @@ function apiPage(){return `<section class="api-compact">
  </div>
  </section>`;}
 function settingsPage(){return `<section class="setting-page compact-settings"><div class="setting-card"><h3>启动与守护</h3>
- ${toggle("autostart","开机自启","登录 Windows 时启动托盘管理器")}
- ${toggle("auto_load_model","启动后自动加载模型","启动 Manager 后自动载入模型")}
- ${toggle("watchdog","服务守护","异常退出最多自动重启三次")}
+ ${toggle("autostart","开机自启","")}
+ ${toggle("auto_load_model","启动后自动加载模型","")}
+ ${toggle("watchdog","服务守护","")}
  </div><div class="setting-card"><h3>全局语言</h3>
- <div class="setting-inline"><span>网页、聊天与托盘菜单使用同一语言</span>
+ <div class="setting-inline"><label for="global-language">语言</label>
  <select id="global-language" class="field setting-select">
   <option value="zh-CN" ${getLocale()==="zh-CN"?"selected":""}>简体中文</option>
   <option value="ja-JP" ${getLocale()==="ja-JP"?"selected":""}>日本語</option>
   <option value="en-US" ${getLocale()==="en-US"?"selected":""}>English</option>
- </select></div><small class="setting-note">静态界面语言不影响模型回复语言</small>
+ </select></div>
  </div><div class="setting-card"><h3>空闲卸载时间</h3>
- <p class="setting-note">空闲超时后自动卸载模型，API 继续运行</p>
- <div class="setting-inline"><label for="idle-minutes">分钟</label>
+ <div class="setting-inline idle-control"><label for="idle-minutes">分钟</label>
  <input id="idle-minutes" class="field idle-input" type="number" min="0" max="1440" step="1" value="${Math.round(idleSeconds/60)}" ${idleBusy?"disabled":""}>
- <button id="save-idle-timeout" class="mini-primary" ${idleBusy?"disabled":""}>保存并重启服务</button></div>
- <small class="setting-note">0 = 关闭自动卸载；保存后重启服务，原会话及 KV 保留。</small>
+ <button id="save-idle-timeout" class="outline-small" ${idleBusy?"disabled":""}>保存并重启服务</button></div>
  </div></section>`;}
 function content(){
  const el=document.getElementById("content")!;
@@ -336,9 +334,10 @@ async function showLogs(){const bg=document.createElement("div");bg.className="m
  const close=()=>bg.remove();document.getElementById("close-log")!.addEventListener("click",close);
  bg.addEventListener("click",e=>{if(e.target===bg)close();});
  try{const raw=await invoke<string>("get_log");const el=document.getElementById("log-text")!;el.textContent=raw||"暂无日志";el.scrollTop=el.scrollHeight;}catch(e){document.getElementById("log-text")!.textContent=String(e);}}
-async function init(){try{setLocale(await invoke<string>("get_language"));
- idleSeconds=await invoke<number>("get_idle_unload");
- prefs=await invoke<Prefs>("get_settings");await refreshModels();}catch(e){toast="初始化异常："+String(e);}
+async function init(){
+ try{setLocale(await invoke<string>("get_language"));}catch(e){console.warn("Language preference not available",e);}
+ try{prefs=await invoke<Prefs>("get_settings");await refreshModels();}catch(e){toast="初始化异常："+String(e);}
+ try{idleSeconds=await invoke<number>("get_idle_unload");}catch(e){console.warn("Idle config not available",e);}
  render();
  void listen<string>("manager-error", event => {
    mark("服务管理异常：" + String(event.payload));

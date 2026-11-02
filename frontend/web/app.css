@@ -365,3 +365,9 @@ main { flex: 1; min-height: 0; display: flex; }
 .mk-dropdown-item.selected{background:var(--st-accent-tint);color:var(--st-accent-text);font-weight:600}
 .mk-dropdown-item:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:850px){.mk-language-control>span{display:none}.mk-language-control select{max-width:82px}}
+
+/* About: the project introduction belongs to the engine card, not a duplicate card. */
+.about-project-inline{border-top:1px solid var(--st-line);margin-top:9px;padding-top:12px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline}
+.about-project-label{font-weight:750;color:var(--st-ink);white-space:nowrap}
+.about-project-inline p{font-size:13px;color:var(--st-ink-muted);flex:1 1 100%;line-height:1.5}
+.about-project-inline a{font-size:13px;text-decoration:none;color:var(--st-accent)}

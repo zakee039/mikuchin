@@ -996,8 +996,9 @@ fn get_idle_unload(state: State<'_, AppState>) -> Result<u64, String> {
     let path = {
         state.inner.lock().map_err(|e|e.to_string())?.prefs.config_path.clone()
     };
-    let data: Value = serde_json::from_slice(&fs::read(path).map_err(|e|e.to_string())?)
-        .map_err(|e|e.to_string())?;
+    let original = fs::read(path).map_err(|e|e.to_string())?;
+    let contents = original.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&original);
+    let data: Value = serde_json::from_slice(contents).map_err(|e|e.to_string())?;
     Ok(data["idle_unload_s"].as_f64().unwrap_or(0.0).max(0.0) as u64)
 }
 
@@ -1011,7 +1012,8 @@ async fn set_idle_unload(app: tauri::AppHandle, seconds: u64) -> Result<u64, Str
             (guard.prefs.config_path.clone(), guard.child.is_some(), guard.prefs.port)
         };
         let original = fs::read(&path).map_err(|e|e.to_string())?;
-        let mut config: Value = serde_json::from_slice(&original).map_err(|e|e.to_string())?;
+        let contents = original.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&original);
+        let mut config: Value = serde_json::from_slice(contents).map_err(|e|e.to_string())?;
         if config["idle_unload_s"].as_u64() == Some(seconds) { return Ok(seconds); }
         let obj = config.as_object_mut().ok_or("Config must be a JSON object")?;
         obj.insert("idle_unload_s".into(), json!(seconds));

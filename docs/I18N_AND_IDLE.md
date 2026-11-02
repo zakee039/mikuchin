@@ -32,3 +32,10 @@ The Web API stays on the same port. A restart temporarily interrupts active requ
 - `npm run check` in `frontend/launcher` — TypeScript validation.
 - `npm run build` in `frontend/launcher` — Tauri build and installer.
 - Manual browser tests for zh-CN → ja-JP → en-US on Chat, Characters and About, including custom dropdown and console diagnostics.
+
+## About and compact settings follow-up
+
+- `About` no longer repeats a separate project-link card: the project overview and GitHub link appear within the Model & Engine card; the engine version remains identified as PolyStrata.
+- Manager Settings removes all unnecessary gray subtitles and keeps the language and idle timeout actions compact.
+- `get_idle_unload` and `set_idle_unload` ignore an optional UTF-8 BOM in the active JSON (the existing Windows config starts with a BOM). Failure to read the optional idle setting no longer blocks initial Manager UI rendering.
+- Monitor dynamic telemetry and Images status labels use locale keys, including repeated asynchronous status updates.
