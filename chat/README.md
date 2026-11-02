@@ -1,0 +1,1 @@
+Private runtime data: conversations.sqlite3, character_cards.sqlite3, images/, attachments/, generated-images/, kv-cache/. The active PolyStrata instance remains authoritative until a safe cutover and snapshot verification.

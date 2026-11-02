@@ -1,0 +1,1 @@
+`active.json` is the machine-local run configuration and must never be committed. It is derived from the previous deployment during migration. Secret tokens remain in DPAPI-protected Windows state files, not in this repository.

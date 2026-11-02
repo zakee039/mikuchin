@@ -1,0 +1,21 @@
+# Runtime and private data
+/chat/**
+!/chat/README.md
+/models/**
+!/models/README.md
+/config/*.json
+!/config/*.example.json
+/config/*.local.*
+*.log
+*.dpapi
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+# Desktop build output
+/frontend/launcher/node_modules/
+/frontend/launcher/dist/
+/frontend/launcher/portable/
+/frontend/launcher/src-tauri/target/
+**/__pycache__/
+**/.pytest_cache/
+.venv/

@@ -1,0 +1,4 @@
+[submodule "backend/polystrata"]
+	path = backend/polystrata
+	url = https://github.com/zakee039/PolyStrata.git
+	branch = polystrata

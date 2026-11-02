@@ -1,0 +1,6 @@
+id: miku
+display_name: Miku
+assets:
+  icon: assets/icon.png
+  portrait_half: assets/half.png
+  portrait_full: assets/full.png

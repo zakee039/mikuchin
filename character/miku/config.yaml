@@ -1,0 +1,5 @@
+id: miku
+profile: profile.yaml
+personality: personality.md
+system_prompt: system.md
+memory_namespace: miku

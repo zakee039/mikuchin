@@ -1,0 +1,1 @@
+Service-facing orchestration lives here. PolyStrata remains replaceable as an inference engine; no model-specific KV format is forced on other engines. Existing lifecycle and per-model KV quotas must remain compatible.
