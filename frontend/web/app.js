@@ -675,6 +675,7 @@ async function enableServerSessions() {
     } else if (!list.length || !sessionId) {
       sessionId = makeSessionId();
       store.set("session-id", sessionId);
+      await window.polyCharacterNewSession?.();
     }
     await refreshSessionPicker();
     window.polyCharacterRefresh?.();
@@ -734,8 +735,12 @@ function swipeLoad(m) {
 // The streaming itself, shared by send() and regenerateMessage(). On abort it sets m.stopped and returns
 // normally (so the caller can still save the partial answer); on any other error it rethrows.
 async function streamInto(m, el, signal) {
-  const assembledMessages = apiMessages();
-  const roleSystem = await window.polyCharacterPrompt?.(assembledMessages);
+  const stateless=window.polyIsStateless?.()===true;
+  const history=apiMessages();
+  // Keep full conversation in UI/storage, send only latest user turn to inference.
+  const assembledMessages=stateless ? [history.filter(x=>x.role==="user").at(-1)] : history;
+  if(stateless && !assembledMessages[0]) throw Error("无状态模式需要本次用户输入");
+  const roleSystem = stateless ? null : await window.polyCharacterPrompt?.(assembledMessages);
   const workflowInitPending = roleSystem?.workflowInitPending === true;
   const workflowSessionId = sessionId;
   // Workflow bookkeeping is never part of OpenAI-compatible message JSON.
@@ -749,9 +754,10 @@ async function streamInto(m, el, signal) {
   if (settings.seed) body.seed = +settings.seed;
   if (settings.max) body.max_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
-  if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
-  if (health.image_generation) body.strata_image_tool = true;
+  if (!stateless && settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
+  if (!stateless && health.image_generation) body.strata_image_tool = true;
   if (sessionV1 && sessionId) body.strata_session_id = sessionId;
+  if (stateless) body.mikuchin_stateless = true;
 
   let firstAt = null, thinkStart = null, usage = null, frame = 0;
   const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
@@ -1038,6 +1044,7 @@ function renderChat() {
   chat.querySelectorAll(".st-msg").forEach((e) => e.remove());
   $("chat-empty").hidden = messages.length > 0;
   messages.forEach((m, i) => chat.appendChild(msgEl(m, i)));
+  window.polyCharacterRefresh?.();
   scrollDown(true);
 }
 function nearBottom() { const s = $("chat-scroll"); return s.scrollHeight - s.scrollTop - s.clientHeight < 120; }
@@ -1168,7 +1175,7 @@ $("new-btn").onclick = async () => {
     await sessionSaveChain;
     sessionId = makeSessionId();
     store.set("session-id", sessionId);
-    window.polyCharacterRefresh?.();
+    await window.polyCharacterNewSession?.();
     messages = [];
     store.set("chat", []);
     renderChat();

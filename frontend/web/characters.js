@@ -2,8 +2,30 @@
  * No forked SillyTavern code; JSON V2 import/export handled by PolyStrata.
  */
 "use strict";
-const characterState = {cards: [], persona: "", assignments: {}, available: false, editId: ""};
-const characterSubTabs = ["card", "world", "workflow"];
+const characterState = {cards: [], global: {user_name:"",user_description:"",default_role:"stateless"}, assignments: {}, available: false, editId: "", stateless: false};
+const characterSubTabs = ["card", "world", "workflow", "global"];
+function isStatelessRole(){return characterState.stateless;}
+window.polyIsStateless = isStatelessRole;
+function globalUserIdentity(card) {
+  if (card?.persona_mode === "none") return "";
+  const independent = card?.persona_mode === "independent";
+  const source = independent ? card : characterState.global;
+  return [source?.user_name ? "User name: " + source.user_name : "",
+          source?.user_description ? "User profile:\n" + source.user_description : ""].filter(Boolean).join("\n\n");
+}
+// Each conversation stores its own explicit built-in/custom role assignment.
+// The configured default applies only when a *new* session is created.
+async function applyNewSessionDefault() {
+  if (!characterState.available) await charactersLoad();
+  const selected = characterState.global.default_role || "stateless";
+  if (sessionV1 && sessionId && characterState.available) {
+    await characterRequest("assign", {session_id:sessionId, card_id:selected});
+    characterState.assignments[sessionId]=selected;
+  }
+  characterState.stateless = selected === "stateless";
+  characterRefreshPicker();
+}
+window.polyCharacterNewSession = applyNewSessionDefault;
 function showCharacterSubTab(name, focus = false) {
   const active = characterSubTabs.includes(name) ? name : "card";
   for (const key of characterSubTabs) {
@@ -14,7 +36,10 @@ function showCharacterSubTab(name, focus = false) {
     tab.tabIndex = selected ? 0 : -1;
     panel.hidden = !selected;
     if (selected && focus) tab.focus();
+    if (key === "global") $("card-save").hidden = selected;
   }
+  const current=$("card-list").value;
+  $("character-builtin-note").hidden = active !== "card" || !["stateless","ordinary"].includes(current);
 }
 window.polyCharacterSubTab = showCharacterSubTab;
 for (const [index, key] of characterSubTabs.entries()) {
@@ -45,7 +70,7 @@ async function characterRequest(action, value = {}) {
   return j;
 }
 function selectedCharacter() {
-  const id = characterState.assignments[sessionId];
+  const id = characterState.stateless ? null : characterState.assignments[sessionId];
   return characterState.cards.find((c) => c.id === id) || null;
 }
 // Compact role chooser in the composer, backed by the existing hidden <select>.
@@ -70,7 +95,7 @@ function rolePickerRender() {
     entry.className = "chat-role-menu__item";
     entry.setAttribute("role", "menuitemradio");
     entry.setAttribute("aria-checked", String(option.value === select.value));
-    entry.disabled = option.disabled;
+    entry.disabled = option.disabled || messages.length > 0 || !!busy;
     const text = document.createElement("span");
     text.textContent = option.value ? option.textContent : translate("普通助手（无角色）");
     const check = document.createElement("b");
@@ -79,6 +104,9 @@ function rolePickerRender() {
     check.setAttribute("aria-hidden", "true");
     entry.append(text, check);
     entry.onclick = () => {
+      if (messages.length > 0 || busy || $("role-picker-btn").disabled) {
+        rolePickerClose(); return;
+      }
       rolePickerClose();
       if (select.value !== option.value) {
         select.value = option.value;
@@ -91,6 +119,7 @@ function rolePickerRender() {
 }
 $("role-picker-btn").onclick = () => {
   const menu = $("chat-role-menu"), button = $("role-picker-btn");
+  if (button.disabled || messages.length > 0 || busy) {rolePickerClose();return;}
   if (!menu.hidden) {rolePickerClose(true);return;}
   rolePickerRender();
   menu.hidden = false;
@@ -119,22 +148,30 @@ document.addEventListener("mikuchin-language-changed", () => {
 
 function characterRefreshPicker() {
   const select = $("chat-character"), edit = $("card-list");
-  const currentEdit = characterState.editId;
-  select.replaceChildren(new Option("普通助手（无角色）", ""));
-  edit.replaceChildren(new Option("新角色", ""));
+  const currentEdit = edit.value || characterState.editId;
+  const assigned=characterState.assignments[sessionId];
+  characterState.stateless = assigned === "stateless";
+  const tr=(x)=>window.MikuchinI18n?.translate(x)||x;
+  select.replaceChildren(new Option(tr("无状态（内置）"), "stateless"), new Option(tr("普通助手"), "ordinary"));
+  edit.replaceChildren(new Option(tr("新角色"), ""), new Option(tr("无状态（内置）"), "stateless"), new Option(tr("普通助手"), "ordinary"));
   for (const card of characterState.cards) {
     select.add(new Option(card.name, card.id));
     edit.add(new Option(card.name, card.id));
   }
-  select.value = selectedCharacter()?.id || "";
-  edit.value = characterState.cards.some((x) => x.id === currentEdit) ? currentEdit : "";
+  select.value = characterState.stateless ? "stateless" : (selectedCharacter()?.id || "ordinary");
+  edit.value = ["stateless","ordinary"].includes(currentEdit) || characterState.cards.some((x) => x.id === currentEdit) ? currentEdit : "";
   const button = $("role-picker-btn");
   const current = selectedCharacter();
-  button.disabled = !characterState.available;
-  button.classList.toggle("has-character", !!current);
+  // Role is immutable as soon as the first message exists, even while a
+  // response is pending, and unlocks only for an empty new session.
+  button.disabled = !characterState.available || !sessionV1 || !sessionId || messages.length > 0 || !!busy;
+  button.setAttribute("aria-disabled", String(button.disabled));
+  button.classList.toggle("has-character", !!current || characterState.stateless);
   const label = window.MikuchinI18n?.translate("选择角色") || "选择角色";
-  button.title = `${label} · ${current?.name || (window.MikuchinI18n?.translate("普通助手（无角色）") || "普通助手（无角色）")}`;
-  if (!characterState.available) rolePickerClose();
+  const roleName=characterState.stateless ? "无状态" : (current?.name || "普通助手");
+  button.title = `${label} · ${roleName}`;
+  $("role-picker-name").textContent=window.MikuchinI18n?.translate(roleName) || roleName;
+  if (button.disabled) rolePickerClose();
   else if (!$("chat-role-menu").hidden) rolePickerRender();
 }
 window.polyCharacterRefresh = characterRefreshPicker;
@@ -145,10 +182,18 @@ async function charactersLoad() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
     characterState.cards = data.cards || [];
-    characterState.persona = data.persona || "";
+    characterState.global = data.global || {user_name:"",user_description:"",default_role:"stateless"};
     characterState.assignments = data.assignments || {};
     characterState.available = true;
-    $("user-persona").value = characterState.persona;
+    $("global-user-name").value = characterState.global.user_name || "";
+    $("global-user-description").value = characterState.global.user_description || "";
+    const choice=$("global-default-role");
+    choice.replaceChildren(new Option("无状态（内置）", "stateless"),new Option("普通助手", "ordinary"));
+    for(const card of characterState.cards) choice.add(new Option(card.name, card.id));
+    choice.value = characterState.global.default_role || "stateless";
+    if (sessionV1 && sessionId && !messages.length && !Object.hasOwn(characterState.assignments,sessionId)) {
+      await applyNewSessionDefault();
+    }
     characterRefreshPicker();
   } catch (err) {
     characterState.available = false;
@@ -159,7 +204,11 @@ window.polyCharactersLoad = charactersLoad;
 
 async function characterPrompt(originalMessages) {
   const card = selectedCharacter();
-  if (!card) return null;  // Ordinary assistant remains byte-for-byte unchanged.
+  if (characterState.stateless) return null;
+  if (!card) {
+    const identity=globalUserIdentity(null);
+    return identity ? {role:"system",content:identity} : null;
+  }
   let workflowInitPending = false;
   let workflowLoaded = false;
   const out = [
@@ -169,7 +218,8 @@ async function characterPrompt(originalMessages) {
                                   ["Scenario", "scenario"], ["Dialogue examples", "mes_example"]]) {
     if (card[field]) out.push(`${label}:\n${card[field]}`);
   }
-  if (characterState.persona) out.push("User persona:\n" + characterState.persona);
+  const identity=globalUserIdentity(card);
+  if(identity) out.push(identity);
   if (card.workflow_path && sessionV1 && sessionId) {
     try {
       const firstUserTurn = originalMessages.filter((m) => m.role === "user").length === 1;
@@ -237,8 +287,11 @@ async function characterPrompt(originalMessages) {
     (card.workflow_path
       ? (workflowLoaded ? (workflowInitPending ? " · 工作流初始化" : " · 工作流")
                         : " · 工作流不可用") : "");
+  const nameSource=card.persona_mode === "none" ? null :
+    card.persona_mode === "independent" ? card : characterState.global;
+  const userLabel=nameSource?.user_name || "User";
   return {role: "system", content: out.join("\n\n")
-    .replaceAll("{{char}}", card.name).replaceAll("{{user}}", "User"),
+    .replaceAll("{{char}}", card.name).replaceAll("{{user}}", userLabel),
     workflowInitPending};
 }
 window.polyCharacterPrompt = characterPrompt;
@@ -292,8 +345,21 @@ function editCharacter(card = null) {
   $("source-entries").replaceChildren();
   for (const source of card?.sources || []) sourceRow(source);
   $("source-test-results").replaceChildren();
-  $("card-list").value = characterState.editId;
+  $("card-list").value = card?.id || "";
+  const mode=card?.persona_mode || "global";
+  const radio=document.querySelector(`input[name="persona-mode"][value="${mode}"]`);
+  if (radio) radio.checked=true;
+  $("identity-name").value=card?.user_name || "";
+  $("identity-description").value=card?.user_description || "";
+  syncIdentityEditor();
 }
+function syncIdentityEditor(){
+  const mode=document.querySelector('input[name="persona-mode"]:checked')?.value || "global";
+  $("identity-standalone").hidden=mode!=="independent";
+  $("identity-hint").textContent=mode==="none" ? "不提供用户名字和介绍" :
+    mode==="global" ? "继承全局用户名字与介绍" : "仅当前角色使用独立用户身份";
+}
+document.querySelectorAll('input[name="persona-mode"]').forEach(e=>e.addEventListener("change",syncIdentityEditor));
 function characterForm() {
   const card = {lorebook: [...$("lore-entries").children].map((element) => ({
     keys: element.querySelector(".lore-key").value.trim(),
@@ -301,6 +367,9 @@ function characterForm() {
     constant: element.querySelector(".lore-constant").checked,
   }))};
   if (characterState.editId) card.id = characterState.editId;
+  card.persona_mode=document.querySelector('input[name="persona-mode"]:checked')?.value || "global";
+  card.user_name=$("identity-name").value.trim();
+  card.user_description=$("identity-description").value.trim();
   card.workflow_path = $("card-workflow-path").value.trim();
   card.sources = [...$("source-entries").children].map((element) => ({
     kind: element.querySelector(".source-kind").value,
@@ -335,8 +404,30 @@ function exportTavern(card) {
   };
 }
 
-$("card-list").onchange = () => editCharacter(characterState.cards.find((c) => c.id === $("card-list").value));
-$("card-new").onclick = () => {editCharacter(); showCharacterSubTab("card"); $("card-name").focus();};
+function showBuiltinRole(value) {
+  const builtin=["stateless","ordinary"].includes(value);
+  $("character-builtin-note").hidden=!builtin ||
+    $("character-subtab-card").getAttribute("aria-selected")!=="true";
+  $("character-builtin-note").textContent=value==="stateless" ?
+    "无状态是不可编辑的内置角色：只使用本次输入，不加载身份、角色卡、世界书或工作流；聊天记录仍会保存。" :
+    "普通助手是不可编辑的内置角色：保留多轮上下文，继承全局用户名字和介绍。";
+  for(const key of ["card","world","workflow"])
+    $("character-subtab-"+key).disabled=builtin;
+  for(const id of ["card-save","card-import","card-export","card-delete"])
+    $(id).disabled=builtin;
+  // New role remains available, even when viewing a built-in preset.
+  $("card-new").disabled=false;
+  if(builtin) showCharacterSubTab("card");
+  $("character-panel-card").hidden=builtin || document.getElementById("character-subtab-card").getAttribute("aria-selected")!=="true";
+}
+$("card-list").onchange = () => {
+  const value=$("card-list").value;
+  characterState.editId=["stateless","ordinary"].includes(value) ? "" : value;
+  if(!["stateless","ordinary"].includes(value)) editCharacter(characterState.cards.find((c)=>c.id===value));
+  $("card-list").value=value;
+  showBuiltinRole(value);
+};
+$("card-new").onclick = () => {editCharacter(); showBuiltinRole(""); showCharacterSubTab("card"); $("card-name").focus();};
 $("lore-add").onclick = () => loreRow();
 $("workflow-test-btn").onclick = async () => {
   const display = $("workflow-test-results");
@@ -444,36 +535,36 @@ $("card-import-file").onchange = async () => {
   } catch (e) {toast("error", "导入失败", String(e));}
   $("card-import-file").value = "";
 };
-$("persona-save").onclick = async () => {
+$("global-save").onclick = async () => {
   try {
-    const r = await characterRequest("persona", {persona: $("user-persona").value});
-    characterState.persona = r.persona;
-    toast("success", "Persona 已保存");
-  } catch (e) {toast("error", "保存失败", String(e));}
+    const data={user_name:$("global-user-name").value,
+      user_description:$("global-user-description").value,
+      default_role:$("global-default-role").value};
+    const r=await characterRequest("global",{global:data});
+    characterState.global=r.global;
+    toast("success","全局设置已保存，新会话将使用新的默认角色");
+  }catch(e){toast("error","保存失败",String(e));}
 };
 $("chat-character").onchange = async () => {
-  if (busy) {
-    toast("warn", "请先等待当前回答结束");
-    characterRefreshPicker();
-    return;
+  if (busy || messages.length > 0) {
+    toast("warn","已有对话不能切换角色，请新建会话");
+    characterRefreshPicker();return;
   }
-  const id = $("chat-character").value || null;
-  if (!sessionId || !sessionV1) {toast("warn", "服务端会话尚未就绪"); return;}
+  const chosen=$("chat-character").value;
+  if(!sessionId || !sessionV1){toast("warn","服务端会话尚未就绪");return;}
   try {
-    await characterRequest("assign", {session_id: sessionId, card_id: id});
-    if (id) characterState.assignments[sessionId] = id;
-    else delete characterState.assignments[sessionId];
+    await characterRequest("assign",{session_id:sessionId,card_id:chosen});
+    characterState.assignments[sessionId]=chosen;
+    characterState.stateless=chosen==="stateless";
     characterRefreshPicker();
-    const card = selectedCharacter();
-    if (card && card.first_mes && !messages.length) {
-      messages.push({role:"assistant", text:card.first_mes, time:Date.now()});
-      renderChat(); saveChat();
+    const card=selectedCharacter();
+    if(card?.first_mes && !messages.length){
+      messages.push({role:"assistant",text:card.first_mes,time:Date.now()});
+      renderChat();saveChat();
     }
-    toast("success", card ? "已切换到 " + card.name : "已切换到普通助手");
-  } catch (e) {
-    characterRefreshPicker();
-    toast("error", "切换失败", String(e));
-  }
+    toast("success",characterState.stateless ? "已切换无状态：推理独立，记录保留" :
+      (card ? "已切换到 "+card.name : "已切换到普通助手"));
+  }catch(e){characterRefreshPicker();toast("error","切换失败",String(e));}
 };
 // The first-load request can safely race with Session V1 initialization;
 // session switching calls polyCharacterRefresh after changing sessionId.

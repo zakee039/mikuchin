@@ -78,7 +78,7 @@
             <svg class="st-icon"><use href="web/sprite.svg#i-settings"/></svg></button>
           <div class="chat-role-picker" id="chat-role-picker">
             <button type="button" class="st-btn st-btn--icon" id="role-picker-btn" title="选择角色" aria-label="选择角色" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-role-menu" disabled>
-              <svg class="st-icon"><use href="web/sprite.svg#i-character"/></svg></button>
+              <svg class="st-icon"><use href="web/sprite.svg#i-character"/></svg><span id="role-picker-name">无状态</span></button>
             <select id="chat-character" hidden aria-label="Current chat character"><option value="">普通助手（无角色）</option></select>
             <span id="character-chat-status" hidden aria-live="polite"></span>
             <div class="chat-role-menu" id="chat-role-menu" role="menu" aria-label="选择角色" hidden></div>
@@ -101,15 +101,16 @@
       <div class="character-editor-head">
         <div class="character-editor-title">
           <strong>角色配置</strong>
-          <span class="muted small">每个角色独立保存世界书与工作流；Persona 全局共享</span>
+          <span class="muted small">用户身份与角色设定相互独立，按角色选择身份模式</span>
         </div>
         <div class="character-picker">
           <label for="card-list">当前角色</label>
-          <select class="st-input" id="card-list" aria-label="Edit character"><option value="">新角色</option></select>
+          <select class="st-input" id="card-list" aria-label="Edit character"><option value="">新角色</option><option value="stateless">无状态（内置）</option></select>
           <button type="button" class="st-btn st-btn--primary" id="card-save">保存设置</button>
         </div>
       </div>
 
+      <p id="character-builtin-note" class="character-stateless-note" hidden></p>
       <div class="character-subtabs" role="tablist" aria-label="角色配置分类">
         <button type="button" class="character-subtab" id="character-subtab-card" data-character-tab="card" role="tab"
           aria-controls="character-panel-card" aria-selected="true" tabindex="0">角色卡</button>
@@ -117,6 +118,8 @@
           aria-controls="character-panel-world" aria-selected="false" tabindex="-1">世界书</button>
         <button type="button" class="character-subtab" id="character-subtab-workflow" data-character-tab="workflow" role="tab"
           aria-controls="character-panel-workflow" aria-selected="false" tabindex="-1">工作流</button>
+        <button type="button" class="character-subtab" id="character-subtab-global" data-character-tab="global" role="tab"
+          aria-controls="character-panel-global" aria-selected="false" tabindex="-1">全局</button>
       </div>
 
       <div class="character-subpanel" id="character-panel-card" role="tabpanel" aria-labelledby="character-subtab-card">
@@ -138,14 +141,36 @@
           <label>开场白<textarea class="st-input" id="card-greeting" rows="2" maxlength="3000"></textarea></label>
           <label>对话示例（可选）<textarea class="st-input" id="card-examples" rows="2" maxlength="4000"
             placeholder="{{user}}: 你好&#10;{{char}}: 你好呀！"></textarea></label>
-          <div class="character-persona">
-            <label>我的 Persona（全局用户设定）
-              <textarea class="st-input" id="user-persona" rows="3" maxlength="4000"
-                placeholder="模型应该如何称呼你、如何理解你的身份"></textarea>
-            </label>
-            <button type="button" class="st-btn st-btn--secondary" id="persona-save">保存 Persona</button>
-          </div>
-          <p class="muted small">不选择角色时，聊天仍使用普通助手。支持酒馆常见角色卡 JSON 的基础导入与导出。</p>
+          <fieldset class="character-persona character-identity-settings">
+            <legend>用户身份</legend>
+            <div class="identity-options" role="radiogroup" aria-label="用户身份模式">
+              <label><input type="radio" name="persona-mode" value="none">无</label>
+              <label><input type="radio" name="persona-mode" value="global" checked>全局</label>
+              <label><input type="radio" name="persona-mode" value="independent">独立</label>
+            </div>
+            <div class="identity-standalone" id="identity-standalone" hidden>
+              <label>用户名字<input class="st-input" id="identity-name" maxlength="80" placeholder="当前角色使用的用户名字"></label>
+              <label>用户介绍<textarea class="st-input" id="identity-description" maxlength="4000" rows="3" placeholder="仅此角色可见的用户介绍"></textarea></label>
+            </div>
+            <p class="muted small" id="identity-hint">继承全局用户名字与介绍。</p>
+          </fieldset>
+          <p class="muted small">普通助手继承全局身份；无状态每轮独立推理。支持导入与导出酒馆格式的角色卡 JSON。</p>
+        </div>
+      </div>
+
+      <div class="character-subpanel" id="character-panel-global" role="tabpanel" aria-labelledby="character-subtab-global" hidden>
+        <div class="character-panel-heading"><div><h2>全局设置</h2><p>所有继承全局身份的角色都会使用这里的用户资料</p></div></div>
+        <div class="character-editor-grid">
+          <label>用户名字<input class="st-input" id="global-user-name" maxlength="80" placeholder="希望 AI 如何称呼你"></label>
+          <label>用户介绍<textarea class="st-input" id="global-user-description" rows="5" maxlength="4000" placeholder="关于你的身份、背景和个人偏好"></textarea></label>
+          <label>新会话默认角色
+            <select class="st-input" id="global-default-role">
+              <option value="stateless">无状态（内置）</option>
+              <option value="ordinary">普通助手</option>
+            </select>
+          </label>
+          <p class="muted small">只影响新会话。无状态模式保留聊天记录，但每轮推理只读取本次输入，不继承用户身份或会话 KV。</p>
+          <button type="button" class="st-btn st-btn--primary" id="global-save">保存全局设置</button>
         </div>
       </div>
 

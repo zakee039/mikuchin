@@ -390,3 +390,20 @@ main { flex: 1; min-height: 0; display: flex; }
 .chat-role-menu__item:hover,.chat-role-menu__item:focus-visible{background:var(--st-surface-2);outline:none}
 .chat-role-menu__check{flex:0 0 auto;color:var(--st-accent);font-weight:700}
 @media(max-width:640px){.chat-role-menu{left:-55px;max-width:min(290px,calc(100vw - 24px))}}
+
+/* Per-role user identity: a compact three-way choice and optional identity fields. */
+.character-identity-settings{border:1px solid var(--st-line);border-radius:12px;padding:14px;min-width:0}
+.character-identity-settings legend{font-weight:700;padding:0 8px}
+.identity-options{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 10px}
+.identity-options label{display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border:1px solid var(--st-line);border-radius:10px;cursor:pointer;font-weight:600}
+.identity-options label:has(input:checked){border-color:var(--st-accent);background:var(--st-accent-tint);color:var(--st-accent-text)}
+.identity-standalone{display:grid;gap:10px;margin-top:12px}
+.identity-standalone[hidden]{display:none}
+.character-editor:has(#card-list option:checked[value="stateless"]) #character-panel-card .character-editor-grid>*:not(.character-stateless-note){display:none}
+.character-stateless-note{padding:14px;border:1px solid var(--st-line);border-radius:10px}
+.character-stateless-note[hidden]{display:none}
+
+/* Compact current-role name beside its icon in the chat composer. */
+.chat-role-picker #role-picker-btn{display:inline-flex;align-items:center;gap:5px;width:auto;max-width:190px;min-width:35px;padding:4px 8px}
+#role-picker-name{max-width:135px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.character-subtab:disabled{opacity:.48;cursor:not-allowed}
