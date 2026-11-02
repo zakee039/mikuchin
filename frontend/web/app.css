@@ -371,3 +371,14 @@ main { flex: 1; min-height: 0; display: flex; }
 .about-project-label{font-weight:750;color:var(--st-ink);white-space:nowrap}
 .about-project-inline p{font-size:13px;color:var(--st-ink-muted);flex:1 1 100%;line-height:1.5}
 .about-project-inline a{font-size:13px;text-decoration:none;color:var(--st-accent)}
+
+/* Sidebar expansion and character selection must never occupy the same pixels.
+   The character control is self-labeling; no duplicate visible "角色" label. */
+.character-chat-bar .mk-dropdown{flex:0 1 245px;min-width:0;max-width:245px}
+.character-chat-bar #character-manage{flex:0 0 auto;white-space:nowrap}
+.chat-main:has(> #sidebar-expand:not([hidden])) .character-chat-bar{padding-left:54px}
+.session-expand:not([hidden]){z-index:4;top:10px;left:11px;min-width:31px;min-height:31px}
+@media(max-width:640px){
+ .character-chat-bar .mk-dropdown{flex:1 1 140px;min-width:0}
+ .chat-main:has(> #sidebar-expand:not([hidden])) .character-chat-bar{padding-left:48px}
+}
