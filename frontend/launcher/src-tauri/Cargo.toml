@@ -1,6 +1,6 @@
 [package]
 name = "mikuchin"
-version = "0.1.12"
+version = "0.2.0"
 description = "Mikuchin desktop manager with PolyStrata inference"
 authors = ["PolyStrata contributors"]
 edition = "2021"

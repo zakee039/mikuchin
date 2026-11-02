@@ -1,5 +1,7 @@
 # Mikuchin
 
+**Baseline release: v0.2.0** — Mikuchin product version; the PolyStrata inference engine maintains its own version.
+
 Mikuchin is a desktop and browser-based personal AI companion built around the PolyStrata inference engine.
 
 - `frontend/web/`: shared Chat/Characters/Monitor pages and official Miku brand assets.
