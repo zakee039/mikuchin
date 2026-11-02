@@ -6,7 +6,7 @@
 
 The Turbo DiT file `Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` is the pre-existing **community-quantized** Turbo main model (AtomicChat lineage). `E:/LLM/models/Qwen-Image-2.1-Official-Components/` contains a hard link to it; this avoids duplicating ~4.2 GB. **It is not a vendor-published original-precision Turbo checkpoint.** The two Turbo profiles share the same DiT main tensors but use different Qwen3-VL text encoders, so this is a genuine unmodified-encoder vs modified-encoder comparison, not two independent DiT checkpoints.
 
-- `qwen-image-2.1-turbo-official` (default; Chat image tool): community Turbo DiT, new Qwen official `Qwen3VL-8B-Instruct-Q4_K_M.gguf` + `mmproj-Qwen3VL-8B-Instruct-F16.gguf`, shared BF16 Qwen Image 2.1 VAE. Text-to-image and native reference-image edit via sd-cli `--llm_vision` and `--ref-image`. 8 steps, CFG 1, Turbo sigma schedule.
+- `qwen-image-2.1-turbo-official` (default for Chat image tool unless overridden in Global Settings): community Turbo DiT, new Qwen official `Qwen3VL-8B-Instruct-Q4_K_M.gguf` + `mmproj-Qwen3VL-8B-Instruct-F16.gguf`, shared BF16 Qwen Image 2.1 VAE. Text-to-image and native reference-image edit via sd-cli `--llm_vision` and `--ref-image`. 8 steps, CFG 1, Turbo sigma schedule.
 - `qwen-image-2.1-turbo-uncensored`: same Turbo DiT, legacy modified/unrestricted Qwen3-VL 8B encoder, shared BF16 VAE. Text-to-image; no visual projector connected to this profile.
 - `animagine-xl-4-opt`: unchanged standalone SDXL checkpoint, 28 steps, CFG 7.
 - `sdxl-base-1`: unchanged standalone SDXL checkpoint, 30 steps, CFG 7.
@@ -24,3 +24,9 @@ Image-page manual reference and SDXL img2img behavior are independent; ordinary 
 ## Validation
 
 Both the official text encoder path and the native Qwen reference picture path were executed with the actual local `sd-cli`: 256×256, 1-step smoke tests returned PNG images. These tests prove loading and API wiring, not final 8-step visual quality or identity fidelity. Automated tests cover profile ID routing, no unrelated reference, no stateless/ordinary reference, text prompt priority, and CLI arguments.
+
+## Configurable Chat image model (Global Settings)
+
+The **Settings → Global settings → Chat image model** selector is independent from the Images tab selector. Its selected ID is validated on the server against the available model profiles, saved in the SessionV1 character-card `options` SQLite table under `chat_image_profile`, and used by the Chat image tool for **each subsequent request** (including existing conversations). Old clients that omit the field preserve the previously selected model. The default `default` alias resolves to the currently configured Official model. The API key and local-first origin protections apply to changing the global setting.
+
+When Chat selects an SDXL profile, it uses that profile's steps/CFG and English prompt guidance. A character reference is **not** silently sent as SDXL img2img: that would be strong scene reference, contrary to the user-requested weak visual reference. Role images are automatically added only for the official Qwen model with native weak image reference and an explicitly character-related tool call. Other models generate based on the chat prompt alone, including the specified holiday, outfit, pose and scene. The direct Images page retains its own explicit SDXL img2img upload option.

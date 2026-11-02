@@ -4,6 +4,39 @@
 "use strict";
 const characterState = {cards: [], global: {user_name:"",user_description:"",default_role:"stateless"}, assignments: {}, available: false, editId: "", stateless: false};
 const characterSubTabs = ["card", "world", "workflow"];
+let chatImageModelsReady = false;
+async function refreshChatImageModels() {
+  const selector = $("global-chat-image-profile");
+  chatImageModelsReady = false;
+  selector.disabled = true;
+  try {
+    const response = await fetch("v1/mikuchin/image-models", {headers: headers(), cache: "no-store"});
+    if (!response.ok) throw Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    const models = Array.isArray(json.models) ? json.models : [];
+    selector.replaceChildren();
+    for (const item of models) {
+      const opt = new Option(item.name + (item.available ? "" : " · 文件缺失"), item.id);
+      opt.disabled = !item.available;
+      selector.add(opt);
+    }
+    const configured = characterState.global.chat_image_profile || "default";
+    const first = models.find(m => m.available);
+    const match = models.find(m => m.id === configured && m.available);
+    if (match || first) {
+      selector.value = (match || first).id;
+      selector.disabled = false;
+      chatImageModelsReady = true;
+    } else {
+      selector.add(new Option("无可用的生图模型", "default"));
+    }
+  } catch (error) {
+    console.warn("Global chat image model catalog unavailable", error);
+    selector.replaceChildren(new Option("无法加载模型列表，请检查 API Key", characterState.global.chat_image_profile || "default"));
+    selector.disabled = true;
+  }
+}
+
 function isStatelessRole(){return characterState.stateless;}
 window.polyIsStateless = isStatelessRole;
 function globalUserIdentity(card) {
@@ -191,6 +224,7 @@ async function charactersLoad() {
     choice.replaceChildren(new Option("无状态（内置）", "stateless"),new Option("普通助手", "ordinary"));
     for(const card of characterState.cards) choice.add(new Option(card.name, card.id));
     choice.value = characterState.global.default_role || "stateless";
+    void refreshChatImageModels();
     if (sessionV1 && sessionId && !messages.length && !Object.hasOwn(characterState.assignments,sessionId)) {
       await applyNewSessionDefault();
     }
@@ -625,10 +659,13 @@ $("global-save").onclick = async () => {
   try {
     const data={user_name:$("global-user-name").value,
       user_description:$("global-user-description").value,
-      default_role:$("global-default-role").value};
+      default_role:$("global-default-role").value,
+      chat_image_profile: chatImageModelsReady
+        ? $("global-chat-image-profile").value
+        : (characterState.global.chat_image_profile || "default")};
     const r=await characterRequest("global",{global:data});
     characterState.global=r.global;
-    toast("success","全局设置已保存，新会话将使用新的默认角色");
+    toast("success","全局设置已保存，聊天生图模型已更新");
   }catch(e){toast("error","保存失败",String(e));}
 };
 $("chat-character").onchange = async () => {

@@ -366,6 +366,12 @@
             </select>
           </label>
           <p class="muted small">只影响新会话。无状态模式保留聊天记录，但每轮推理只读取本次输入，不继承用户身份或会话 KV。</p>
+          <label>聊天生图模型
+            <select class="st-input" id="global-chat-image-profile" disabled>
+              <option value="default">正在读取生图模型…</option>
+            </select>
+          </label>
+          <p class="muted small" id="global-chat-image-note">仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。</p>
           <button type="button" class="st-btn st-btn--primary" id="global-save">保存全局设置</button>
         </div>
       </div>
