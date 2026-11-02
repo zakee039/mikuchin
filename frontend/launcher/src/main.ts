@@ -110,7 +110,7 @@ function lanChatLink(){
 }
 function apiPage(){return `<section class="api-compact">
  <div class="setting-card api-panel">
-  <div class="api-line"><strong>端口</strong><input id="port-field" type="number" class="field port-field" min="1024" max="65535" value="${prefs?.port||18081}"><button class="outline-small" id="save-api-port" ${status?.managed?"disabled":""}>保存</button></div>
+  <div class="api-line"><strong>端口</strong><input id="port-field" type="number" class="field port-field" min="1024" max="65535" value="${prefs?.port||15239}"><button class="outline-small" id="save-api-port" ${status?.managed?"disabled":""}>保存</button></div>
   <div class="api-line"><strong>API Key</strong><input id="api-key-display" class="field key-display" type="text" readonly value="" autocomplete="off"><button id="copy-key" class="outline-small">复制</button><button id="rotate-key" class="outline-small">更换</button></div>
   <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong><span class="lan-chat-slot">${lanChatLink()}</span><label class="lan-toggle" title="启用或关闭局域网 HTTP 访问"><input type="checkbox" data-setting="lan_access" ${prefs?.lan_access?"checked":""}><span class="switch"></span></label></div>
  </div>
