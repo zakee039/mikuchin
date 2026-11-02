@@ -1340,36 +1340,86 @@ fn keep_close_button_only(window: &tauri::WebviewWindow) {
     }
 }
 
+/// The *center* of the window is at 67% of the monitor work area's width,
+/// and 50% of its height. Win32 work area excludes the taskbar/docked toolbars.
+/// Positions and sizes are physical pixels, including on mixed-DPI displays.
+fn place_main_window(window: &tauri::WebviewWindow, click: Option<(i32, i32)>) {
+    use std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point { x: i32, y: i32 }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect { left: i32, top: i32, right: i32, bottom: i32 }
+    #[repr(C)]
+    struct MonitorInfo { cb_size: u32, monitor: Rect, work: Rect, flags: u32 }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MonitorFromPoint(point: Point, flags: u32) -> *mut c_void;
+        fn GetMonitorInfoW(monitor: *mut c_void, info: *mut MonitorInfo) -> i32;
+    }
+
+    let selected = if let Some((x,y)) = click {
+        window.available_monitors().ok().and_then(|all| all.into_iter().find(|m| {
+            let p=m.position(); let s=m.size();
+            x>=p.x && y>=p.y && (x as i64)<(p.x as i64+s.width as i64)
+                && (y as i64)<(p.y as i64+s.height as i64)
+        }))
+    } else { None };
+    let monitor = selected.or_else(|| window.primary_monitor().ok().flatten())
+        .or_else(|| window.current_monitor().ok().flatten());
+    let Some(monitor) = monitor else { return; };
+    let origin = monitor.position();
+    let bounds = monitor.size();
+    let point = if let Some((x,y)) = click { Point{x,y} } else {
+        Point{x:origin.x.saturating_add((bounds.width/2) as i32),
+              y:origin.y.saturating_add((bounds.height/2) as i32)}
+    };
+    let mut info = MonitorInfo {
+        cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+        monitor: Rect {left:0,top:0,right:0,bottom:0},
+        work: Rect {left:0,top:0,right:0,bottom:0}, flags:0,
+    };
+    let work = unsafe {
+        let handle = MonitorFromPoint(point, 2); // MONITOR_DEFAULTTONEAREST
+        if !handle.is_null() && GetMonitorInfoW(handle, &mut info) != 0 {
+            Some(info.work)
+        } else { None }
+    }.unwrap_or(Rect {
+        left:origin.x, top:origin.y,
+        right:origin.x.saturating_add(bounds.width as i32),
+        bottom:origin.y.saturating_add(bounds.height as i32),
+    });
+    let width = (work.right-work.left).max(1);
+    let height = (work.bottom-work.top).max(1);
+    let Ok(mut window_size) = window.outer_size() else { return; };
+
+    // On unusually small screens a fixed minimum size could make it impossible
+    // to keep the whole window visible; shrink the minimum and size only then.
+    if window_size.width > width as u32 || window_size.height > height as u32 {
+        let w = window_size.width.min(width as u32);
+        let h = window_size.height.min(height as u32);
+        let minimum = tauri::Size::Physical(tauri::PhysicalSize::new(w.min(320),h.min(320)));
+        let _ = window.set_min_size(Some(minimum));
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(w,h)));
+        if let Ok(actual) = window.outer_size() {window_size=actual;}
+    }
+    let ww=window_size.width as i32;
+    let wh=window_size.height as i32;
+    let x = (work.left as f64 + width as f64 * 0.67 - ww as f64/2.0).round() as i32;
+    let y = (work.top as f64 + height as f64 * 0.50 - wh as f64/2.0).round() as i32;
+    let max_x = work.right.saturating_sub(ww).max(work.left);
+    let max_y = work.bottom.saturating_sub(wh).max(work.top);
+    let _ = window.set_position(Position::Physical(tauri::PhysicalPosition::new(
+        x.clamp(work.left,max_x),y.clamp(work.top,max_y)
+    )));
+}
+
 fn show(app: &tauri::AppHandle, position: Option<(i32, i32)>) {
     if let Some(w) = app.get_webview_window("main") {
-        if let Some((x, y)) = position {
-            // A hidden window can be associated with a different monitor than the tray.
-            // Resolve the monitor containing the actual tray click position.
-            let tray_monitor = w.available_monitors().ok().and_then(|monitors| {
-                monitors.into_iter().find(|monitor| {
-                    let p = monitor.position();
-                    let s = monitor.size();
-                    x >= p.x && y >= p.y
-                        && (x as i64) < p.x as i64 + s.width as i64
-                        && (y as i64) < p.y as i64 + s.height as i64
-                })
-            });
-            if let (Some(monitor), Ok(size)) = (tray_monitor, w.outer_size()) {
-                let mpos = monitor.position();
-                let msize = monitor.size();
-                let mw = msize.width as i32;
-                let mh = msize.height as i32;
-                let ww = size.width as i32;
-                let wh = size.height as i32;
-                // Tray events contain physical screen coordinates; use physical window
-                // dimensions too (important on 125%/150% HiDPI desktops).
-                let px = (x - ww + 16).clamp(mpos.x, (mpos.x + mw - ww).max(mpos.x));
-                let py = (y - wh - 12).clamp(mpos.y, (mpos.y + mh - wh).max(mpos.y));
-                let _ = w.set_position(Position::Physical(tauri::PhysicalPosition::new(px, py)));
-            }
-        }
         let _ = w.unmaximize();
         let _ = w.unminimize();
+        place_main_window(&w, position);
         let _ = w.show();
         let _ = w.set_focus();
     }
@@ -1572,6 +1622,8 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 keep_close_button_only(&window);
+                // Position before the first frame; do not center in the taskbar area.
+                place_main_window(&window, None);
             }
             let app_handle = app.handle().clone();
             let lang = current_language();

@@ -89,3 +89,11 @@ Run the compiled native executable with `--self-test` to verify a real start/sto
 - The manager only stops processes it personally started, to prevent accidentally killing another localhost service.
 - Live metrics come from `GET /metrics`. When the API is offline, GPU VRAM readings use local `nvidia-smi.exe` as a fallback. Decode/Prefill speeds use the current or most recent request, and the scope of token totals is clearly labelled.
 - The default production config still contains `idle_unload_s = 900`, RAM cached conversations = 4, max disk KV snapshots = 5; these remain managed by the existing backend and are not modified by launching this manager.
+
+## Desktop shortcut and default window placement
+
+- Run `powershell -ExecutionPolicy Bypass -File scripts/create-desktop-shortcut.ps1` from the Mikuchin product root to create or repair `Mikuchin.lnk` on the current Windows desktop. It points to `frontend/launcher/portable/Mikuchin.exe` and uses the product icon. A stale PolyStrata Manager shortcut is retired only when it still points to the legacy executable.
+- On startup, tray clicks and reopening an existing Manager, the **window center** is placed at **67% of the selected monitor's work-area width** and **50% of its work-area height**. The work area excludes the taskbar, unlike the full monitor bounds.
+- Tray clicks select their monitor; normal desktop startup uses the primary monitor. Coordinates use physical pixels for mixed-DPI monitors; the resulting top-left position is clamped to stay within the work area.
+- The placement is intentionally recalculated on show, so closing the window to the tray and reopening it does not preserve an off-screen location.
+- Verification on a 1707x960 desktop with a 1707x920 taskbar-free work area: window rectangle `(916,117)-(1371,804)`, center `(1143.5,460.5)`; target `(1144,460)`, fully inside the work area.
