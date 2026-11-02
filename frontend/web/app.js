@@ -615,7 +615,14 @@ let settings = {...DEFAULTS, ...store.get("sampling", {})};
 if (samplingUntouched(settings)) settings.temperature = DEFAULTS.temperature;
 let messages = []; // V1 starts with server-owned records; old browser-only chats are intentionally discarded.
 // V1: browser storage is a fallback; the server owns durable conversation records.
-const makeSessionId = () => crypto.randomUUID().replace(/-/g, "");
+// getRandomValues is permitted on plain HTTP (including Tailscale IP addresses).
+// crypto.randomUUID() requires a secure context and silently broke "New chat"
+// outside localhost/HTTPS. SessionV1 expects 32 lowercase hexadecimal chars.
+const makeSessionId = () => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+};
 let sessionId = store.get("session-id", ""); // purely a pointer to a server-side conversation
 let sessionV1 = false;
 let sessionSaveChain = Promise.resolve();
@@ -755,7 +762,9 @@ async function streamInto(m, el, signal) {
   if (settings.max) body.max_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
   if (!stateless && settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
-  if (!stateless && health.image_generation) body.strata_image_tool = true;
+  // Built-in image creation is safe in stateless mode: it works within this
+  // request and does not restore conversational history or per-session KV.
+  if (health.image_generation) body.strata_image_tool = true;
   if (sessionV1 && sessionId) body.strata_session_id = sessionId;
   if (stateless) body.mikuchin_stateless = true;
 
@@ -1172,15 +1181,33 @@ $("input").addEventListener("input", autosize);
 $("new-btn").onclick = async () => {
   if (busy) { toast("warn", "Still writing", "Stop the answer first."); return; }
   if (sessionV1) {
-    await sessionSaveChain;
-    sessionId = makeSessionId();
-    store.set("session-id", sessionId);
-    await window.polyCharacterNewSession?.();
-    messages = [];
-    store.set("chat", []);
-    renderChat();
-    await refreshSessionPicker();
-    toast("info", "New chat", "Previous conversations remain in the history.");
+    const previous = sessionId;
+    const button = $("new-btn");
+    button.disabled = true;
+    try {
+      // Fail visibly if an unreachable remote session save or character API
+      // stalls; never leave a phantom session pointer with old messages.
+      await Promise.race([sessionSaveChain, new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Saving the previous chat timed out")), 10000))]);
+      sessionId = makeSessionId();
+      store.set("session-id", sessionId);
+      await window.polyCharacterNewSession?.();
+      messages = [];
+      attachments = [];
+      store.set("chat", []);
+      renderAttachments();
+      renderChat();
+      try { await refreshSessionPicker(); }
+      catch (e) { console.warn("New chat created; sidebar refresh failed", e); }
+      toast("info", "New chat", "Previous conversations remain in the history.");
+    } catch (e) {
+      sessionId = previous;
+      store.set("session-id", previous);
+      window.polyCharacterRefresh?.();
+      toast("error", "Could not create a new chat", String(e), 6500);
+    } finally {
+      button.disabled = false;
+    }
     return;
   }
   if (!messages.length) return;

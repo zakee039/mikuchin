@@ -5,7 +5,7 @@
 - **Global** settings are `user_name`, `user_description`, and `default_role`. Both user fields move together as one identity.
 - **Ordinary assistant (built-in)** uses the global identity and normal multi-turn history / KV.
 - **Custom characters** choose one of `none` (no user name or description), `global` (both fields inherited), or `independent` (both fields stored on the character card). The independent values are retained if the user switches modes temporarily.
-- **Stateless (built-in)** provides no user identity, character card, world info, workflow or history to inference. Each request contains only the latest user message. Its visible conversation and complete replies are still persisted to the standard session database (`web_messages`) and can be reopened and exported. The inference API is deliberately not populated with historical `api_messages`, and the request's `strata_session_id` is stripped before KV restoration/snapshot sampling. It does **not** unload or reload the model per request.
+- **Stateless (built-in)** provides no user identity, character card, world info, external workflow or history to inference. Each request contains only the latest user message. Its visible conversation and complete replies are still persisted to the standard session database (`web_messages`) and can be reopened and exported. The inference API is deliberately not populated with historical `api_messages`, and the request's `strata_session_id` is stripped before KV restoration/snapshot sampling. It does **not** unload or reload the model per request.
 
 ## Per-conversation role lock
 
@@ -23,6 +23,9 @@
 ## Safety and verification
 
 - This mode is *stateless in model context*, not stateless in recordkeeping. It does not imply secret or ephemeral chats.
+- The **built-in image-generation tool** is allowed in stateless mode: it can generate and display an image from this turn's prompt without loading prior chat or session KV. External MCP tools and custom tool schemas remain disabled.
+- New session IDs use `crypto.getRandomValues` rather than `crypto.randomUUID`, because Tailscale's `http://100.x.x.x` addresses are not browser secure contexts. This uses a cryptographic RNG, preserves 32-hex-character SessionV1 IDs, and does not change Tailscale's transport encryption.
+- New-chat creation reports failed saves or role initialization and restores the previous session pointer on failure. A timeout no longer leaves the button apparently unresponsive.
 - HTTP mock tests validate assignment before/after a persisted message, one-message-only stateless requests, and durable web history without session API history.
 - CharacterStore regression tests validate global settings, independent identity, built-ins, deletion and default-role checks.
 - Browser tests validate global and independent fields, new-chat role selection, and the disabled role control after a saved message.
