@@ -14,14 +14,34 @@ function historyRoleColor(name){
   return `hsl(${sum%360} 55% 43%)`;
 }
 
+const mobileHistoryMedia = compactMedia;
 function historySidebarSet(open) {
   if (!sessionV1) return;
-  $("session-sidebar").classList.toggle("collapsed", !open);
+  const mobile = mobileHistoryMedia.matches;
+  const sidebar = $("session-sidebar");
+  sidebar.classList.toggle("collapsed", !open);
+  sidebar.classList.toggle("mobile-open", mobile && open);
   $("sidebar-expand").hidden = open;
-  store.set("history-sidebar-open", open);
+  $("sidebar-expand").setAttribute("aria-expanded", String(open));
+  $("session-backdrop").hidden = !(mobile && open);
+  if (!mobile) store.set("history-sidebar-open", open);
 }
 $("sidebar-toggle").onclick = () => historySidebarSet(false);
-$("sidebar-expand").onclick = () => historySidebarSet(true);
+$("sidebar-expand").onclick = () => {
+  historySidebarSet(true);
+  if (mobileHistoryMedia.matches) $("sidebar-toggle").focus();
+};
+$("session-backdrop").onclick = () => historySidebarSet(false);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && mobileHistoryMedia.matches &&
+      $("session-sidebar").classList.contains("mobile-open")) {
+    historySidebarSet(false);
+    $("sidebar-expand").focus();
+  }
+});
+mobileHistoryMedia.addEventListener("change", () => {
+  historySidebarSet(mobileHistoryMedia.matches ? false : store.get("history-sidebar-open", true) !== false);
+});
 
 function renderHistorySidebar(list) {
   historyRecords = list.slice();
@@ -49,8 +69,8 @@ function renderHistorySidebar(list) {
       title.title = title.textContent = item.title || "New chat";
       title.onclick = async () => {
         if (busy) { toast("warn", "Wait for the response to finish"); return; }
-        if (item.id === sessionId) return;
-        try { await sessionSaveChain; await loadServerChat(item.id); }
+        if (item.id === sessionId) { if (mobileHistoryMedia.matches) historySidebarSet(false); return; }
+        try { await sessionSaveChain; await loadServerChat(item.id); if (mobileHistoryMedia.matches) historySidebarSet(false); }
         catch (e) { toast("error", "Cannot open conversation", String(e)); }
       };
       row.appendChild(title);
@@ -110,7 +130,9 @@ function renderHistorySidebar(list) {
     }
   }
   $("session-sidebar").hidden = false;
-  historySidebarSet(store.get("history-sidebar-open", true) !== false);
+  historySidebarSet(mobileHistoryMedia.matches
+    ? $("session-sidebar").classList.contains("mobile-open")
+    : store.get("history-sidebar-open", true) !== false);
 }
 async function historyRequest(id, method = "GET", body = null) {
   const response = await fetch("v1/strata/sessions/" + encodeURIComponent(id), {

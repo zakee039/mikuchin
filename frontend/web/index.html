@@ -49,6 +49,7 @@
 <main>
   <!-- ============================ Chat ============================ -->
   <section class="view view--chat" id="view-chat" role="tabpanel" aria-labelledby="tab-btn-chat">
+    <button type="button" class="session-backdrop" id="session-backdrop" aria-label="Close conversation history" hidden></button>
     <aside class="session-sidebar" id="session-sidebar" aria-label="Conversation history" hidden>
       <div class="session-sidebar-head"><strong>History</strong><button type="button" id="sidebar-toggle" class="session-mini" title="Collapse sidebar" aria-label="Collapse sidebar">‹</button></div>
       <button type="button" class="session-new" id="new-btn">＋ New chat</button>
@@ -56,7 +57,11 @@
       <div class="session-foot">Local conversations · KV stored per model</div>
     </aside>
     <div class="chat-main">
-      <button type="button" class="session-expand" id="sidebar-expand" title="Show history" aria-label="Show history" hidden>☰</button>
+      <div class="chat-mobile-toolbar">
+        <button type="button" class="session-expand" id="sidebar-expand" title="Show history" aria-label="Show history" aria-controls="session-sidebar" aria-expanded="false" hidden>☰ <span>History</span></button>
+        <span class="chat-mobile-toolbar__title">Chat</span>
+        <button type="button" class="session-mobile-new" id="mobile-new-btn" title="New chat" aria-label="New chat">＋ <span>New chat</span></button>
+      </div>
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat" id="chat">
         <div class="chat-empty" id="chat-empty">
