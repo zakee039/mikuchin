@@ -24,13 +24,14 @@
       return;
     }
     if (root.nodeType !== Node.ELEMENT_NODE) return;
-    if (root.matches(ignored)) return;
+    // Translate placeholder attributes even on textareas, but never their user content.
     if (root.hasAttribute('placeholder')) {
       const base = root.dataset.mkPlaceholder || root.getAttribute('placeholder');
       root.dataset.mkPlaceholder = base;
       const next = currentTranslation(base);
       if (next !== root.getAttribute('placeholder')) root.setAttribute('placeholder',next);
     }
+    if (root.matches(ignored)) return;
     if (root.hasAttribute('title') && !root.matches('[data-copy]')) {
       const base = root.dataset.mkTitle || root.title;
       root.dataset.mkTitle = base;

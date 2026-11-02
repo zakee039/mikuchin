@@ -77,12 +77,12 @@ function showTab(name) {
   tab = ["chat", "images", "characters", "monitor", "settings", "about"].includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   for (const v of ["chat", "images", "characters", "monitor", "settings", "about"]) $(`view-${v}`).hidden = v !== tab;
-  if (tab === "images") $("img-prompt").focus();
+  if (tab === "images") $("img-natural").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
   if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.();}
-  if (tab === "images") void refreshImageModels();
+  if (tab === "images") void window.MikuchinImageStudio?.refresh();
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
   if (lastMetrics) render(lastMetrics);
 }
@@ -98,7 +98,7 @@ function headers(json = false) {
   return h;
 }
 $("api-key").value = store.get("apikey", "");
-$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); enableServerSessions(); window.polyCharactersLoad?.(); };
+$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
 
 let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
@@ -1417,81 +1417,6 @@ loadHealth().then(enableServerSessions).then(loadMcp).then(() => { if (startQues
 showTab(location.hash.slice(1) || "chat");
 poll();
 
-// ------------------------------------------------------------------ images (POST /v1/images/generations)
-// Only the Images page can change image model; chat tool requests always use
-// the unchanged default ImageGen configuration on the server.
-async function refreshImageModels() {
-  const select = $("img-model");
-  const previous = select.value || store.get("image-profile", "default");
-  try {
-    const response = await fetch("v1/mikuchin/image-models", {headers: headers(), cache: "no-store"});
-    if (!response.ok) throw Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    const models = Array.isArray(data.models) ? data.models : [];
-    if (!models.length) throw Error("No image models are configured");
-    select.replaceChildren();
-    for (const model of models) {
-      const item = new Option(model.name + (model.available ? "" : " · " + ui("Unavailable")), model.id);
-      item.disabled = !model.available;
-      select.add(item);
-    }
-    const saved = models.find(m => m.id === previous && m.available);
-    const fallback = models.find(m => m.available);
-    select.value = saved?.id || fallback?.id || "default";
-    select.disabled = !fallback;
-    $("img-go").disabled = !fallback;
-    if (!fallback) $("img-hint").textContent = ui("No image model files available");
-  } catch (error) {
-    console.warn("Image model discovery failed", error);
-    $("img-hint").textContent = ui("Enter your API key to view available image models");
-  }
-}
-$("img-model").onchange = () => store.set("image-profile", $("img-model").value);
-
-$("img-form").onsubmit = async (ev) => {
-  ev.preventDefault();
-  const prompt = $("img-prompt").value.trim();
-  if (!prompt) return;
-  const body = {prompt, size: $("img-size").value, response_format: "b64_json",
-                strata_upscale: $("img-upscale").value,
-                strata_image_profile: $("img-model").value || "default"};
-  if ($("img-seed").value !== "") body.seed = Number($("img-seed").value);
-  $("img-go").disabled = true;
-  const t0 = performance.now();
-  $("img-hint").textContent = ui("Generating\u2026 (a minute or more on a small GPU)");
-  try {
-    const r = await fetch("v1/images/generations", {method: "POST", headers: headers(true), body: JSON.stringify(body)});
-    const j = await r.json();
-    if (!r.ok) throw new Error((j.error && j.error.message) || r.statusText);
-    for (const d of j.data) {
-      const fig = document.createElement("figure");
-      const img = document.createElement("img");
-      img.src = "data:image/png;base64," + d.b64_json;
-      img.alt = prompt;
-      const cap = document.createElement("figcaption");
-      const up = j.strata || {};
-      cap.textContent = `${j.size}, ${ui("Seed")} ${d.seed}, ${((performance.now() - t0) / 1000).toFixed(0)} s` +
-                        (up.upscale_applied ? " · Anime 4×" : "") +
-                        (up.upscale_fallback ? ` · ${ui("Upscale failed; original used")}` : "") + `: ${prompt}`;
-      const originalFile = (up.upscale_original_files || [])[0];
-      if (originalFile && /^[a-f0-9]{32}\.png$/.test(originalFile)) {
-        const link = document.createElement("a");
-        link.href = "v1/images/files/" + originalFile;
-        link.textContent = ` · ${ui("Original image")}`;
-        link.target = "_blank"; link.rel = "noopener noreferrer";
-        cap.append(link);
-      }
-      fig.append(img, cap);
-      $("img-results").prepend(fig);
-    }
-    $("img-hint").textContent = ui("Done. Right-click an image to save it.");
-  } catch (e) {
-    $("img-hint").textContent = "";
-    toast("error", "No image", String(e.message || e), 8000);
-  } finally {
-    $("img-go").disabled = false;
-  }
-};
 // Live language changes also update the model-specific welcome subtitle.
 document.addEventListener('mikuchin-language-changed', () => {
   if (typeof lastMetrics !== 'undefined' && lastMetrics && tab === 'monitor') render(lastMetrics);

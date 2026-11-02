@@ -225,28 +225,51 @@
   <section class="view view--images" id="view-images" role="tabpanel" aria-labelledby="tab-btn-images" hidden>
     <div class="about">
       <form class="st-card img-form" id="img-form">
-        <span class="card-title" id="img-title">Make an image</span>
-        <textarea class="st-input img-prompt" id="img-prompt" rows="3" placeholder="Describe the image&hellip;" aria-label="Prompt"></textarea>
+        <span class="card-title" id="img-title">生成图像</span>
+        <div class="img-nl-heading"><label for="img-natural">自然语言</label>
+          <button type="button" class="st-btn st-btn--secondary" id="img-parse">一键解析</button></div>
+        <textarea class="st-input img-prompt" id="img-natural" rows="3" maxlength="6000"
+          placeholder="描述你想生成的画面、主体、场景、光线与风格…"></textarea>
+        <div class="img-prompt-pair">
+          <label class="st-field" for="img-positive">Positive Prompt
+            <textarea class="st-input img-prompt" id="img-positive" rows="3" maxlength="12000"
+              placeholder="English positive prompt, or use 一键解析"></textarea></label>
+          <label class="st-field" for="img-negative">Negative Prompt
+            <textarea class="st-input img-prompt" id="img-negative" rows="3" maxlength="3000"
+              placeholder="low quality, blurry, bad anatomy…"></textarea>
+            <span class="muted small" id="img-negative-hint">Qwen Turbo CFG 1 下 Negative Prompt 可能不生效。</span></label>
+        </div>
+        <p class="img-adapt-note muted small" id="img-adapt-note" hidden></p>
+        <button type="button" class="st-btn st-btn--secondary img-adapt-btn" id="img-adapt" hidden>适配当前模型</button>
         <div class="img-row">
           <label class="st-field img-model-field">生图模型
             <select class="st-input" id="img-model" aria-label="Image generation model">
-              <option value="default">当前默认模型</option>
-            </select></label>
-          <label class="st-field">Size
+              <option value="default">当前默认模型</option></select></label>
+          <label class="st-field">尺寸
             <select class="st-input" id="img-size">
               <option selected>768x768</option><option>1024x1024</option>
               <option>1536x1024</option><option>1024x1536</option><option>512x512</option></select></label>
-          <label class="st-field">Upscale
+          <label class="st-field">超分
             <select class="st-input" id="img-upscale">
-              <option value="auto" selected>Auto (Anime 4×)</option>
-              <option value="off">Off</option>
-              <option value="4x">4×</option>
-            </select></label>
-          <label class="st-field">Seed
-            <input class="st-input" id="img-seed" type="number" min="0" placeholder="random"></label>
-          <button type="submit" class="st-btn st-btn--primary" id="img-go">Generate</button>
+              <option value="auto" selected>自动（动漫 4 倍超分）</option>
+              <option value="off">关闭</option><option value="4x">4 倍</option></select></label>
+          <label class="st-field img-steps-field">步数
+            <input class="st-input" id="img-steps" type="number" min="1" max="100" step="1" value="8" required></label>
+          <label class="st-field">种子
+            <input class="st-input" id="img-seed" type="number" min="0" step="1" placeholder="随机"></label>
         </div>
-        <span class="composer-hint" id="img-hint">One image at a time; a chat request waits for it (and the other way round).</span>
+        <div class="img-reference">
+          <div class="img-reference-head"><strong>参考图</strong>
+            <label class="st-btn st-btn--secondary img-ref-upload" for="img-ref-file">上传图片</label>
+            <input type="file" id="img-ref-file" accept="image/png,image/jpeg,image/webp" hidden>
+            <button class="st-btn st-btn--secondary" type="button" id="img-ref-clear" hidden>移除</button></div>
+          <div id="img-ref-preview" class="img-ref-preview" hidden>
+            <img id="img-ref-thumbnail" alt="参考图预览"><span id="img-ref-name"></span></div>
+          <div class="img-ref-actions"><span class="muted small" id="img-ref-hint">上传参考图后，将根据当前模型选择使用方式。</span>
+            <button type="button" class="st-btn st-btn--secondary" id="img-ref-convert" hidden>立即转换</button></div>
+        </div>
+        <div class="img-actions"><span class="composer-hint" id="img-hint">每次仅生成一张图片；生成图像与聊天请求会相互等待。</span>
+          <button type="submit" class="st-btn st-btn--primary" id="img-go">生成</button></div>
       </form>
       <div class="img-results" id="img-results"></div>
     </div>
@@ -447,6 +470,7 @@
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/app.js"></script>
+<script src="web/image-studio.js"></script>
 <script src="web/sessions.js"></script>
 <script src="web/characters.js"></script>
 <script src="web/i18n-data.js"></script>

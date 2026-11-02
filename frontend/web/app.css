@@ -435,3 +435,26 @@ main { flex: 1; min-height: 0; display: flex; }
 /* Image generation model is independent of the Chat tool's default model. */
 .img-model-field{flex:1 1 210px;min-width:185px;max-width:310px}
 .img-model-field select{width:100%;min-width:0}
+
+/* Image Studio: natural language + model-specific positive/negative drafts. */
+.img-nl-heading,.img-reference-head,.img-actions,.img-ref-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.img-nl-heading{justify-content:space-between;font-weight:600}
+.img-prompt-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.img-prompt-pair .st-field{min-width:0;width:auto}
+.img-prompt-pair textarea{width:100%;min-height:106px}
+.img-row .st-field{min-width:135px;flex:1 1 130px}
+.img-row .img-model-field{flex:1.5 1 215px;max-width:none}
+.img-steps-field{max-width:135px}
+.img-adapt-note{margin:0;color:var(--st-ink-2)}
+.img-adapt-btn{align-self:flex-start}
+.img-reference{border:1px solid var(--st-line);border-radius:var(--st-r-lg);padding:14px;display:grid;gap:10px}
+.img-reference-head strong{margin-right:auto}
+.img-ref-preview{display:flex;align-items:center;gap:12px;min-width:0}
+.img-ref-preview[hidden],.img-adapt-btn[hidden]{display:none}
+.img-ref-preview img{width:94px;height:94px;object-fit:contain;border-radius:10px;border:1px solid var(--st-line)}
+.img-ref-preview span{font-size:12px;overflow-wrap:anywhere;max-width:70%}
+.img-ref-actions{justify-content:space-between}
+.img-ref-actions .muted{flex:1 1 200px}
+.img-actions{justify-content:space-between}
+.img-actions .composer-hint{flex:1 1 260px}
+@media(max-width:680px){.img-prompt-pair{grid-template-columns:1fr}.img-row .st-field{max-width:none}.img-steps-field{max-width:160px}}
