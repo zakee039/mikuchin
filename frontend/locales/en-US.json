@@ -230,7 +230,6 @@
   "New chat ·": "New chat ·",
   "no file": "no file",
   "项目简介": "Project overview",
-  "Mikuchin 是基于 PolyStrata 的本地 AI 助手，集成模型管理、聊天、角色设定与图像能力。": "Mikuchin is a local AI companion powered by PolyStrata, with model management, chat, characters and images.",
   "Make an image": "Make an image",
   "Describe the image…": "Describe the image…",
   "Prompt": "Prompt",
@@ -329,5 +328,6 @@
   "New prompt tokens per second, excluding reused cache tokens (engine prompt time)": "New prompt tokens per second, excluding reused cache tokens (engine prompt time)",
   "While writing the answer: the share of the experts looked up that were already in VRAM. Experts the GPU read over PCIe (--pcie-frac) are not counted in it; their share of all routed experts is shown after it (+N% PCIe)": "While generating, the share of routed experts already in VRAM (excludes PCIe)",
   "generated image": "generated image",
-  "Open Chat": "Open Chat"
+  "Open Chat": "Open Chat",
+  "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。": "Mikuchin (Miku亲 — “亲” is a Chinese term of endearment, like calling someone “dear”) is your all-in-one personal AI platform. Powered by PolyStrata, it brings together model management, chat, character settings, and image capabilities."
 }

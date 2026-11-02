@@ -230,7 +230,6 @@
   "New chat ·": "新会话 ·",
   "no file": "无文件",
   "项目简介": "项目简介",
-  "Mikuchin 是基于 PolyStrata 的本地 AI 助手，集成模型管理、聊天、角色设定与图像能力。": "Mikuchin 是基于 PolyStrata 的本地 AI 助手，集成模型管理、聊天、角色设定与图像能力。",
   "Make an image": "生成图像",
   "Describe the image…": "描述想生成的画面…",
   "Prompt": "提示词",
@@ -329,5 +328,6 @@
   "New prompt tokens per second, excluding reused cache tokens (engine prompt time)": "每秒新处理的输入 Token（不包括缓存）",
   "While writing the answer: the share of the experts looked up that were already in VRAM. Experts the GPU read over PCIe (--pcie-frac) are not counted in it; their share of all routed experts is shown after it (+N% PCIe)": "生成时直接命中显存的专家比例；通过 PCIe 访问的专家不计入",
   "generated image": "生成图像",
-  "Open Chat": "打开聊天"
+  "Open Chat": "打开聊天",
+  "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。": "Mikuchin（Miku亲），你的个人一站式 AI 平台。基于 PolyStrata 构建，集模型管理、聊天、角色设定与图像能力于一体。"
 }
