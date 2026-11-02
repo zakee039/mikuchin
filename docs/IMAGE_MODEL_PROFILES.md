@@ -13,7 +13,7 @@ The **Images** tab has its own image model selector; the chat image tool intenti
 
 SHA256 verification showed the newly downloaded standard Qwen Turbo GGUF is **byte-for-byte identical** to the currently deployed default Qwen Turbo main GGUF. These two selections therefore produce the same results when paired with the same encoder, VAE and parameters. The standard Qwen Turbo profile reuses the existing Qwen3-VL Q4 text encoder and official BF16 VAE. It is **not** an entirely original official BF16 end-to-end pipeline. Both SDXL checkpoints are self-contained and run through `sd-cli --model` with Euler sampling and no Qwen Turbo sigmas.
 
-`config/active.json` has a locally configured `images.profiles` mapping with these IDs; the previous active config is backed up at `config/active.json.pre-image-profiles.bak`. Both files are ignored by Git. Default `images` paths and chat behavior are unchanged.
+The currently running Windows Manager points to `E:/LLM/deploy/benchmark/configs/reserve1024-128-v1.json`, **not** `config/active.json`. Accordingly, the `images.profiles` mapping was merged into that active registered config without changing any other top-level setting; the original is backed up as `reserve1024-128-v1.json.before-mikuchin-image-profiles.bak`. The project-local `config/active.json` also retains the same profiles as a separate reference and is backed up as `config/active.json.pre-image-profiles.bak`. These live configuration files and backups are not committed to Git. The original chat image model remains the default.
 
 ## API / safety
 
