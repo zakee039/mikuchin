@@ -148,6 +148,7 @@ $("model-select").onchange = async () => {
   await loadModels();
   if (message) { toast("error", "The model was not switched", message, 10000); return; }
   messages = [];
+  settings = {...DEFAULTS};
   if (sessionV1) { sessionId = makeSessionId(); store.set("session-id", sessionId); }
   saveChat();
   renderChat();
@@ -609,22 +610,15 @@ function markdown(text) {
 // values untouched counts as "not set" too.
 // The UI alone chooses the per-request thinking budget; the backend config has no separate cap.
 const THINKING_BUDGET_TOKENS = Object.freeze({none: 0, low: 1024, medium: 4096, high: 16388});
-const thinkingBudget = (level) => THINKING_BUDGET_TOKENS[level] ?? THINKING_BUDGET_TOKENS.low;
-const DEFAULTS = {thinking: "low", temperature: 1.0, top_p: 0.95, top_k: 20, max: "", seed: "", show: true, esp: true, mcp: true};
+const thinkingBudget = (s) => s.thinking === "none" ? 0 : s.budget;
+const DEFAULTS = {thinking: "low", budget: 1024, temperature: 1.0, top_p: 0.95, top_k: 20, max: "", seed: "", show: true, esp: true, mcp: true};
 const OLD_DEFAULT_TEMPERATURE = 0.6;
 function samplingUntouched(s) {
   const t = +s.temperature;
   return (t === DEFAULTS.temperature || t === OLD_DEFAULT_TEMPERATURE) && +s.top_p === DEFAULTS.top_p && +s.top_k === DEFAULTS.top_k;
 }
-// Migrate the former implicit High default once; explicit Low/Medium/Off settings are preserved.
-// After this one-time migration, changing back to High is a normal persisted user preference.
-const savedSampling = store.get("sampling", {}) || {};
-if (!store.get("thinking-budgets-v1", false)) {
-  if (savedSampling.thinking === "high") savedSampling.thinking = "low";
-  store.set("sampling", savedSampling);
-  store.set("thinking-budgets-v1", true);
-}
-let settings = {...DEFAULTS, ...savedSampling};
+// Settings belong to the server conversation, never a local browser.
+let settings = {...DEFAULTS};
 if (samplingUntouched(settings)) settings.temperature = DEFAULTS.temperature;
 let messages = []; // V1 starts with server-owned records; old browser-only chats are intentionally discarded.
 // V1: browser storage is a fallback; the server owns durable conversation records.
@@ -673,11 +667,21 @@ async function loadServerChat(id) {
       (Array.isArray(m.content) ? m.content.filter((p) => p.type === "text").map((p) => p.text).join("\n") : ""),
       time: Date.now()}));
   sessionId = id;
+  settings = {...DEFAULTS, ...(saved.sampling || {})};
   store.set("session-id", id);
   store.set("chat", safeChat()); // do not put base64 images in browser storage
   renderChat();
   await refreshSessionPicker();
   window.polyCharacterRefresh?.();
+}
+async function refreshCurrentSampling() {
+  if (!sessionV1 || !sessionId) return;
+  const id = sessionId;
+  const r = await fetch("v1/strata/sessions/" + encodeURIComponent(id), {headers: headers()});
+  if (r.status === 404) return; // New conversation has not been saved yet.
+  if (!r.ok) throw Error("Cannot read conversation sampling: HTTP " + r.status);
+  const record = await r.json();
+  if (sessionId === id) settings = {...DEFAULTS, ...(record.sampling || {})};
 }
 async function enableServerSessions() {
   try {
@@ -755,6 +759,9 @@ function swipeLoad(m) {
 // The streaming itself, shared by send() and regenerateMessage(). On abort it sets m.stopped and returns
 // normally (so the caller can still save the partial answer); on any other error it rethrows.
 async function streamInto(m, el, signal) {
+  // A different device may have edited this conversation's sampling.
+  // Always get the server's latest settings before beginning inference.
+  try { await refreshCurrentSampling(); } catch (e) { console.warn("Sampling refresh failed", e); }
   const stateless=window.polyIsStateless?.()===true;
   const history=apiMessages();
   // Keep full conversation in UI/storage, send only latest user turn to inference.
@@ -766,7 +773,7 @@ async function streamInto(m, el, signal) {
   // Workflow bookkeeping is never part of OpenAI-compatible message JSON.
   if (roleSystem) assembledMessages.unshift({role: roleSystem.role, content: roleSystem.content});
   const body = {model: health.model, messages: assembledMessages, stream: true,
-                reasoning_effort: settings.thinking, reasoning_budget_tokens: thinkingBudget(settings.thinking)};
+                reasoning_effort: settings.thinking, reasoning_budget_tokens: thinkingBudget(settings)};
   if (!(settings.temperature > 0)) {
     body.temperature = 0;
   } else if (!samplingUntouched(settings)) {
@@ -1196,6 +1203,7 @@ $("new-btn").onclick = async () => {
   if (busy) { toast("warn", "Still writing", "Stop the answer first."); return; }
   if (sessionV1) {
     const previous = sessionId;
+    const previousSettings = settings;
     const button = $("new-btn");
     button.disabled = true;
     try {
@@ -1204,6 +1212,7 @@ $("new-btn").onclick = async () => {
       await Promise.race([sessionSaveChain, new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Saving the previous chat timed out")), 10000))]);
       sessionId = makeSessionId();
+      settings = {...DEFAULTS};
       store.set("session-id", sessionId);
       await window.polyCharacterNewSession?.();
       messages = [];
@@ -1216,6 +1225,7 @@ $("new-btn").onclick = async () => {
       toast("info", "New chat", "Previous conversations remain in the history.");
     } catch (e) {
       sessionId = previous;
+      settings = previousSettings;
       store.set("session-id", previous);
       window.polyCharacterRefresh?.();
       toast("error", "Could not create a new chat", String(e), 6500);
@@ -1227,6 +1237,7 @@ $("new-btn").onclick = async () => {
   if (!messages.length) return;
   const backup = messages;
   messages = [];
+  settings = {...DEFAULTS};
   saveChat();
   renderChat();
   toast("info", "New chat", "The last one was cleared.", 6000, {label: "Undo", run: () => { messages = backup; saveChat(); renderChat(); }});
@@ -1331,57 +1342,18 @@ function openDrawer(open) {
   $("drawer").dataset.open = String(open);
   $("drawer").setAttribute("aria-hidden", String(!open));
   $("scrim").hidden = !open;
-  if (open) { loadDrawer(); loadShared(); loadMcp(); }
+  if (open) { loadDrawer(); loadMcp(); }
 }
 function loadDrawer(s = settings) {
   for (const b of $("s-thinking").children) b.setAttribute("aria-checked", String(b.dataset.v === s.thinking));
+  $("s-budget").value = s.thinking === "none" ? 0 : s.budget;
   $("s-temp").value = s.temperature; $("s-topp").value = s.top_p; $("s-topk").value = s.top_k;
   $("s-max").value = s.max; $("s-seed").value = s.seed;
   $("s-show").setAttribute("aria-checked", String(!!s.show));
   $("s-esp").setAttribute("aria-checked", String(s.esp !== false));
   $("esp-row").hidden = !projectionLoaded();
   $("s-mcp").setAttribute("aria-checked", String(s.mcp !== false));
-  $("s-share").setAttribute("aria-checked", String(sharedOn));
   outputs();
-}
-// "Use for other apps too": the server keeps these settings as every client's defaults (GET/POST /settings)
-let sharedOn = store.get("sampling-share-enabled", true) !== false;
-async function loadShared() {
-  try {
-    const r = await fetch("settings", {headers: headers()});
-    if (r.ok) {
-      const state = await r.json();
-      if (state.shared) {
-        sharedOn = true; // existing server-wide settings remain authoritative
-        store.set("sampling-share-enabled", true);
-      } else if (sharedOn) {
-        // Default-on means actually publishing the UI's budget to other clients,
-        // not merely displaying an enabled switch with an empty server default.
-        await saveShared(true, settings);
-      }
-    }
-  } catch (e) { /* unreachable/older servers leave the saved preference intact */ }
-  $("s-share").setAttribute("aria-checked", String(sharedOn));
-}
-function sharedDefaults(s) {
-  const d = {reasoning_effort: s.thinking, reasoning_budget_tokens: thinkingBudget(s.thinking)};
-  if (!(+s.temperature > 0)) d.temperature = 0;
-  else if (!samplingUntouched(s)) Object.assign(d, {temperature: +s.temperature, top_p: +s.top_p, top_k: +s.top_k});
-  if (s.seed) d.seed = +s.seed;
-  if (s.max) d.max_tokens = +s.max;
-  if (projectionLoaded()) d.experimental_speed_projection = s.esp !== false;
-  return d;
-}
-async function saveShared(on, s) {
-  const r = await fetch("settings", {method: "POST", headers: headers(true),
-                                      body: JSON.stringify({defaults: on ? sharedDefaults(s) : null})});
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`;
-    try { msg = (await r.json()).error.message || msg; } catch (e) { /* not json */ }
-    throw new Error(msg);
-  }
-  sharedOn = !!(await r.json()).shared;
-  store.set("sampling-share-enabled", sharedOn);
 }
 // the engine was started with the experimental-speed-projection control vector (INFO cvec=...)
 function projectionLoaded() {
@@ -1394,38 +1366,48 @@ function outputs() {
   $("o-topp").textContent = (+$("s-topp").value).toFixed(2);
   $("o-topk").textContent = $("s-topk").value;
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
-  $("o-thinking").textContent = sel ? (sel.dataset.v === "none" ? "off" : `${fmt(thinkingBudget(sel.dataset.v))} tokens`) : "";
+  $("s-budget").disabled = !sel || sel.dataset.v === "none";
   for (const id of ["s-topp", "s-topk"]) $(id).disabled = t === 0;
 }
-for (const b of $("s-thinking").children) b.onclick = () => { for (const x of $("s-thinking").children) x.setAttribute("aria-checked", String(x === b)); outputs(); };
+for (const b of $("s-thinking").children) b.onclick = () => {
+  for (const x of $("s-thinking").children) x.setAttribute("aria-checked", String(x === b));
+  $("s-budget").value = THINKING_BUDGET_TOKENS[b.dataset.v];
+  outputs();
+};
 for (const id of ["s-temp", "s-topp", "s-topk"]) $(id).oninput = outputs;
 $("s-show").onclick = () => $("s-show").setAttribute("aria-checked", String($("s-show").getAttribute("aria-checked") !== "true"));
 $("s-esp").onclick = () => $("s-esp").setAttribute("aria-checked", String($("s-esp").getAttribute("aria-checked") !== "true"));
 $("s-mcp").onclick = () => $("s-mcp").setAttribute("aria-checked", String($("s-mcp").getAttribute("aria-checked") !== "true"));
-$("s-share").onclick = () => $("s-share").setAttribute("aria-checked", String($("s-share").getAttribute("aria-checked") !== "true"));
 $("s-reset").onclick = () => loadDrawer(DEFAULTS);
 $("s-apply").onclick = async () => {
+  if (busy) { toast("warn", "Finish the response before changing sampling"); return; }
+  if (!sessionV1 || !sessionId) { toast("error", "Chat history unavailable", "Connect to the server before saving conversation settings."); return; }
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
-  settings = {thinking: sel ? sel.dataset.v : "low", temperature: +$("s-temp").value, top_p: +$("s-topp").value,
-              top_k: +$("s-topk").value, max: $("s-max").value.trim(), seed: $("s-seed").value.trim(),
-              show: $("s-show").getAttribute("aria-checked") === "true",
-              esp: $("s-esp").getAttribute("aria-checked") === "true",
-              mcp: $("s-mcp").getAttribute("aria-checked") === "true"};
-  store.set("sampling", settings);
-  const share = $("s-share").getAttribute("aria-checked") === "true";
-  store.set("sampling-share-enabled", share);
-  openDrawer(false);
-  if (share || sharedOn) {
-    try {
-      await saveShared(share, settings);
-      toast("success", "Sampling saved", share ? "Other apps (omp, API clients) use these settings from their next request."
-                                               : "Other apps use their own settings again.");
-    } catch (e) {
-      toast("error", "Saved here, but not for other apps", e.message, 6000);
-    }
-    return;
+  const thinking = sel?.dataset.v || "low";
+  const budget = thinking === "none" ? 0 : Number($("s-budget").value);
+  if (!Number.isInteger(budget) || (thinking !== "none" && budget < 1) || budget > 262144) {
+    toast("error", "Invalid thinking budget", "Choose a whole number from 1 to 262144."); return;
   }
-  toast("success", "Sampling saved", settings.temperature === 0 ? "Greedy: the same question gives the same answer." : "");
+  const next = {thinking, budget, temperature: +$("s-temp").value, top_p: +$("s-topp").value,
+                top_k: +$("s-topk").value, max: $("s-max").value.trim() ? +$("s-max").value : "",
+                seed: $("s-seed").value.trim() ? +$("s-seed").value : "",
+                show: $("s-show").getAttribute("aria-checked") === "true",
+                esp: $("s-esp").getAttribute("aria-checked") === "true",
+                mcp: $("s-mcp").getAttribute("aria-checked") === "true"};
+  const button = $("s-apply"); button.disabled = true;
+  try {
+    const r = await fetch("v1/strata/sessions/" + encodeURIComponent(sessionId), {
+      method: "POST", headers: headers(true), body: JSON.stringify({action: "sampling", sampling: next})});
+    if (!r.ok) {
+      const error = await r.json().catch(() => ({}));
+      throw Error(error.error?.message || "HTTP " + r.status);
+    }
+    settings = next;
+    openDrawer(false);
+    toast("success", "Sampling saved", "This conversation only; new chats start with defaults.");
+    await refreshSessionPicker();
+  } catch (e) { toast("error", "Could not save conversation sampling", String(e), 6500); }
+  finally { button.disabled = false; }
 };
 $("sampling-btn").onclick = () => openDrawer(true);
 $("drawer-close").onclick = () => openDrawer(false);
@@ -1438,7 +1420,7 @@ renderChat();
 const startQuestion = new URLSearchParams(location.search).get("q");   // /?q=... starts a chat (a shortcut)
 if (startQuestion) history.replaceState(null, "", location.pathname + location.hash);
 loadModels();
-loadHealth().then(enableServerSessions).then(loadMcp).then(loadShared).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
+loadHealth().then(enableServerSessions).then(loadMcp).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
 showTab(location.hash.slice(1) || "chat");
 poll();
 

@@ -195,6 +195,7 @@ async function historyAction(record, action) {
       await historyRequest(record.id, "DELETE");
       if (record.id === sessionId) {
         sessionId = makeSessionId();
+        settings = {...DEFAULTS};
         store.set("session-id", sessionId);
         messages = [];
         store.set("chat", []);

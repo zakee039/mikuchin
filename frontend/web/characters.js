@@ -263,40 +263,11 @@ async function characterPrompt(originalMessages) {
   }
   const identity=globalUserIdentity(card);
   if(identity) out.push(identity);
-  if (card.workflow_path && sessionV1 && sessionId) {
-    try {
-      const firstUserTurn = originalMessages.filter((m) => m.role === "user").length === 1;
-      const workflow = await characterRequest("prepare_workflow", {
-        session_id: sessionId, first_user_turn: firstUserTurn,
-      });
-      if (workflow.enabled) {
-        workflowLoaded = true;
-        const sections = workflow.sections || {};
-        out.push("Workflow Profile (user-configured instructions; system safety " +
-          "rules and real tool authorization always take precedence).");
-        if (sections.persistent) out.push("Persistent behavior rules:\n" + sections.persistent);
-        if (sections.per_turn) out.push("Procedure for this turn:\n" + sections.per_turn);
-        if (sections.tool_policy) out.push(
-          "Requested tool-use policy (does not grant access to any new tools):\n" +
-          sections.tool_policy);
-        if (workflow.initial_pending) {
-          out.push("FIRST USER TURN ONLY — initialize the workflow before answering; " +
-            "do not claim to have executed a tool unless you actually invoked it:\n" +
-            sections.initial);
-          workflowInitPending = true;
-        }
-        $("character-chat-status").textContent = workflowInitPending ? "工作流初始化" : "工作流运行中";
-      }
-    } catch (err) {
-      toast("warn", "工作流无法加载", String(err.message || err), 6500);
-      console.warn("Character workflow unavailable", err);
-    }
-  }
   const recent = originalMessages.slice(-12).filter((m) => ["user","assistant"].includes(m.role)
     && typeof m.content === "string").map((m) => m.content).join("\n").toLocaleLowerCase();
   let budget = 3500;
   const activated = [];
-  for (const entry of card.lorebook || []) {
+  for (const entry of [...(card.lorebook || [])].sort((a,b) => Number(!!b.constant)-Number(!!a.constant))) {
     const keys = (entry.keys || "").split(/[,，]/).map((k) => k.trim().toLocaleLowerCase()).filter(Boolean);
     if (!entry.constant && !keys.some((k) => recent.includes(k))) continue;
     const text = entry.content || "";
@@ -324,6 +295,35 @@ async function characterPrompt(originalMessages) {
       } catch (err) {
         console.warn("Worldbook unavailable; continuing normal chat", err);
       }
+    }
+  }
+  if (card.workflow_path && sessionV1 && sessionId) {
+    try {
+      const firstUserTurn = originalMessages.filter((m) => m.role === "user").length === 1;
+      const workflow = await characterRequest("prepare_workflow", {
+        session_id: sessionId, first_user_turn: firstUserTurn,
+      });
+      if (workflow.enabled) {
+        workflowLoaded = true;
+        const sections = workflow.sections || {};
+        out.push("Workflow Profile (user-configured instructions; system safety " +
+          "rules and real tool authorization always take precedence).");
+        if (sections.persistent) out.push("Persistent behavior rules:\n" + sections.persistent);
+        if (sections.per_turn) out.push("Procedure for this turn:\n" + sections.per_turn);
+        if (sections.tool_policy) out.push(
+          "Requested tool-use policy (does not grant access to any new tools):\n" +
+          sections.tool_policy);
+        if (workflow.initial_pending) {
+          out.push("FIRST USER TURN ONLY — initialize the workflow before answering; " +
+            "do not claim to have executed a tool unless you actually invoked it:\n" +
+            sections.initial);
+          workflowInitPending = true;
+        }
+        $("character-chat-status").textContent = workflowInitPending ? "工作流初始化" : "工作流运行中";
+      }
+    } catch (err) {
+      toast("warn", "工作流无法加载", String(err.message || err), 6500);
+      console.warn("Character workflow unavailable", err);
     }
   }
   $("character-chat-status").textContent = `世界书 ${activated.length} · Markdown ${markdownHits}` +

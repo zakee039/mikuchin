@@ -58,7 +58,6 @@
   "Sampling": "Sampling",
   "Show thinking": "Show thinking",
   "Use tools from MCP servers": "Use tools from MCP servers",
-  "Use for other apps too": "Use for other apps too",
   "Temperature": "Temperature",
   "Max tokens": "Max tokens",
   "Random": "Random",
@@ -450,5 +449,7 @@
   "全局设置已保存，聊天生图模型已更新": "Global settings saved; Chat image model updated",
   "仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。": "Applies only to Chat image generation, independently of Images. Weak character references currently work only with Official; user requests and chat context always take priority.",
   "Max output tokens": "Max output tokens",
-  "thinking + answer; empty = no extra limit": "thinking + answer; empty = no extra limit"
+  "thinking + answer; empty = no extra limit": "thinking + answer; empty = no extra limit",
+  "Thinking budget tokens": "Thinking budget tokens",
+  "tokens": "tokens"
 }

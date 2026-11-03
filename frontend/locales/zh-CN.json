@@ -58,7 +58,6 @@
   "Sampling": "采样参数",
   "Show thinking": "显示思考内容",
   "Use tools from MCP servers": "使用 MCP 工具",
-  "Use for other apps too": "同步应用到其他客户端",
   "Temperature": "温度",
   "Max tokens": "Token 达到上限",
   "Random": "随机",
@@ -450,5 +449,7 @@
   "全局设置已保存，聊天生图模型已更新": "全局设置已保存，聊天生图模型已更新",
   "仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。": "仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。",
   "Max output tokens": "总输出 Token 上限",
-  "thinking + answer; empty = no extra limit": "含思考与正文；留空不额外限制"
+  "thinking + answer; empty = no extra limit": "含思考与正文；留空不额外限制",
+  "Thinking budget tokens": "思考预算 Token",
+  "tokens": "Token"
 }

@@ -249,6 +249,9 @@ main { flex: 1; min-height: 0; display: flex; }
 
 /* ---------------------------------------------------------------- drawer */
 .st-drawer { z-index: 40; }
+.st-thinking-budget { display:inline-flex;align-items:center;gap:6px;white-space:nowrap;color:var(--st-ink-muted);font-weight:400; }
+.st-thinking-budget .st-input { width:96px;min-width:0;height:34px;text-align:right;padding:0 8px;font-variant-numeric:tabular-nums; }
+.st-thinking-budget .st-input:disabled { opacity:.55; }
 .scrim { position: fixed; inset: 0; background: rgba(15, 23, 42, .18); z-index: 39; }
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: var(--st-surface-2);
        border: 1px solid var(--st-line); border-radius: var(--st-r-md); }
