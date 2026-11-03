@@ -780,7 +780,8 @@ async function streamInto(m, el, signal) {
     Object.assign(body, {temperature: +settings.temperature, top_p: +settings.top_p, top_k: +settings.top_k});
   }
   if (settings.seed) body.seed = +settings.seed;
-  if (settings.max) body.max_tokens = +settings.max;
+  // This is a cap on visible answer tokens only. Thinking has its own budget.
+  if (settings.max) body.answer_budget_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
   if (!stateless && settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
   // Built-in image creation is safe in stateless mode: it works within this

@@ -7,7 +7,7 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261103-session-sampling">
+<link rel="stylesheet" href="web/app.css?v=20261103-dual-budget">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
@@ -449,15 +449,20 @@
       <svg class="st-icon"><use href="web/sprite.svg#i-chevron"/></svg></button></div>
   <div class="st-drawer__body">
     <div class="st-field">
-      <label class="st-label" for="s-budget">Thinking
-        <span class="st-thinking-budget">
-          <input id="s-budget" class="st-input" type="number" min="1" max="262144" step="1" inputmode="numeric" value="1024" aria-label="Thinking budget tokens">
-          <span>tokens</span>
-        </span>
-      </label>
+      <label class="st-label" id="s-thinking-label">Thinking</label>
       <div class="seg" id="s-thinking" role="radiogroup" aria-label="Thinking">
         <button type="button" role="radio" data-v="none">Off</button><button type="button" role="radio" data-v="low">Low</button>
         <button type="button" role="radio" data-v="medium">Medium</button><button type="button" role="radio" data-v="high">High</button>
+      </div>
+    </div>
+    <div class="st-token-budgets" role="group" aria-label="Response token budgets">
+      <div class="st-field">
+        <label class="st-label" for="s-max">Answer Token budget</label>
+        <input class="st-input" id="s-max" type="number" min="1" step="1" inputmode="numeric" placeholder="No limit">
+      </div>
+      <div class="st-field">
+        <label class="st-label" for="s-budget">Thinking Token budget</label>
+        <input id="s-budget" class="st-input" type="number" min="1" max="262144" step="1" inputmode="numeric" value="1024" aria-label="Thinking Token budget">
       </div>
     </div>
     <div class="st-field">
@@ -472,10 +477,6 @@
     <div class="st-field">
       <label class="st-label" for="s-topk">Top-k <output id="o-topk"></output></label>
       <input class="st-slider" type="range" id="s-topk" min="1" max="64" step="1">
-    </div>
-    <div class="st-field">
-      <label class="st-label" for="s-max">Max output tokens <output>thinking + answer; empty = no extra limit</output></label>
-      <input class="st-input" id="s-max" type="number" min="1" step="1" placeholder="Until done">
     </div>
     <div class="st-field">
       <label class="st-label" for="s-seed">Seed <output>empty = random</output></label>
@@ -497,11 +498,11 @@
 </aside>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/app.js?v=20261103-session-sampling"></script>
+<script src="web/app.js?v=20261103-dual-budget"></script>
 <script src="web/image-studio.js?v=20261103-v023"></script>
 <script src="web/sessions.js?v=20261103-session-sampling"></script>
 <script src="web/characters.js?v=20261103-v023"></script>
-<script src="web/i18n-data.js?v=20261103-reasoning-policy"></script>
+<script src="web/i18n-data.js?v=20261103-dual-budget"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 </body>

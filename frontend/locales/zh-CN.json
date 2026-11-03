@@ -451,5 +451,9 @@
   "Max output tokens": "总输出 Token 上限",
   "thinking + answer; empty = no extra limit": "含思考与正文；留空不额外限制",
   "Thinking budget tokens": "思考预算 Token",
-  "tokens": "Token"
+  "tokens": "Token",
+  "Answer Token budget": "正文 Token 预算",
+  "Thinking Token budget": "思考 Token 预算",
+  "Response token budgets": "生成 Token 预算",
+  "No limit": "不设上限"
 }

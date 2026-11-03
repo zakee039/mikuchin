@@ -451,5 +451,9 @@
   "Max output tokens": "Max output tokens",
   "thinking + answer; empty = no extra limit": "thinking + answer; empty = no extra limit",
   "Thinking budget tokens": "Thinking budget tokens",
-  "tokens": "tokens"
+  "tokens": "tokens",
+  "Answer Token budget": "Answer Token budget",
+  "Thinking Token budget": "Thinking Token budget",
+  "Response token budgets": "Response token budgets",
+  "No limit": "No limit"
 }

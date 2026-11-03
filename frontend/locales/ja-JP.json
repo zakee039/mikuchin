@@ -451,5 +451,9 @@
   "Max output tokens": "総出力トークン上限",
   "thinking + answer; empty = no extra limit": "思考＋回答、空欄は追加制限なし",
   "Thinking budget tokens": "思考予算トークン",
-  "tokens": "トークン"
+  "tokens": "トークン",
+  "Answer Token budget": "本文 Token 予算",
+  "Thinking Token budget": "思考 Token 予算",
+  "Response token budgets": "生成 Token 予算",
+  "No limit": "上限なし"
 }
