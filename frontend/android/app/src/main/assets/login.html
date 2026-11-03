@@ -242,7 +242,7 @@
     <div class="mikuchin-fields" id="mikuchin-fields">
       <label class="row" for="endpoint">
         <span class="label">接口</span>
-        <input class="input" id="endpoint" type="text" inputmode="url" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="100.96.190.44:15239">
+        <input class="input" id="endpoint" type="text" inputmode="url" autocapitalize="none" spellcheck="false" autocomplete="off">
       </label>
       <label class="row" for="key">
         <span class="label">key</span>
@@ -293,13 +293,13 @@
     tabTailscale.classList.toggle("active", currentMode === "tailscale");
     tsBox.classList.toggle("visible", currentMode === "tailscale");
     errorEl.textContent = "";
-    if (currentMode === "tailscale" && !endpointEl.value.trim()) {
-      endpointEl.value = "100.96.190.44:15239";
-    }
-    syncFieldsVisibility();
     if (notifyBridge && window.MikuchinAndroid && window.MikuchinAndroid.setConnectionMode) {
       window.MikuchinAndroid.setConnectionMode(currentMode);
     }
+    if (window.MikuchinAndroid && window.MikuchinAndroid.getSavedEndpoint) {
+      endpointEl.value = window.MikuchinAndroid.getSavedEndpoint() || "";
+    }
+    syncFieldsVisibility();
     refreshTailscaleStatus();
   }
 

@@ -85,7 +85,7 @@ if (Test-Path (Join-Path $goBin "go.exe")) {
         if ($needsAarBuild) {
             Write-Host "    Building tsnetbridge.aar via gomobile bind (Go 1.23.4, GOTOOLCHAIN=local)..."
             New-Item -ItemType Directory -Force -Path (Split-Path $aarPath) | Out-Null
-            & (Join-Path $env:GOPATH "bin\gomobile.exe") bind -target=android/arm64 -androidapi 26 -ldflags="-extldflags=-Wl,-z,max-page-size=16384" -o $aarPath .
+            & (Join-Path $env:GOPATH "bin\gomobile.exe") bind -target=android/arm64 -androidapi 26 -ldflags="-X tailscale.com/version.longStamp=1.102.3 -X tailscale.com/version.shortStamp=1.102.3 -extldflags=-Wl,-z,max-page-size=16384" -o $aarPath .
             if ($LASTEXITCODE -ne 0) { throw "gomobile bind failed" }
         }
     } finally {

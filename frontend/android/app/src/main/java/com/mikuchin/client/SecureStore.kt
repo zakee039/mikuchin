@@ -89,7 +89,7 @@ class SecureStore(context: Context) {
         set(value) = prefs.edit().putString("direct_endpoint", value.trim()).apply()
 
     var tailscaleEndpoint: String
-        get() = prefs.getString("ts_endpoint", "100.96.190.44:15239") ?: "100.96.190.44:15239"
+        get() = prefs.getString("ts_endpoint", "") ?: ""
         set(value) = prefs.edit().putString("ts_endpoint", value.trim()).apply()
 
     var activeEndpoint: String

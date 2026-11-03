@@ -28,15 +28,15 @@ func TestSetTargetValidation(t *testing.T) {
 	if err := SetTarget(""); err == nil {
 		t.Fatal("expected error on empty target")
 	}
-	if err := SetTarget("100.96.190.44:15239"); err != nil {
+	if err := SetTarget("100.64.0.1:8000"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var st StatusInfo
 	if err := json.Unmarshal([]byte(GetStatusJSON()), &st); err != nil {
 		t.Fatalf("invalid status json: %v", err)
 	}
-	if st.Target != "100.96.190.44:15239" {
-		t.Fatalf("expected target 100.96.190.44:15239, got %s", st.Target)
+	if st.Target != "100.64.0.1:8000" {
+		t.Fatalf("expected target 100.64.0.1:8000, got %s", st.Target)
 	}
 }
 
@@ -49,11 +49,11 @@ func TestSanitizedLogDoesNotLeakSecrets(t *testing.T) {
 }
 
 func TestLocalProxiesAuthAndSSEStreaming(t *testing.T) {
-	// Mock Tailnet Mikuchin server (simulating 100.96.190.44:15239)
+	// Mock Tailnet Mikuchin server (simulating 100.64.0.1:8000)
 	releaseSecondChunk := make(chan struct{})
 	mockMux := http.NewServeMux()
 	mockMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "100.96.190.44:15239" {
+		if r.Host != "100.64.0.1:8000" {
 			http.Error(w, "bad host: "+r.Host, http.StatusBadRequest)
 			return
 		}
@@ -61,7 +61,7 @@ func TestLocalProxiesAuthAndSSEStreaming(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	mockMux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != "http://100.96.190.44:15239" {
+		if r.Header.Get("Origin") != "http://100.64.0.1:8000" {
 			http.Error(w, "bad origin: "+r.Header.Get("Origin"), http.StatusForbidden)
 			return
 		}
@@ -85,10 +85,10 @@ func TestLocalProxiesAuthAndSSEStreaming(t *testing.T) {
 	mu.Lock()
 	proxyToken = generateToken()
 	tok := proxyToken
-	targetAddr = "100.96.190.44:15239"
+	targetAddr = "100.64.0.1:8000"
 	targetScheme = "http"
 	testDialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if addr != "100.96.190.44:15239" {
+		if addr != "100.64.0.1:8000" {
 			return nil, fmt.Errorf("unexpected target addr %s", addr)
 		}
 		var d net.Dialer

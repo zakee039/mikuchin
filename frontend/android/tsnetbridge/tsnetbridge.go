@@ -340,7 +340,7 @@ func StartLogin() (res string) {
 	return GetStatusJSON()
 }
 
-// SetTarget configures the Tailnet Mikuchin endpoint (e.g. "100.96.190.44:15239" or "http://100.96.190.44:15239").
+// SetTarget configures the Tailnet Mikuchin endpoint (e.g. "100.64.0.1:8000" or "http://100.64.0.1:8000").
 func SetTarget(raw string) error {
 	u := strings.TrimSpace(raw)
 	if u == "" {
