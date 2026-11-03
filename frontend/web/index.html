@@ -469,7 +469,7 @@
       <input class="st-slider" type="range" id="s-topk" min="1" max="64" step="1">
     </div>
     <div class="st-field">
-      <label class="st-label" for="s-max">Max tokens <output>empty = until done</output></label>
+      <label class="st-label" for="s-max">Max output tokens <output>thinking + answer; empty = no extra limit</output></label>
       <input class="st-input" id="s-max" type="number" min="1" step="1" placeholder="Until done">
     </div>
     <div class="st-field">
@@ -486,7 +486,7 @@
       <button class="st-toggle" id="s-esp" role="switch" aria-checked="true" aria-label="Experimental speed projection"></button></div>
     <div class="toggle-row"><span>Use for other apps too<br><span class="muted small">omp and other API clients get
       these settings for anything they don't set themselves</span></span>
-      <button class="st-toggle" id="s-share" role="switch" aria-checked="false" aria-label="Use for other apps too"></button></div>
+      <button class="st-toggle" id="s-share" role="switch" aria-checked="true" aria-label="Use for other apps too"></button></div>
     <div class="drawer-actions">
       <button class="st-btn st-btn--secondary" id="s-reset" type="button">Reset</button>
       <button class="st-btn st-btn--primary" id="s-apply" type="button">Apply</button>
@@ -495,11 +495,11 @@
 </aside>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/app.js?v=20261103-mobile"></script>
+<script src="web/app.js?v=20261103-reasoning-policy"></script>
 <script src="web/image-studio.js?v=20261103-v023"></script>
 <script src="web/sessions.js?v=20261103-history"></script>
 <script src="web/characters.js?v=20261103-v023"></script>
-<script src="web/i18n-data.js?v=20261103-cleanup"></script>
+<script src="web/i18n-data.js?v=20261103-reasoning-policy"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 </body>

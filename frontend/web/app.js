@@ -607,13 +607,24 @@ function markdown(text) {
 // fields: the server picks the card's set for the request's thinking state (thinking 1.0 / 0.95 / 20, not thinking
 // 0.7 / 0.8 / 20 with a presence penalty). Before 0.1.45 the page sent 0.6 itself; a stored 0.6 with the other two
 // values untouched counts as "not set" too.
-const DEFAULTS = {thinking: "high", temperature: 1.0, top_p: 0.95, top_k: 20, max: "", seed: "", show: true, esp: true, mcp: true};
+// The UI alone chooses the per-request thinking budget; the backend config has no separate cap.
+const THINKING_BUDGET_TOKENS = Object.freeze({none: 0, low: 1024, medium: 4096, high: 16388});
+const thinkingBudget = (level) => THINKING_BUDGET_TOKENS[level] ?? THINKING_BUDGET_TOKENS.low;
+const DEFAULTS = {thinking: "low", temperature: 1.0, top_p: 0.95, top_k: 20, max: "", seed: "", show: true, esp: true, mcp: true};
 const OLD_DEFAULT_TEMPERATURE = 0.6;
 function samplingUntouched(s) {
   const t = +s.temperature;
   return (t === DEFAULTS.temperature || t === OLD_DEFAULT_TEMPERATURE) && +s.top_p === DEFAULTS.top_p && +s.top_k === DEFAULTS.top_k;
 }
-let settings = {...DEFAULTS, ...store.get("sampling", {})};
+// Migrate the former implicit High default once; explicit Low/Medium/Off settings are preserved.
+// After this one-time migration, changing back to High is a normal persisted user preference.
+const savedSampling = store.get("sampling", {}) || {};
+if (!store.get("thinking-budgets-v1", false)) {
+  if (savedSampling.thinking === "high") savedSampling.thinking = "low";
+  store.set("sampling", savedSampling);
+  store.set("thinking-budgets-v1", true);
+}
+let settings = {...DEFAULTS, ...savedSampling};
 if (samplingUntouched(settings)) settings.temperature = DEFAULTS.temperature;
 let messages = []; // V1 starts with server-owned records; old browser-only chats are intentionally discarded.
 // V1: browser storage is a fallback; the server owns durable conversation records.
@@ -754,7 +765,8 @@ async function streamInto(m, el, signal) {
   const workflowSessionId = sessionId;
   // Workflow bookkeeping is never part of OpenAI-compatible message JSON.
   if (roleSystem) assembledMessages.unshift({role: roleSystem.role, content: roleSystem.content});
-  const body = {model: health.model, messages: assembledMessages, stream: true, reasoning_effort: settings.thinking};
+  const body = {model: health.model, messages: assembledMessages, stream: true,
+                reasoning_effort: settings.thinking, reasoning_budget_tokens: thinkingBudget(settings.thinking)};
   if (!(settings.temperature > 0)) {
     body.temperature = 0;
   } else if (!samplingUntouched(settings)) {
@@ -1333,16 +1345,26 @@ function loadDrawer(s = settings) {
   outputs();
 }
 // "Use for other apps too": the server keeps these settings as every client's defaults (GET/POST /settings)
-let sharedOn = false;
+let sharedOn = store.get("sampling-share-enabled", true) !== false;
 async function loadShared() {
   try {
     const r = await fetch("settings", {headers: headers()});
-    if (r.ok) sharedOn = !!(await r.json()).shared;
-  } catch (e) { /* an older server: the switch just stays off */ }
+    if (r.ok) {
+      const state = await r.json();
+      if (state.shared) {
+        sharedOn = true; // existing server-wide settings remain authoritative
+        store.set("sampling-share-enabled", true);
+      } else if (sharedOn) {
+        // Default-on means actually publishing the UI's budget to other clients,
+        // not merely displaying an enabled switch with an empty server default.
+        await saveShared(true, settings);
+      }
+    }
+  } catch (e) { /* unreachable/older servers leave the saved preference intact */ }
   $("s-share").setAttribute("aria-checked", String(sharedOn));
 }
 function sharedDefaults(s) {
-  const d = {reasoning_effort: s.thinking};
+  const d = {reasoning_effort: s.thinking, reasoning_budget_tokens: thinkingBudget(s.thinking)};
   if (!(+s.temperature > 0)) d.temperature = 0;
   else if (!samplingUntouched(s)) Object.assign(d, {temperature: +s.temperature, top_p: +s.top_p, top_k: +s.top_k});
   if (s.seed) d.seed = +s.seed;
@@ -1359,6 +1381,7 @@ async function saveShared(on, s) {
     throw new Error(msg);
   }
   sharedOn = !!(await r.json()).shared;
+  store.set("sampling-share-enabled", sharedOn);
 }
 // the engine was started with the experimental-speed-projection control vector (INFO cvec=...)
 function projectionLoaded() {
@@ -1371,7 +1394,7 @@ function outputs() {
   $("o-topp").textContent = (+$("s-topp").value).toFixed(2);
   $("o-topk").textContent = $("s-topk").value;
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
-  $("o-thinking").textContent = sel ? {none: "answers right away", low: "short", medium: "medium", high: "thorough (default)"}[sel.dataset.v] : "";
+  $("o-thinking").textContent = sel ? (sel.dataset.v === "none" ? "off" : `${fmt(thinkingBudget(sel.dataset.v))} tokens`) : "";
   for (const id of ["s-topp", "s-topk"]) $(id).disabled = t === 0;
 }
 for (const b of $("s-thinking").children) b.onclick = () => { for (const x of $("s-thinking").children) x.setAttribute("aria-checked", String(x === b)); outputs(); };
@@ -1383,13 +1406,14 @@ $("s-share").onclick = () => $("s-share").setAttribute("aria-checked", String($(
 $("s-reset").onclick = () => loadDrawer(DEFAULTS);
 $("s-apply").onclick = async () => {
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
-  settings = {thinking: sel ? sel.dataset.v : "high", temperature: +$("s-temp").value, top_p: +$("s-topp").value,
+  settings = {thinking: sel ? sel.dataset.v : "low", temperature: +$("s-temp").value, top_p: +$("s-topp").value,
               top_k: +$("s-topk").value, max: $("s-max").value.trim(), seed: $("s-seed").value.trim(),
               show: $("s-show").getAttribute("aria-checked") === "true",
               esp: $("s-esp").getAttribute("aria-checked") === "true",
               mcp: $("s-mcp").getAttribute("aria-checked") === "true"};
   store.set("sampling", settings);
   const share = $("s-share").getAttribute("aria-checked") === "true";
+  store.set("sampling-share-enabled", share);
   openDrawer(false);
   if (share || sharedOn) {
     try {
@@ -1414,7 +1438,7 @@ renderChat();
 const startQuestion = new URLSearchParams(location.search).get("q");   // /?q=... starts a chat (a shortcut)
 if (startQuestion) history.replaceState(null, "", location.pathname + location.hash);
 loadModels();
-loadHealth().then(enableServerSessions).then(loadMcp).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
+loadHealth().then(enableServerSessions).then(loadMcp).then(loadShared).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
 showTab(location.hash.slice(1) || "chat");
 poll();
 
