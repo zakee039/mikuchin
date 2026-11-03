@@ -8,7 +8,7 @@ Mikuchin is a desktop and browser-based personal AI companion built around the P
 - `frontend/launcher/`: Tauri 2 Windows manager, tray and installer.
 - `backend/polystrata/`: upstream-based inference engine, kept as a separate Git submodule.
 - `backend/services/`: orchestration layer; engine-neutral infrastructure belongs here.
-- `character/`: identity and role specifications, independent of models and conversations.
+- `character/`: independent role specifications and the character-card database. Each user-defined role stores its reference image in `character/<role-name>/reference.png`, alongside any manually authored role documents.
 - `assets/`: three authoritative illustrations; generated icon sizes are derived from `icon.png`.
 - `models/`: model storage (weights intentionally excluded from Git).
 - `chat/`: runtime conversations, attachments, and per-model KV data (never commit).

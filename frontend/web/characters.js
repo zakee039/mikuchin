@@ -185,7 +185,7 @@ function characterRefreshPicker() {
   const assigned=characterState.assignments[sessionId];
   characterState.stateless = assigned === "stateless";
   const tr=(x)=>window.MikuchinI18n?.translate(x)||x;
-  select.replaceChildren(new Option(tr("无状态（内置）"), "stateless"), new Option(tr("普通助手"), "ordinary"));
+  select.replaceChildren(new Option(tr("无状态"), "stateless"), new Option(tr("普通助手"), "ordinary"));
   edit.replaceChildren(new Option(tr("新角色"), ""), new Option(tr("无状态（内置）"), "stateless"), new Option(tr("普通助手"), "ordinary"));
   for (const card of characterState.cards) {
     select.add(new Option(card.name, card.id));

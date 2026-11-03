@@ -1,6 +1,12 @@
 # Runtime and private data
 /chat/**
 !/chat/README.md
+/character/*/reference.png
+/character/*/reference.tmp
+/test/backups/
+/test/artifacts/
+/test/temp/
+/test/results/
 /models/**
 !/models/README.md
 /config/*.json
@@ -16,6 +22,7 @@
 /frontend/launcher/dist/
 /frontend/launcher/portable/
 /frontend/launcher/src-tauri/target/
+/tools/cloudflared/
 **/__pycache__/
 **/.pytest_cache/
 .venv/

@@ -9,7 +9,7 @@ This is the first formal baseline version of **Mikuchin** as its own product. It
 - Models, character profiles, conversations and per-model KV snapshot infrastructure remain in separate directories.
 - Shared Chinese, Japanese and English UI strings for Manager, tray and Web UI.
 - Configurable idle unload via Manager and service restart, retaining current values by default.
-- The default API endpoint is TCP 15239 (the prior 18081 endpoint is a local compatibility forwarding rule on the deployment host).
+- The API endpoint is TCP 15239. No legacy compatibility listener is part of the current deployment.
 
 ## Versioning
 

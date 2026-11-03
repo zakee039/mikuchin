@@ -19,7 +19,7 @@
 - TypeScript type checking and all 7 native launcher regression tests passed.
 - Responsive Web Chat was checked at 320 px and 390 px mobile viewport widths and 1280 px desktop, including history open/close and chat width.
 - Tauri release build and NSIS bundling succeeded; the built and deployed executable both report FileVersion and ProductVersion `0.2.2` and have identical SHA-256.
-- Following the controlled restart, the native Manager stayed resident and local API port 15239, compatibility port 18081, and Cloudflare-hosted health/model endpoints all returned HTTP 200. The temporary one-shot launch task was removed after the process was verified independent.
+- At initial release verification, the native Manager stayed resident and the local API on 15239 returned HTTP 200. Historical forwarding on 18081 was subsequently removed and is not supported. Cloudflare's remotely configured origin must target 15239; this is verified separately from local health. The temporary one-shot launch task was removed after the process was verified independent.
 
 ## Windows release artifacts (local build)
 

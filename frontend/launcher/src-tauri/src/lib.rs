@@ -44,12 +44,8 @@ struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         let root = project_root();
-        let one = root
-            .parent()
-            .unwrap_or(&root)
-            .join("benchmark/configs/reserve1024-128-v1.json");
-        let two = root.join("strata-gemma4-g4-meromero-26b-a4b-it-uncensored-heretic-q4_k_m.json");
-        let config = if one.is_file() { one } else { two };
+        let home = project_home();
+        let config = home.join("config/active.json");
         Self {
             autostart: false,
             auto_load_model: false,
@@ -57,13 +53,7 @@ impl Default for Preferences {
             watchdog: true,
             lan_access: false,
             cf_enabled: false,
-            cf_binary: if Path::new("C:\\Program Files (x86)\\cloudflared\\cloudflared.exe")
-                .is_file()
-            {
-                "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe".into()
-            } else {
-                "cloudflared.exe".into()
-            },
+            cf_binary: home.join("tools/cloudflared/cloudflared.exe").to_string_lossy().to_string(),
             cf_hostname: String::new(),
             registered_configs: Vec::new(),
             config_path: config.to_string_lossy().to_string(),
@@ -91,41 +81,25 @@ struct AppState {
 }
 
 fn project_root() -> PathBuf {
-    // Product layout: backend/polystrata; also accept the legacy single-repo layout.
-    for var in ["MIKUCHIN_HOME", "POLYSTRATA_HOME"] {
-        if let Ok(p) = std::env::var(var) {
-            let root = PathBuf::from(p);
-            let nested = root.join("backend/polystrata");
-            if nested.join("serve/server.py").is_file() { return nested; }
-            if root.join("serve/server.py").is_file() { return root; }
-        }
+    // Mikuchin uses only the product layout. No PolyStrata single-repo shim.
+    if let Ok(p) = std::env::var("MIKUCHIN_HOME") {
+        let nested = PathBuf::from(p).join("backend/polystrata");
+        if nested.join("serve/server.py").is_file() { return nested; }
     }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for ancestor in manifest.ancestors() {
         let nested = ancestor.join("backend/polystrata");
         if nested.join("serve/server.py").is_file() { return nested; }
-        if ancestor.join("serve/server.py").is_file() { return ancestor.to_path_buf(); }
     }
     manifest
 }
+fn project_home() -> PathBuf {
+    let engine = project_root();
+    engine.parent().and_then(Path::parent).unwrap_or(&engine).to_path_buf()
+}
 fn state_dir() -> PathBuf {
     let base = PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into()));
-    let target = base.join("Mikuchin");
-    // One-time, non-destructive migration. DPAPI files remain encrypted for the same user.
-    // Keep the original PolyStrataManager directory intact for rollback.
-    if !target.is_dir() {
-        let previous = base.join("PolyStrataManager");
-        if previous.is_dir() && fs::create_dir_all(&target).is_ok() {
-            for name in ["settings.json", "api-key.dpapi", "cf-tunnel-token.dpapi"] {
-                let src = previous.join(name);
-                let dest = target.join(name);
-                if src.is_file() && !dest.exists() {
-                    let _ = fs::copy(src, dest);
-                }
-            }
-        }
-    }
-    target
+    base.join("Mikuchin")
 }
 const LANGUAGES: [&str; 3] = ["zh-CN", "ja-JP", "en-US"];
 fn language_file() -> PathBuf {
@@ -228,18 +202,17 @@ fn initial_prefs() -> Preferences {
             serde_json::from_slice(bytes).ok()
         })
         .unwrap_or_default();
-    // Only auto-adopt the new product config for a legacy default deployment.
-    let engine = project_root();
-    if engine.file_name().and_then(|x| x.to_str()) == Some("polystrata") {
-        if let Some(product) = engine.parent().and_then(|p| p.parent()) {
-            let local_config = product.join("config/active.json");
-            let previous = product.parent().unwrap_or(product).join("polystrata");
-            if PathBuf::from(&p.project_path) == previous && local_config.is_file() {
-                p.project_path = engine.to_string_lossy().to_string();
-                p.config_path = local_config.to_string_lossy().to_string();
-            }
-        }
+    // Never reattach an external benchmark/PolyStrata deployment after a
+    // restart, even when its path still exists in an older settings.json.
+    let home = project_home();
+    let config_dir = home.join("config");
+    let primary = config_dir.join("active.json");
+    p.project_path = project_root().to_string_lossy().to_string();
+    if !Path::new(&p.config_path).starts_with(&config_dir) {
+        p.config_path = primary.to_string_lossy().to_string();
     }
+    p.registered_configs.retain(|path| Path::new(path).starts_with(&config_dir));
+    p.cf_binary = home.join("tools/cloudflared/cloudflared.exe").to_string_lossy().to_string();
     p.autostart = registry_has_autostart();
     p
 }
@@ -329,6 +302,13 @@ fn spawn_backend(p: &Preferences) -> Result<Child, String> {
         return Err(format!("端口 {} 已被占用。请先关闭旧版批处理启动的服务；为安全起见不会接管不属于管理器的进程。", p.port));
     }
     let root = PathBuf::from(&p.project_path);
+    let home = project_home();
+    if root != project_root() {
+        return Err("Mikuchin 不允许运行外部推理引擎目录".into());
+    }
+    if !Path::new(&p.config_path).starts_with(home.join("config")) {
+        return Err("部署配置必须位于 Mikuchin/config，不能引用外部配置".into());
+    }
     let python = root.join(".venv/Scripts/python.exe");
     let server = root.join("serve/server.py");
     if !python.is_file() || !server.is_file() {
@@ -389,25 +369,7 @@ fn spawn_backend(p: &Preferences) -> Result<Child, String> {
 const CF_METRICS: &str = "http://127.0.0.1:23188/metrics";
 
 fn cloudflared_binary(p: &Preferences) -> String {
-    let candidates = [
-        p.cf_binary.as_str(),
-        r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
-        r"C:\Program Files\cloudflared\cloudflared.exe",
-        "cloudflared.exe",
-    ];
-    candidates
-        .iter()
-        .find(|s| {
-            !s.trim().is_empty()
-                && (Path::new(s).is_file()
-                    || Command::new(s)
-                        .arg("--version")
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .output()
-                        .is_ok_and(|o| o.status.success()))
-        })
-        .unwrap_or(&"cloudflared.exe")
-        .to_string()
+    p.cf_binary.clone()
 }
 
 fn valid_hostname(value: &str) -> bool {
@@ -1068,6 +1030,15 @@ async fn save_settings(
         if !Path::new(&incoming.config_path).is_file() {
             return Err("配置文件不存在".into());
         }
+        if Path::new(&incoming.project_path) != project_root() {
+            return Err("Mikuchin 只能使用内置 PolyStrata 引擎".into());
+        }
+        if !Path::new(&incoming.config_path).starts_with(project_home().join("config")) {
+            return Err("请将部署配置放在 Mikuchin/config 下".into());
+        }
+        if Path::new(&incoming.cf_binary) != project_home().join("tools/cloudflared/cloudflared.exe") {
+            return Err("Cloudflare 程序必须使用 Mikuchin 内置副本".into());
+        }
         if !Path::new(&incoming.project_path)
             .join("serve/server.py")
             .is_file()
@@ -1208,6 +1179,10 @@ fn register_config(state: State<'_, AppState>, path: String) -> Result<ModelConf
     let file = PathBuf::from(path)
         .canonicalize()
         .map_err(|e| e.to_string())?;
+    let config_dir = project_home().join("config").canonicalize().map_err(|e| e.to_string())?;
+    if !file.starts_with(&config_dir) {
+        return Err("请先将配置文件放入 Mikuchin/config，再进行注册".into());
+    }
     if !file
         .extension()
         .is_some_and(|x| x.eq_ignore_ascii_case("json"))

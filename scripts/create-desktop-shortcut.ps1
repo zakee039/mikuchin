@@ -14,13 +14,6 @@ $link.IconLocation = "$icon,0"
 $link.Arguments = ''
 $link.Description = 'Mikuchin - personal AI platform'
 $link.Save()
-$old = Join-Path $desktop 'PolyStrata Manager.lnk'
-if (Test-Path -LiteralPath $old) {
-    $oldLink = $shell.CreateShortcut($old)
-    if ($oldLink.TargetPath -match '(?i)PolyStrataManager\.exe$') {
-        Remove-Item -LiteralPath $old -Force
-    }
-}
 if ($shell.CreateShortcut($dest).TargetPath -ne $exe) {
     throw 'Mikuchin desktop shortcut verification failed'
 }

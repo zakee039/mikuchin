@@ -1,8 +1,10 @@
 """Isolated, authenticated UI language smoke test; no GPU load, no user data changes."""
 import json,os,subprocess,time,tempfile,urllib.request,urllib.error
 from pathlib import Path
-root=Path(__file__).resolve().parents[1];engine=root/'backend/polystrata'
-with tempfile.TemporaryDirectory(prefix='mk-i18n-test-',ignore_cleanup_errors=True) as work:
+root=Path(__file__).resolve().parents[2];engine=root/'backend/polystrata'
+TEST_TEMP = root / 'test' / 'temp'
+TEST_TEMP.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='mk-i18n-test-',dir=TEST_TEMP,ignore_cleanup_errors=True) as work:
     language_file=Path(work)/'ui-language.json';logs=Path(work)/'server.log'
     env={**os.environ,'MIKUCHIN_LANGUAGE_FILE':str(language_file),'MIKUCHIN_WEB_DIR':str(root/'frontend/web'),'STRATA_API_KEY':'ephemeral-test'}
     with logs.open('wb') as output:
