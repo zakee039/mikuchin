@@ -245,6 +245,7 @@
   " · Original image": " · 元画像",
   "No image": "画像生成に失敗しました",
   "Generated image": "生成された画像",
+  "Edited image": "編集した画像",
   "Upscale failed; showing original": "拡大に失敗。元画像を表示",
   " · Upscale failed; original used": " · 拡大に失敗。元画像を使用",
   "random": "ランダム",

@@ -245,6 +245,7 @@
   " · Original image": " · 原始图片",
   "No image": "图像生成失败",
   "Generated image": "生成的图片",
+  "Edited image": "修改后的图片",
   "Upscale failed; showing original": "超分失败，显示原图",
   " · Upscale failed; original used": " · 超分失败，保留原图",
   "random": "随机",

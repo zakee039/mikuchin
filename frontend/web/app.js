@@ -1006,7 +1006,7 @@ function answerHtml(m) {
         ? "v1/images/files/" + t.image_original_file : "";
       html += `<figure class="st-generated-image"><a href="${path}" target="_blank" rel="noopener noreferrer">` +
               `<img src="${path}" alt="${esc(t.image_prompt || "Generated image")}" loading="lazy"></a>` +
-              `<figcaption>${t.upscale_applied ? "Anime 4× · " : ""}Generated image` +
+              `<figcaption>${t.upscale_applied ? "Anime 4× · " : ""}${((window.MIKUCHIN_TRANSLATIONS || {})[$("ui-language")?.value] || {})[t.edited_previous ? "Edited image" : "Generated image"] || (t.edited_previous ? "Edited image" : "Generated image")}` +
               (original ? ` · <a href="${original}" target="_blank" rel="noopener noreferrer">Original 768px</a>` : "") +
               (t.upscale_fallback ? " · Upscale failed; showing original" : "") + `</figcaption></figure>`;
     }
@@ -1027,6 +1027,7 @@ function onTool(m, x) {
     if (x.image_file) {
       t.image_file = x.image_file; t.image_prompt = x.image_prompt || "";
       t.image_original_file = x.image_original_file || "";
+      t.edited_previous = x.edited_previous === true;
       t.upscale_applied = x.upscale_applied === true;
       t.upscale_fallback = x.upscale_fallback === true;
     }
