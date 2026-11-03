@@ -1,5 +1,6 @@
 {
   "Chat": "聊天",
+  "Delete conversation, generated chat images, attachments and KV snapshots permanently?": "永久删除此会话、聊天内生成的图片、附件和 KV 快照？",
   "Images": "图像",
   "Characters": "角色",
   "Monitor": "监控",

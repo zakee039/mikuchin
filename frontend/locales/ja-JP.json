@@ -1,5 +1,6 @@
 {
   "Chat": "チャット",
+  "Delete conversation, generated chat images, attachments and KV snapshots permanently?": "この会話、チャット内で生成した画像、添付ファイル、KV スナップショットを完全に削除しますか？",
   "Images": "画像",
   "Characters": "キャラクター",
   "Monitor": "モニター",

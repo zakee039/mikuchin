@@ -78,10 +78,14 @@ function renderHistorySidebar(list) {
       title.title = title.textContent = item.title || "New chat";
       title.onclick = async () => {
         if (busy) { toast("warn", "Wait for the response to finish"); return; }
-        if (item.id === sessionId) { historySidebarSet(false); return; }
+        // Desktop sidebar stays where the user left it; mobile uses an overlay.
+        if (item.id === sessionId) {
+          if (mobileHistoryMedia.matches) historySidebarSet(false);
+          return;
+        }
         try { await sessionSaveChain; await loadServerChat(item.id); }
         catch (e) { toast("error", "Cannot open conversation", String(e)); }
-        finally { historySidebarSet(false); }
+        finally { if (mobileHistoryMedia.matches) historySidebarSet(false); }
       };
       row.appendChild(title);
       const role=historyRoleLabel(item.id);
@@ -186,7 +190,8 @@ async function historyAction(record, action) {
       toast("info", saved.kv_pending ? "KV lock queued" : (saved.kv_locked_current ? "KV locked" : "KV released"),
         saved.kv_pending ? "The KV will be permanently saved after this model next processes the session." : "");
     } else if (action === "delete") {
-      if (!confirm("Delete conversation and its KV snapshots permanently?\n" + (record.title || "New chat"))) return;
+      if (!confirm(histTr("Delete conversation, generated chat images, attachments and KV snapshots permanently?") +
+                   "\n" + (record.title || "New chat"))) return;
       await historyRequest(record.id, "DELETE");
       if (record.id === sessionId) {
         sessionId = makeSessionId();
