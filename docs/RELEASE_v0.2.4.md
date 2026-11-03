@@ -12,5 +12,16 @@
 ## Documentation and release alignment
 
 - Unified product, Windows desktop manager (`frontend/launcher`), and Android client (`frontend/android`) versions to `0.2.4` (`v0.2.4`).
-- Rewrote `README.md` in Chinese, Japanese, and English (defaulting to Simplified Chinese) with comprehensive feature documentation and author links.
+- The repository landing page `README.md` is now a concise navigation and download guide. The full descriptions are maintained independently in `README.zh-CN.md`, `README.ja-JP.md`, and `README.en-US.md`.
+- Documented installation, source builds, Tailnet ACL/firewall requirements, credential handling, and the difference between an embedded Android remote client and a local inference server.
+
+## Release downloads
+
+- `Mikuchin_0.2.4_x64-setup.exe`: Windows x64 NSIS installer for the desktop manager.
+- `Mikuchin-Android-v0.2.4.apk`: Android arm64 APK (minSdk 26). This build is **debug-signed**, not a production-signing-key release; sideloading and future upgrades must account for the signature. It contains a user-space `tsnet` client but does not contain model weights.
+
+## Validation scope
+
+- Desktop build and Android APK package/signature validation are separate from physical-device end-to-end validation.
+- Tailscale networking uses the embedded module's own Tailnet identity; it requires appropriate Tailnet Grants/ACLs and host firewall rules. It does not use the Android `VpnService` slot, but other VPN software can still influence routes.
 

@@ -1,0 +1,69 @@
+<div align="center">
+
+<img src="assets/icon.png" alt="Mikuchin" width="88" height="88" />
+
+# Mikuchin · 日本語
+
+**v0.2.4** · [Releases](https://github.com/zakee039/mikuchin/releases/latest)
+
+[简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [English](README.en-US.md)
+
+</div>
+
+---
+
+
+[个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+
+**Mikuchin** は、高性能ローカル推論エンジン **PolyStrata** を中核に据えたマルチプラットフォーム対応のパーソナル AI コンパニオン＆クリエイティブスタジオです。**デスクトップ／モバイル対応 Web ワークスペース**、**Windows ネイティブマネージャー（Tauri 2）**、そして**ユーザー空間 Tailscale ネットワークを内蔵した Android クライアント**を提供します。モデル、会話、キャラクター、生成画像、KV キャッシュなどのデータはローカルに保存されます。ただしリモート接続、Tailscale の制御通信、追加の MCP サービスには外部通信が発生する場合があります。
+
+### ✨ 主な機能
+
+1. **インテリジェントチャット＆SessionV1 エンジン**
+   - リアルタイムのトークンストリーミング出力、思考プロセス（Thinking）の折りたたみ表示、マルチモーダル画像認識（ドラッグ＆ドロップ・貼り付け・アップロード）、MCP 外部ツール連携およびチャット内画像生成ツールを搭載。
+   - **モデル別 SessionV1 KV キャッシュ**：SQLite データベースとモデルごとの KV スナップショットにより、長文コンテキストの高速復元、KV のロック／解放、ピン留め、Markdown エクスポートに対応。
+   - **3つの会話モード**：「通常アシスタント（グローバルユーザー設定と履歴を継承）」「ステートレスモード（履歴やキャラクターを含めず現在の1ターンのみを送信しつつ、画面上の履歴保存と画像生成は維持）」「カスタムキャラクター」。
+
+2. **キャラクタースタジオ＆ワールドブック（Worldbook）**
+   - モデルから独立した `character_cards.sqlite3` により、SillyTavern `chara_card_v2` 形式のインポート／エクスポートに完全対応。
+   - **3段階のユーザーアイデンティティ設定**：キャラクターごとに「ユーザー情報なし」「グローバル設定を継承」「キャラクター固有のユーザー設定」を選択可能。
+   - **セッション単位のロールロック**：最初のメッセージ送信後に会話のキャラクターを固定し、履歴一覧にはキャラクター名のカラー透かしラベルを表示。
+   - **キャラクター立ち絵の弱参照機能**：キャラクターに参照画像（`reference.png`）を登録すると、公式 Qwen 画像モデルでのチャット内画像生成時に画風・外見の弱い参照として自動活用（服装やシーンは会話の指示を最優先）。すべての編集は自動保存（Autosave）されます。
+
+3. **画像生成スタジオ（Image Studio）**
+   - **複数モデルプロファイル対応**：**Qwen-Image 2.1 Turbo Official**（8ステップ高速生成、`--ref-image` ネイティブ参照編集、Qwen LoRA 対応）、**Qwen-Image 2.1 Turbo Uncensored**、**Animagine XL 4.0**、**SDXL Base 1.0**（`img2img` 対応）を自由に切り替え可能。
+   - **3層プロンプト＆AI ワンクリック解析**：モデル間で共有される「自然言語入力」と、モデルごとに保存される「Positive / Negative Prompt」下書きを備え、現在の LLM を使って自然言語から英語プロンプトへの自動変換が可能。
+   - 縦横サイズの個別指定（`384` / `512` / `768` / `1024`）、ステップ数、シード値、アップスケール、LoRA 選択、ワンクリッククリアに対応。
+
+4. **リアルタイムハードウェア＆推論モニター（Monitor）**
+   - GPU VRAM 使用量、システム RAM、Prefill / Decode 速度（tok/s）、入出力トークン統計、KV キャッシュヒット率、直近リクエストのレイテンシをリアルタイム表示。
+
+5. **Windows ネイティブマネージャー（Tauri 2）**
+   - システムトレイ常駐、モデル設定のワンクリック切り替え、プロセスのウォッチドッグ監視、アイドル時の自動アンロード（0〜1440分）、LAN アクセス制御、Windows DPAPI による認証情報保護、および **Cloudflare Tunnel** の状態監視・遅延テスト・再起動をサポート。
+
+6. **Android クライアント（ユーザー空間 Tailscale `tsnet` 内蔵）**
+   - **ライトテーマ＆伸縮レイアウト**：ログイン前はシンプルな接続画面のみを表示し、接続後は**最新のチャット画面へ直行**。左上の履歴ドロワーボタンと、枠線のない下部5ボタンナビゲーション（画像・キャラクター・設定・モニター・概要）を搭載。
+   - **ユーザー空間 Tailscale 統合**：公式 `tailscale.com/tsnet`（Go + `gomobile` AAR）をアプリ内に内蔵。**Android の `VpnService` を一切使用しない**ため、システム VPN と VPN スロットを共有せずに利用できます（通信ルートは端末環境によって異なります）、Root 化や公式 Tailscale アプリの導入も不要です。
+   - **2段階 Web OAuth 認証＆Keystore 暗号化**：Tailscale モードでは先にブラウザで OAuth デバイス認証を完了してからエンドポイントと API キー入力欄を展開。API キーは Android Keystore（`AES/GCM/NoPadding`）で暗号化保存されます。
+
+7. **日・中・英 3言語リアルタイム切り替え（i18n）**
+   - Web UI、モバイル画面、Windows マネージャー、トレイメニューの表示言語を `简体中文` / `日本語` / `English` 間で即座に切り替え可能（会話本文やキャラクター設定は翻訳されません）。
+
+### 📦 ダウンロードとビルド
+
+[GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。必要に応じて [アーキテクチャ](docs/ARCHITECTURE.md) と [画像モデル設定](docs/IMAGE_MODEL_PROFILES.md) を参照してください。
+
+```bash
+git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
+powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
+```
+
+Android では「直接接続」または「Tailscale」を選択します。Tailscale モードではブラウザ認証のほか、Tailnet ACL/Grants と接続先のファイアウォールで API ポートへのアクセスを許可する必要があります。Android アプリ自体でモデルを推論するのではなく、Mikuchin サーバーへ接続します。
+
+### 🔒 セキュリティと注意事項
+
+API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。配布 APK の署名が変更された場合、既存アプリへ上書きインストールできない可能性があります。PolyStrata のライセンスと帰属はサブモジュールの原文をご確認ください。
