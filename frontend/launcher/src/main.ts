@@ -50,7 +50,7 @@ function badge(){const [s,c]=phases[status?.phase||"stopped"]||["异常","bad"];
 function render(){
  root.innerHTML=`<header class="head"><div class="brand"><button type="button" class="brand-symbol avatar-trigger" id="avatar-trigger" aria-label="Mikuchin" title="Mikuchin"><img src="/mikuchin-icon.png" width="43" height="43" alt="Mikuchin"></button><div><h1>Mikuchin</h1><small>LOCAL MODEL MANAGER</small></div></div><div class="header-status"><span id="phase">${badge()}</span><button id="btn-log" class="header-log">查看运行日志</button></div></header>
  <nav class="tabs">${Object.keys(names).map(t=>`<button class="tab ${tab===t?"selected":""}" data-tab="${t}">${names[t]}</button>`).join("")}</nav>
- <main id="content"></main><footer><span id="notice">${esc(toast||"本机服务管理 · Windows")}</span><span>v0.2.2</span></footer>`;
+ <main id="content"></main><footer><span id="notice">${esc(toast||"本机服务管理 · Windows")}</span><span>v0.2.4</span></footer>`;
  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>{tab=b.dataset.tab!;render();});
  document.getElementById("avatar-trigger")?.addEventListener("click",onAvatarTap);
  document.getElementById("btn-log")?.addEventListener("click",()=>void showLogs());
