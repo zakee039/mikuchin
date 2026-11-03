@@ -7,7 +7,7 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261103-lora">
+<link rel="stylesheet" href="web/app.css?v=20261103-v023">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
@@ -115,7 +115,7 @@
         <div class="character-picker">
           <label for="card-list">当前角色</label>
           <select class="st-input" id="card-list" aria-label="Edit character"><option value="">新角色</option><option value="stateless">无状态（内置）</option></select>
-          <button type="button" class="st-btn st-btn--primary" id="card-save">保存设置</button>
+          <span class="muted small" id="card-autosave-status" role="status" aria-live="polite">自动保存</span>
         </div>
       </div>
 
@@ -169,7 +169,7 @@
               <button type="button" class="st-btn st-btn--secondary" id="card-reference-remove" hidden>移除图片</button>
               <input type="file" id="card-reference-file" accept="image/png,image/jpeg,image/webp" hidden>
             </div>
-            <p class="muted small">支持 PNG、JPEG、WebP，最大 5 MB；保存角色卡时一同保存。</p>
+            <p class="muted small">支持 PNG、JPEG、WebP，最大 5 MB；上传后自动保存。</p>
             <img id="card-reference-preview" alt="角色参考图片" hidden>
           </div>
         </div>
@@ -197,7 +197,7 @@
             <button type="button" class="st-btn st-btn--secondary" id="source-test-btn">测试检索</button>
           </div>
           <div id="source-test-results" class="source-test-results" aria-live="polite"></div>
-          <p class="muted small">修改完成后点击上方「保存设置」。世界书仅在相关时注入，不影响角色的基本身份。</p>
+          <p class="muted small">内容修改后自动保存。世界书仅在相关时注入，不影响角色的基本身份。</p>
         </div>
       </div>
 
@@ -222,7 +222,7 @@
             <div class="workflow-step"><span>03</span><div><b>每轮工作流程</b><small>定义每次回答的处理顺序</small></div></div>
             <div class="workflow-step"><span>04</span><div><b>工具权限</b><small>说明使用规则，不额外授予系统权限</small></div></div>
           </div>
-          <p class="muted small">仅读取绑定的 Markdown 文件；模型切换不重复初始化，已有会话固定使用首次加载的工作流版本。</p>
+          <p class="muted small">绑定内容自动保存。模型切换不重复初始化，已有会话固定使用首次加载的工作流版本。</p>
         </div>
       </div>
     </div>
@@ -234,7 +234,10 @@
       <form class="st-card img-form" id="img-form">
         <span class="card-title" id="img-title">生成图像</span>
         <div class="img-nl-heading"><label for="img-natural">自然语言</label>
-          <button type="button" class="st-btn st-btn--secondary" id="img-parse">一键解析</button></div>
+          <div class="img-nl-actions">
+            <button type="button" class="st-btn st-btn--secondary" id="img-clear">一键清空</button>
+            <button type="button" class="st-btn st-btn--secondary" id="img-parse">一键解析</button>
+          </div></div>
         <textarea class="st-input img-prompt" id="img-natural" rows="3" maxlength="6000"
           placeholder="描述你想生成的画面、主体、场景、光线与风格…"></textarea>
         <div class="img-prompt-pair">
@@ -255,10 +258,14 @@
           <label class="st-field img-lora-field">LoRA
             <select class="st-input" id="img-lora" aria-label="Image LoRA">
               <option value="none">无</option></select></label>
-          <label class="st-field">尺寸
-            <select class="st-input" id="img-size">
-              <option selected>768x768</option><option>1024x1024</option>
-              <option>1536x1024</option><option>1024x1536</option><option>512x512</option></select></label>
+          <label class="st-field">长
+            <select class="st-input" id="img-height">
+              <option value="384">384</option><option value="512">512</option>
+              <option value="768" selected>768</option><option value="1024">1024</option></select></label>
+          <label class="st-field">宽
+            <select class="st-input" id="img-width">
+              <option value="384">384</option><option value="512">512</option>
+              <option value="768" selected>768</option><option value="1024">1024</option></select></label>
         </div>
         <div class="img-row img-row--secondary">
           <label class="st-field">种子
@@ -385,7 +392,7 @@
             </select>
           </label>
           <p class="muted small" id="global-chat-image-note">仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。</p>
-          <button type="button" class="st-btn st-btn--primary" id="global-save">保存全局设置</button>
+          <p class="muted small" id="global-autosave-status" role="status" aria-live="polite">修改后自动保存</p>
         </div>
       </div>
 
@@ -397,8 +404,8 @@
       <div class="st-card">
         <span class="card-title">Settings</span>
         <div class="st-field">
-          <label class="st-label" for="api-key">API key <output>only if the server was started with one</output></label>
-          <input class="st-input" id="api-key" type="password" autocomplete="off" placeholder="Not needed">
+          <label class="st-label" for="api-key">API key</label>
+          <input class="st-input" id="api-key" type="password" autocomplete="off">
         </div>
         <div class="toggle-row"><span>Dark theme</span>
           <button class="st-toggle" id="dark-toggle" role="switch" aria-checked="false" aria-label="Dark theme"></button></div>
@@ -489,11 +496,11 @@
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/app.js?v=20261103-mobile"></script>
-<script src="web/image-studio.js?v=20261103-lora"></script>
+<script src="web/image-studio.js?v=20261103-v023"></script>
 <script src="web/sessions.js?v=20261103-history"></script>
-<script src="web/characters.js?v=20261103-cleanup"></script>
+<script src="web/characters.js?v=20261103-v023"></script>
 <script src="web/i18n-data.js?v=20261103-cleanup"></script>
 <script src="web/i18n.js"></script>
-<script src="web/dropdown.js?v=20261103-lora"></script>
+<script src="web/dropdown.js?v=20261103-v023"></script>
 </body>
 </html>

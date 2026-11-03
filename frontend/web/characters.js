@@ -355,7 +355,7 @@ function loreRow(value = {keys: "", content: "", constant: false}) {
   box.querySelector(".lore-key").value = value.keys || "";
   box.querySelector(".lore-constant").checked = !!value.constant;
   box.querySelector(".lore-content").value = value.content || "";
-  box.querySelector(".lore-remove").onclick = () => box.remove();
+  box.querySelector(".lore-remove").onclick = () => {box.remove(); scheduleCharacterSave();};
   $("lore-entries").append(box);
 }
 function sourceRow(value = {kind: "file", path: "", recursive: true}) {
@@ -375,12 +375,12 @@ function sourceRow(value = {kind: "file", path: "", recursive: true}) {
   const sync = () => box.querySelector(".source-recursive").hidden =
     box.querySelector(".source-kind").value !== "directory";
   box.querySelector(".source-kind").onchange = sync;
-  box.querySelector(".source-remove").onclick = () => box.remove();
+  box.querySelector(".source-remove").onclick = () => {box.remove(); scheduleCharacterSave();};
   sync();
   $("source-entries").append(box);
 }
-// Reference artwork is stored in private SessionV1 character_images/<id>.png.
-// A draft can be previewed before it is committed; the upload happens after Save.
+// Role reference artwork is stored next to its role information in character/<name>/.
+// A draft preview is uploaded by the debounced autosave after the role is created.
 let characterReferenceFile = null;
 let characterReferenceObjectUrl = "";
 function disposeReferencePreview() {
@@ -422,6 +422,7 @@ $("card-reference-file").onchange=()=>{
   characterReferenceFile=file;
   characterReferenceObjectUrl=URL.createObjectURL(file);
   setReferencePreview(characterReferenceObjectUrl,true);
+  scheduleCharacterSave();
 };
 $("card-reference-remove").onclick=async()=>{
   if(characterReferenceFile){
@@ -433,6 +434,8 @@ $("card-reference-remove").onclick=async()=>{
   }
   if(!characterState.editId)return;
   try {
+    await flushCharacterSave();
+    if (cardDirty) throw Error("角色修改尚未保存，不能移除参考图");
     const response=await characterRequest("reference_remove",{id:characterState.editId});
     const original=characterState.cards.find(x=>x.id===characterState.editId);
     if(original)original.reference_image=false;
@@ -492,6 +495,76 @@ function characterForm() {
   for (const [field, id] of Object.entries(characterFields)) card[field] = $(id).value.trim();
   return card;
 }
+
+let cardSaveTimer = 0;
+let cardSaveChain = Promise.resolve();
+let cardDirty = false;
+let editingBuiltin = false;
+function nextCharacterName() {
+  const existing = new Set(characterState.cards.map(c => c.name));
+  let n = 1;
+  while (existing.has(`角色${n}`)) n++;
+  return `角色${n}`;
+}
+function cardSaveStatus(text) { $("card-autosave-status").textContent = text; }
+function scheduleCharacterSave() {
+  if (!characterState.available || editingBuiltin) return;
+  cardDirty = true;
+  cardSaveStatus("尚未保存…");
+  clearTimeout(cardSaveTimer);
+  cardSaveTimer = setTimeout(() => {void flushCharacterSave();}, 450);
+}
+function syncSavedCharacter(card) {
+  const index = characterState.cards.findIndex(c => c.id === card.id);
+  if (index < 0) characterState.cards.push(card);
+  else characterState.cards[index] = card;
+  characterState.editId = card.id;
+  characterRefreshPicker();
+  $("card-list").value = card.id;
+  const choice = $("global-default-role"), previous = choice.value;
+  choice.replaceChildren(new Option("无状态", "stateless"), new Option("普通助手", "ordinary"));
+  for (const item of characterState.cards) choice.add(new Option(item.name, item.id));
+  choice.value = previous || characterState.global.default_role || "stateless";
+  if (!choice.value) choice.value = "stateless";
+}
+function flushCharacterSave() {
+  clearTimeout(cardSaveTimer);
+  cardSaveTimer = 0;
+  cardSaveChain = cardSaveChain.catch(() => {}).then(async () => {
+    if (!cardDirty || !characterState.available || editingBuiltin) return;
+    cardDirty = false;
+    const payload = characterForm();
+    if (!payload.name) {
+      payload.name = characterState.cards.find(c => c.id === payload.id)?.name || nextCharacterName();
+      $("card-name").value = payload.name;
+    }
+    cardSaveStatus("正在保存…");
+    try {
+      const result = await characterRequest("save", {card: payload});
+      const saved = result.card;
+      // Record the server-assigned ID before the optional image upload; a
+      // failed upload must never create a duplicate role on the next retry.
+      syncSavedCharacter(saved);
+      const referenceFile = characterReferenceFile;
+      if (referenceFile) {
+        try {
+          await uploadCharacterReference(saved.id, referenceFile);
+          if (characterReferenceFile === referenceFile) characterReferenceFile = null;
+          saved.reference_image = true;
+        } catch (error) {
+          cardDirty = true;
+          throw error;
+        }
+      }
+      cardSaveStatus(cardDirty ? "有待保存的修改…" : "已自动保存");
+    } catch (error) {
+      cardDirty = true;
+      cardSaveStatus("自动保存失败");
+      toast("error", "角色自动保存失败", String(error.message || error));
+    }
+  });
+  return cardSaveChain;
+}
 function downloadJson(data, name) {
   const file = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
   const url = URL.createObjectURL(file);
@@ -519,6 +592,7 @@ function exportTavern(card) {
 
 function showBuiltinRole(value) {
   const builtin=["stateless","ordinary"].includes(value);
+  editingBuiltin=builtin;
   $("character-builtin-note").hidden=!builtin ||
     $("character-subtab-card").getAttribute("aria-selected")!=="true";
   $("character-builtin-note").textContent=value==="stateless" ?
@@ -526,26 +600,49 @@ function showBuiltinRole(value) {
     "普通助手是不可编辑的内置角色：保留多轮上下文，继承全局用户名字和介绍。";
   for(const key of ["card","world","workflow"])
     $("character-subtab-"+key).disabled=builtin;
-  for(const id of ["card-save","card-import","card-export","card-delete"])
+  for(const id of ["card-import","card-export","card-delete"])
     $(id).disabled=builtin;
   // New role remains available, even when viewing a built-in preset.
   $("card-new").disabled=false;
   if(builtin) showCharacterSubTab("card");
   $("character-panel-card").hidden=builtin || document.getElementById("character-subtab-card").getAttribute("aria-selected")!=="true";
 }
-$("card-list").onchange = () => {
+$("card-list").onchange = async () => {
   const value=$("card-list").value;
+  await flushCharacterSave();
+  if (cardDirty) {
+    $("card-list").value=characterState.editId || "";
+    toast("warn", "尚有未保存的角色修改", "请检查 API 连接后再切换角色。");
+    return;
+  }
   characterState.editId=["stateless","ordinary"].includes(value) ? "" : value;
   if(!["stateless","ordinary"].includes(value)) editCharacter(characterState.cards.find((c)=>c.id===value));
   $("card-list").value=value;
   showBuiltinRole(value);
+  cardSaveStatus("自动保存");
 };
-$("card-new").onclick = () => {editCharacter(); showBuiltinRole(""); showCharacterSubTab("card"); $("card-name").focus();};
-$("lore-add").onclick = () => loreRow();
+$("card-new").onclick = async () => {
+  await flushCharacterSave();
+  if (cardDirty) {
+    toast("warn", "当前角色尚未保存", "请检查 API 连接后再新建角色。");
+    return;
+  }
+  editCharacter();
+  showBuiltinRole("");
+  showCharacterSubTab("card");
+  $("card-name").value=nextCharacterName();
+  scheduleCharacterSave();
+  await flushCharacterSave();
+  $("card-name").focus();
+  $("card-name").select();
+};
+$("lore-add").onclick = () => {loreRow();scheduleCharacterSave();};
 $("workflow-test-btn").onclick = async () => {
   const display = $("workflow-test-results");
+  await flushCharacterSave();
+  if (cardDirty) {display.textContent="当前角色尚未保存，无法检查工作流";return;}
   if (!characterState.editId) {
-    display.textContent = "请先保存角色和工作流路径。";
+    display.textContent = "请先创建角色并绑定工作流。";
     return;
   }
   display.textContent = "检查工作流中…";
@@ -572,12 +669,14 @@ $("workflow-test-btn").onclick = async () => {
     display.textContent = String(err.message || err);
   }
 };
-$("source-add-file").onclick = () => sourceRow({kind: "file", path: "", recursive: false});
-$("source-add-dir").onclick = () => sourceRow({kind: "directory", path: "", recursive: true});
+$("source-add-file").onclick = () => {sourceRow({kind: "file", path: "", recursive: false});scheduleCharacterSave();};
+$("source-add-dir").onclick = () => {sourceRow({kind: "directory", path: "", recursive: true});scheduleCharacterSave();};
 $("source-test-btn").onclick = async () => {
   const query = $("source-test-query").value.trim();
+  await flushCharacterSave();
+  if (cardDirty) {toast("warn","角色设置尚未保存，无法测试检索");return;}
   if (!characterState.editId || !query) {
-    toast("warn", "先保存角色，再填写一个测试问题");
+    toast("warn", "请先创建角色，再填写一个测试问题");
     return;
   }
   const box = $("source-test-results");
@@ -607,33 +706,30 @@ $("source-test-btn").onclick = async () => {
     box.textContent = String(err);
   }
 };
-$("card-save").onclick = async () => {
-  if (!$("card-name").value.trim()) {
-    showCharacterSubTab("card");
-    $("card-name").focus();
-    toast("warn", "请先填写角色名");
-    return;
-  }
-  try {
-    const r = await characterRequest("save", {card: characterForm()});
-    characterState.editId=r.card.id;
-    let imageError=null;
-    if(characterReferenceFile){
-      try{await uploadCharacterReference(r.card.id,characterReferenceFile);characterReferenceFile=null;}
-      catch(e){imageError=e;}
-    }
-    await charactersLoad();
-    editCharacter(characterState.cards.find(x=>x.id===r.card.id) || r.card);
-    if(imageError)toast("warn","角色已保存，但参考图片上传失败",String(imageError));
-    else toast("success", "角色已保存", r.card.name);
-  } catch (e) {toast("error", "保存失败", String(e));}
-};
+for (const panel of ["character-panel-card","character-panel-world","character-panel-workflow"]) {
+  const element=$(panel);
+  element.addEventListener("input", event => {
+    if (event.target.id!=="source-test-query" &&
+        event.target.matches("input:not([type=file]), textarea, select")) scheduleCharacterSave();
+  });
+  element.addEventListener("change", event => {
+    if (event.target.id!=="source-test-query" &&
+        event.target.matches("input:not([type=file]), textarea, select")) scheduleCharacterSave();
+  });
+  element.addEventListener("focusout", () => {
+    if (cardDirty) void flushCharacterSave();
+  });
+}
 $("card-delete").onclick = async () => {
   if (!characterState.editId) return;
   if (!confirm("删除此角色及它的聊天绑定？")) return;
   try {
+    clearTimeout(cardSaveTimer);
+    cardDirty=false;
+    await cardSaveChain;
     await characterRequest("delete", {id: characterState.editId});
     await charactersLoad(); editCharacter();
+    showBuiltinRole("");
     toast("success", "已删除角色");
   } catch (e) {toast("error", "删除失败", String(e));}
 };
@@ -647,27 +743,54 @@ $("card-import-file").onchange = async () => {
   const file = $("card-import-file").files?.[0];
   if (!file) return;
   try {
+    await flushCharacterSave();
+    if (cardDirty) throw Error("当前角色尚未保存，无法导入新角色");
     if (file.size > 256 * 1024) throw new Error("角色卡超过 256KB");
     const raw = JSON.parse(await file.text());
     const r = await characterRequest("import", {card: raw});
-    await charactersLoad(); editCharacter(r.card);
+    await charactersLoad(); editCharacter(r.card);showBuiltinRole("");
     toast("success", "导入成功", r.card.name);
   } catch (e) {toast("error", "导入失败", String(e));}
   $("card-import-file").value = "";
 };
-$("global-save").onclick = async () => {
-  try {
+let globalSaveTimer=0, globalSaveChain=Promise.resolve(), globalDirty=false;
+function scheduleGlobalSave() {
+  if (!characterState.available) return;
+  globalDirty=true;
+  $("global-autosave-status").textContent="尚未保存…";
+  clearTimeout(globalSaveTimer);
+  globalSaveTimer=setTimeout(() => {void flushGlobalSave();},450);
+}
+function flushGlobalSave() {
+  clearTimeout(globalSaveTimer);
+  globalSaveTimer=0;
+  globalSaveChain=globalSaveChain.catch(() => {}).then(async () => {
+    if (!globalDirty || !characterState.available) return;
+    globalDirty=false;
     const data={user_name:$("global-user-name").value,
       user_description:$("global-user-description").value,
       default_role:$("global-default-role").value,
-      chat_image_profile: chatImageModelsReady
+      chat_image_profile:chatImageModelsReady
         ? $("global-chat-image-profile").value
         : (characterState.global.chat_image_profile || "default")};
-    const r=await characterRequest("global",{global:data});
-    characterState.global=r.global;
-    toast("success","全局设置已保存，聊天生图模型已更新");
-  }catch(e){toast("error","保存失败",String(e));}
-};
+    $("global-autosave-status").textContent="正在保存…";
+    try {
+      const r=await characterRequest("global",{global:data});
+      characterState.global=r.global;
+      $("global-autosave-status").textContent=globalDirty?"有待保存的修改…":"已自动保存";
+    }catch(e) {
+      globalDirty=true;
+      $("global-autosave-status").textContent="自动保存失败";
+      toast("error","全局设置自动保存失败",String(e.message || e));
+    }
+  });
+  return globalSaveChain;
+}
+for (const id of ["global-user-name","global-user-description","global-default-role","global-chat-image-profile"]) {
+  $(id).addEventListener("input",scheduleGlobalSave);
+  $(id).addEventListener("change",scheduleGlobalSave);
+  $(id).addEventListener("blur",()=>{if(globalDirty)void flushGlobalSave();});
+}
 $("chat-character").onchange = async () => {
   if (busy || messages.length > 0) {
     toast("warn","已有对话不能切换角色，请新建会话");

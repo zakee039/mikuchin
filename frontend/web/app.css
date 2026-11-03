@@ -439,6 +439,7 @@ main { flex: 1; min-height: 0; display: flex; }
 /* Image Studio: natural language + model-specific positive/negative drafts. */
 .img-nl-heading,.img-reference-head,.img-actions,.img-ref-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .img-nl-heading{justify-content:space-between;font-weight:600}
+.img-nl-actions{display:flex;align-items:center;gap:8px}
 .img-prompt-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .img-prompt-pair .st-field{min-width:0;width:auto}
 .img-prompt-pair textarea{width:100%;min-height:106px}
@@ -446,8 +447,8 @@ main { flex: 1; min-height: 0; display: flex; }
 .img-row .img-model-field{flex:1.5 1 215px;max-width:none}
 .img-steps-field{max-width:135px}
 .img-row--primary,.img-row--secondary{display:grid;gap:12px;align-items:end}
-.img-row--primary{grid-template-columns:minmax(0,1.4fr) minmax(0,1.05fr) minmax(0,1fr)}
-.img-row--secondary{grid-template-columns:minmax(0,1fr) minmax(0,1.7fr) minmax(0,0.75fr)}
+.img-row--primary{grid-template-columns:repeat(4,minmax(0,1fr))}
+.img-row--secondary{grid-template-columns:repeat(3,minmax(0,1fr))}
 .img-row--primary .st-field,.img-row--secondary .st-field{min-width:0;width:100%;max-width:none}
 .img-row--primary .st-input,.img-row--secondary .st-input{min-width:0;width:100%}
 .img-row--primary .img-model-field{min-width:0;max-width:none}

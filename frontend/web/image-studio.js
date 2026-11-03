@@ -3,7 +3,7 @@
 "use strict";
 (() => {
   const get = (id) => document.getElementById(id);
-  const fields = ["positive", "negative", "size", "upscale", "steps", "seed"];
+  const fields = ["positive", "negative", "height", "width", "upscale", "steps", "seed"];
   const ids = Object.fromEntries(fields.map(k => [k, `img-${k}`]));
   const language = () => document.documentElement.lang || "zh-CN";
   const tr = (zh, en, ja) => language() === "en-US" ? en : language() === "ja-JP" ? ja : zh;
@@ -53,15 +53,25 @@
     const inherited = origin ? cleanDraft(origin) : {};
     const values = existing ? cleanDraft(existing) : {
       positive: inherited.positive || "", negative: inherited.negative || "",
-      size: inherited.size || "768x768", upscale: inherited.upscale || "auto",
+      height: inherited.height || "768", width: inherited.width || "768",
+      upscale: inherited.upscale || "auto",
       steps: String(defaultSteps(selected)), seed: inherited.seed || "",
     };
-    for (const k of fields) get(ids[k]).value = values[k];
-    for (const opt of get("img-size").options) {
-      const [w, h] = opt.value.split("x").map(Number);
-      opt.disabled = w > Number(selected?.max_side || 2048) || h > Number(selected?.max_side || 2048);
+    // Older drafts without independent dimensions (or an invalid selection)
+    // should not leave either dimension blank and submit an invalid size.
+    for (const dim of ["height","width"]) {
+      if (!["384","512","768","1024"].includes(values[dim])) values[dim] = "768";
     }
-    if (get("img-size").selectedOptions[0]?.disabled) get("img-size").value = "768x768";
+    if (!["auto","off","4x"].includes(values.upscale)) values.upscale = "auto";
+    if (!values.steps) values.steps = String(defaultSteps(selected));
+    for (const k of fields) get(ids[k]).value = values[k];
+    for (const dim of ["height","width"]) {
+      const select = get(ids[dim]);
+      for (const opt of select.options) opt.disabled = Number(opt.value) > Number(selected?.max_side || 2048);
+      if (select.selectedOptions[0]?.disabled) select.value = "768";
+      select.dispatchEvent(new Event("change", {bubbles:true}));
+    }
+    get("img-upscale").dispatchEvent(new Event("change", {bubbles:true}));
     // If a new model had no draft, keep the current positive/negative verbatim
     // until the user explicitly requests re-adaptation.
     sourceModel = (!existing && origin && (origin.positive || origin.negative)) ?
@@ -147,7 +157,10 @@
     chosenLora = e.target.value;
     store.set("image-lora", chosenLora);
   };
-  for (const k of fields) get(ids[k]).addEventListener("input", saveDraft);
+  for (const k of fields) {
+    get(ids[k]).addEventListener("input", saveDraft);
+    get(ids[k]).addEventListener("change", saveDraft);
+  }
   get("img-natural").value = store.get("image-natural", "");
   get("img-natural").addEventListener("input", () => store.set("image-natural", get("img-natural").value));
 
@@ -180,6 +193,30 @@
     get("img-ref-preview").hidden = get("img-ref-clear").hidden = true;
     get("img-ref-thumbnail").removeAttribute("src");
     refreshReferenceHint();
+  };
+
+  get("img-clear").onclick = () => {
+    if (working) return;
+    // Reset every editable input/selection, the reference image, and persisted
+    // per-model drafts. Already generated results are not deleted.
+    for (const key of Object.keys(drafts)) delete drafts[key];
+    store.set(draftKey, {});
+    get("img-natural").value = "";
+    store.set("image-natural", "");
+    get("img-ref-clear").click();
+    chosenLora = "none";
+    store.set("image-lora", "none");
+    const first = catalog.find(item => item.available);
+    if (first) {
+      current = first.id;
+      get("img-model").value = current;
+      get("img-model").dispatchEvent(new Event("change", {bubbles:true}));
+    }
+    sourceModel = null;
+    loadDraft(current);
+    get("img-adapt-note").hidden = get("img-adapt").hidden = true;
+    get("img-hint").textContent = "输入描述后可以生成新图片。";
+    get("img-natural").focus();
   };
 
   function parseJSON(text) {
@@ -271,7 +308,7 @@
       if (!window.confirm("当前模型不支持直接引用图片。可先点击「立即转换」将图片转为 Prompt；继续只会使用文本 Prompt，确定生成吗？")) return;
     }
     const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
-      size: get("img-size").value, response_format: "b64_json",
+      size: `${get("img-width").value}x${get("img-height").value}`, response_format: "b64_json",
       strata_upscale: get("img-upscale").value, strata_image_profile: current};
     if (chosenLora !== "none" && selected?.family === "qwen_turbo")
       body.strata_lora_id = chosenLora;

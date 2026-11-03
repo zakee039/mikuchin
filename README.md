@@ -1,6 +1,6 @@
 # Mikuchin
 
-**Current release: v0.2.2** (v0.2.0 remains the baseline release). The PolyStrata inference engine maintains its own version.
+**Current release: v0.2.3** (v0.2.0 remains the baseline release). The PolyStrata inference engine maintains its own version.
 
 Mikuchin is a desktop and browser-based personal AI companion built around the PolyStrata inference engine.
 
