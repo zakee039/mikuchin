@@ -1,23 +1,30 @@
 <div align="center">
 
-<img src="assets/icon.png" alt="Mikuchin" width="88" height="88" />
+<img src="assets/icon.png" alt="Mikuchin" width="96" height="96" />
 
-# Mikuchin · English
+# Mikuchin · Miku亲
 
-**v0.2.4** · [Releases](https://github.com/zakee039/mikuchin/releases/latest)
+**Self-hosted Multimodal AI Companion & Image Studio**
 
-[简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [English](README.en-US.md)
+**v0.2.4** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.4)
+
+[Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+
+[**简体中文**](README.md) · [**日本語**](README.ja-JP.md) · [**English**](README.en-US.md)
 
 </div>
 
 ---
 
+## Meet Mikuchin (Miku亲)
 
-[个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+**Mikuchin, also called Miku亲**, is a self-hosted AI companion and creative workspace for personal use. More than a chat window, it brings conversations, character profiles and Worldbooks, reference-guided image creation, and live inference monitoring together in one interface.
 
-**Mikuchin** is a cross-platform personal multimodal AI companion and creative studio built around the **PolyStrata** local inference engine. It combines an **adaptive desktop/mobile Web workspace**, a **native Windows Manager (Tauri 2)**, and a **native Android client with built-in user-space Tailscale networking**. Model files, conversations, character data, artwork, and KV snapshots are stored locally. Remote access, Tailscale control traffic, and optional MCP integrations may still involve external network services.
+It uses **PolyStrata** for local inference and includes a browser workspace, a Windows tray manager, and a dedicated Android client. The Android app can connect directly or join your own Tailnet through embedded user-space Tailscale to reach Mikuchin on your PC. **The Android app is a remote client; it does not run the model on the phone.**
 
-### ✨ Key Features
+You manage models, conversations, character data, and generated images on your own hardware. Tailnet access, Cloudflare Tunnel, and optional external MCP integrations can still involve network services, so review their permissions separately.
+
+## ✨ Key Features
 
 1. **Conversational AI & SessionV1 Engine**
    - Real-time token streaming, collapsible reasoning (`Thinking`) traces, multimodal vision input (drag-and-drop, clipboard paste, or file upload), external **MCP (Model Context Protocol)** tool execution, and in-chat image generation.
@@ -43,27 +50,49 @@
 
 6. **Android Client with Built-in User-Space Tailscale (`tsnet`)**
    - **Adaptive Light-Theme Mobile Shell**: Opens with a minimal connection gate before authentication and jumps straight to the most recent chat session once connected, featuring a persistent top-left history drawer toggle and a borderless 5-button bottom navigation bar (`Images`, `Characters`, `Settings`, `Monitor`, `About`).
-   - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration) without requiring Root or the official Tailscale app.
+   - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration), without requiring root access or the official Tailscale app.
    - **Two-Step Web OAuth & Hardware-Backed Security**: Supports **Direct** and **Tailscale** connection modes. In Tailscale mode, users first complete interactive web OAuth device login before the endpoint and API key fields unfold. API keys are encrypted via **Android Keystore (`AES/GCM/NoPadding`)**, and all native checks, SSE streaming chats, and uploads traverse a localhost-only (`127.0.0.1`) reverse proxy guarded by per-session random tokens.
 
 7. **Global Trilingual UI (`zh-CN` / `ja-JP` / `en-US`)**
    - Instant synchronization across the Web UI, mobile shell, Windows Manager, and tray menu without ever altering or translating user conversations, character cards, or prompts.
 
-### 📦 Download and build
+## 📂 Repository layout
+
+```text
+mikuchin/
+├── assets/                 # Brand images and icons
+├── backend/
+│   ├── polystrata/         # Inference engine (Git submodule)
+│   └── services/           # Model-independent services
+├── character/              # Character cards and reference artwork
+├── chat/                   # Sessions, generated images and KV snapshots
+├── config/                 # Local configuration (Git-ignored)
+├── docs/                   # Architecture, specifications and release notes
+├── frontend/
+│   ├── android/            # Kotlin / WebView / tsnet client
+│   ├── launcher/           # Windows Tauri 2 manager
+│   ├── locales/            # Chinese, Japanese and English translations
+│   └── web/                # Shared web workspace
+└── scripts/                # Build and maintenance scripts
+```
+
+## 📦 Download and build
 
 Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; configure inference separately using the [architecture overview](docs/ARCHITECTURE.md) and [image-model profiles](docs/IMAGE_MODEL_PROFILES.md).
 
 ```bash
 git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+# Already cloned? git submodule update --init --recursive
 ```
 
 ```powershell
+python scripts/build-locales.py
 powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
 powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
 On Android, choose Direct or Tailscale connection. Tailscale mode requires browser authorization, Tailnet ACL/Grants permitting the APK node to reach your server, and an appropriate server firewall rule. The Android app **connects to your Mikuchin backend**; it does not run the model locally on the phone.
 
-### 🔒 Security and compatibility
+## 🔒 Security and compatibility
 
-Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. A change in APK signing certificate may prevent installation over existing builds. See the PolyStrata submodule for its own licensing and attribution.
+Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.4 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the PolyStrata submodule for its own licensing and attribution.

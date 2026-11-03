@@ -1,23 +1,30 @@
 <div align="center">
 
-<img src="assets/icon.png" alt="Mikuchin" width="88" height="88" />
+<img src="assets/icon.png" alt="Mikuchin" width="96" height="96" />
 
-# Mikuchin · 日本語
+# Mikuchin · Miku亲
 
-**v0.2.4** · [Releases](https://github.com/zakee039/mikuchin/releases/latest)
+**ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-[简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [English](README.en-US.md)
+**v0.2.4** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.4)
+
+[個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+
+[**简体中文**](README.md) · [**日本語**](README.ja-JP.md) · [**English**](README.en-US.md)
 
 </div>
 
 ---
 
+## Mikuchin（Miku亲）とは
 
-[个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+**Mikuchin（Miku亲）** は、個人で運用するローカル AI コンパニオン＆クリエイティブワークスペースです。単なるチャット UI ではなく、会話、キャラクター設定とワールドブック、参照画像を使った画像生成、ハードウェア／推論モニタリングをひとつにまとめています。
 
-**Mikuchin** は、高性能ローカル推論エンジン **PolyStrata** を中核に据えたマルチプラットフォーム対応のパーソナル AI コンパニオン＆クリエイティブスタジオです。**デスクトップ／モバイル対応 Web ワークスペース**、**Windows ネイティブマネージャー（Tauri 2）**、そして**ユーザー空間 Tailscale ネットワークを内蔵した Android クライアント**を提供します。モデル、会話、キャラクター、生成画像、KV キャッシュなどのデータはローカルに保存されます。ただしリモート接続、Tailscale の制御通信、追加の MCP サービスには外部通信が発生する場合があります。
+ローカル推論には **PolyStrata** を使用し、ブラウザ用ワークスペース、Windows トレイマネージャー、Android クライアントを提供します。Android アプリからは直接接続するか、内蔵ユーザー空間 Tailscale で自身の Tailnet に参加して PC の Mikuchin に接続できます。**スマートフォン上で大規模モデルを推論するアプリではありません**。
 
-### ✨ 主な機能
+モデル、履歴、キャラクター、画像は自分の端末で管理できます。ただし、Tailscale、Cloudflare Tunnel、外部 MCP などの利用時には、それぞれの通信とアクセス権を確認してください。
+
+## ✨ 主な機能
 
 1. **インテリジェントチャット＆SessionV1 エンジン**
    - リアルタイムのトークンストリーミング出力、思考プロセス（Thinking）の折りたたみ表示、マルチモーダル画像認識（ドラッグ＆ドロップ・貼り付け・アップロード）、MCP 外部ツール連携およびチャット内画像生成ツールを搭載。
@@ -43,27 +50,49 @@
 
 6. **Android クライアント（ユーザー空間 Tailscale `tsnet` 内蔵）**
    - **ライトテーマ＆伸縮レイアウト**：ログイン前はシンプルな接続画面のみを表示し、接続後は**最新のチャット画面へ直行**。左上の履歴ドロワーボタンと、枠線のない下部5ボタンナビゲーション（画像・キャラクター・設定・モニター・概要）を搭載。
-   - **ユーザー空間 Tailscale 統合**：公式 `tailscale.com/tsnet`（Go + `gomobile` AAR）をアプリ内に内蔵。**Android の `VpnService` を一切使用しない**ため、システム VPN と VPN スロットを共有せずに利用できます（通信ルートは端末環境によって異なります）、Root 化や公式 Tailscale アプリの導入も不要です。
+   - **ユーザー空間 Tailscale 統合**：公式 `tailscale.com/tsnet`（Go + `gomobile` AAR）をアプリ内に内蔵。**Android の `VpnService` を一切使用しない**ため、Android の VPN スロットを占有しません。実際の接続経路は端末の設定に依存し、Root 化や公式 Tailscale アプリのインストールも不要です。
    - **2段階 Web OAuth 認証＆Keystore 暗号化**：Tailscale モードでは先にブラウザで OAuth デバイス認証を完了してからエンドポイントと API キー入力欄を展開。API キーは Android Keystore（`AES/GCM/NoPadding`）で暗号化保存されます。
 
 7. **日・中・英 3言語リアルタイム切り替え（i18n）**
    - Web UI、モバイル画面、Windows マネージャー、トレイメニューの表示言語を `简体中文` / `日本語` / `English` 間で即座に切り替え可能（会話本文やキャラクター設定は翻訳されません）。
 
-### 📦 ダウンロードとビルド
+## 📂 プロジェクト構成
+
+```text
+mikuchin/
+├── assets/                 # アイコン・ブランド画像
+├── backend/
+│   ├── polystrata/         # 推論エンジン（Git サブモジュール）
+│   └── services/           # サービス・オーケストレーション
+├── character/              # キャラクターカード・参照画像
+├── chat/                   # 会話履歴・生成画像・KV スナップショット
+├── config/                 # ローカル設定（Git 管理対象外）
+├── docs/                   # アーキテクチャ・設計・変更履歴
+├── frontend/
+│   ├── android/            # Kotlin / WebView / tsnet クライアント
+│   ├── launcher/           # Windows Tauri 2 マネージャー
+│   ├── locales/            # 日本語・中国語・英語辞書
+│   └── web/                # 共通 Web UI
+└── scripts/                # ビルド・メンテナンス用スクリプト
+```
+
+## 📦 ダウンロードとビルド
 
 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。必要に応じて [アーキテクチャ](docs/ARCHITECTURE.md) と [画像モデル設定](docs/IMAGE_MODEL_PROFILES.md) を参照してください。
 
 ```bash
 git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+# すでに clone 済みの場合: git submodule update --init --recursive
 ```
 
 ```powershell
+python scripts/build-locales.py
 powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
 powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
 Android では「直接接続」または「Tailscale」を選択します。Tailscale モードではブラウザ認証のほか、Tailnet ACL/Grants と接続先のファイアウォールで API ポートへのアクセスを許可する必要があります。Android アプリ自体でモデルを推論するのではなく、Mikuchin サーバーへ接続します。
 
-### 🔒 セキュリティと注意事項
+## 🔒 セキュリティと注意事項
 
-API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。配布 APK の署名が変更された場合、既存アプリへ上書きインストールできない可能性があります。PolyStrata のライセンスと帰属はサブモジュールの原文をご確認ください。
+API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。v0.2.4 APK はリリース用署名で配布しています。以前の Android Debug 証明書で署名された APK からの上書き更新はできない場合があるため、設定を控えてから再インストールしてください。PolyStrata のライセンスと帰属はサブモジュールの原文をご確認ください。

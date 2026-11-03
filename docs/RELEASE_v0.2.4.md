@@ -12,13 +12,13 @@
 ## Documentation and release alignment
 
 - Unified product, Windows desktop manager (`frontend/launcher`), and Android client (`frontend/android`) versions to `0.2.4` (`v0.2.4`).
-- The repository landing page `README.md` is now a concise navigation and download guide. The full descriptions are maintained independently in `README.zh-CN.md`, `README.ja-JP.md`, and `README.en-US.md`.
+- Three self-contained language guides: `README.md` is the default full Chinese README, `README.ja-JP.md` is Japanese, and `README.en-US.md` is English. Each includes the Mikuchin (Miku亲) introduction, features, downloads and source-build instructions.
 - Documented installation, source builds, Tailnet ACL/firewall requirements, credential handling, and the difference between an embedded Android remote client and a local inference server.
 
 ## Release downloads
 
 - `Mikuchin_0.2.4_x64-setup.exe`: Windows x64 NSIS installer for the desktop manager.
-- `Mikuchin-Android-v0.2.4.apk`: Android arm64 APK (minSdk 26). This build is **debug-signed**, not a production-signing-key release; sideloading and future upgrades must account for the signature. It contains a user-space `tsnet` client but does not contain model weights.
+- `Mikuchin-v0.2.4.apk`: Android arm64 APK (minSdk 26). This uploaded build uses the Mikuchin release certificate rather than the Android Debug certificate. Upgrading from an older debug-signed APK may require uninstalling the old app first. It contains a user-space `tsnet` client but does not contain model weights.
 
 ## Validation scope
 
