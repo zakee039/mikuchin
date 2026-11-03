@@ -445,6 +445,13 @@ main { flex: 1; min-height: 0; display: flex; }
 .img-row .st-field{min-width:135px;flex:1 1 130px}
 .img-row .img-model-field{flex:1.5 1 215px;max-width:none}
 .img-steps-field{max-width:135px}
+.img-row--primary,.img-row--secondary{display:grid;gap:12px;align-items:end}
+.img-row--primary{grid-template-columns:minmax(0,1.4fr) minmax(0,1.05fr) minmax(0,1fr)}
+.img-row--secondary{grid-template-columns:minmax(0,1fr) minmax(0,1.7fr) minmax(0,0.75fr)}
+.img-row--primary .st-field,.img-row--secondary .st-field{min-width:0;width:100%;max-width:none}
+.img-row--primary .st-input,.img-row--secondary .st-input{min-width:0;width:100%}
+.img-row--primary .img-model-field{min-width:0;max-width:none}
+#img-lora-hint{margin:-2px 0 2px}
 .img-adapt-note{margin:0;color:var(--st-ink-2)}
 .img-adapt-btn{align-self:flex-start}
 .img-reference{border:1px solid var(--st-line);border-radius:var(--st-r-lg);padding:14px;display:grid;gap:10px}
@@ -457,4 +464,5 @@ main { flex: 1; min-height: 0; display: flex; }
 .img-ref-actions .muted{flex:1 1 200px}
 .img-actions{justify-content:space-between}
 .img-actions .composer-hint{flex:1 1 260px}
-@media(max-width:680px){.img-prompt-pair{grid-template-columns:1fr}.img-row .st-field{max-width:none}.img-steps-field{max-width:160px}}
+@media(max-width:760px){.img-prompt-pair{grid-template-columns:1fr}.img-row--primary,.img-row--secondary{grid-template-columns:1fr 1fr}.img-row .st-field{max-width:none}}
+@media(max-width:520px){.img-row--primary,.img-row--secondary{grid-template-columns:1fr}}

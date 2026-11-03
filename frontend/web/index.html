@@ -7,7 +7,7 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261103-mobile">
+<link rel="stylesheet" href="web/app.css?v=20261103-lora">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
@@ -248,23 +248,29 @@
         </div>
         <p class="img-adapt-note muted small" id="img-adapt-note" hidden></p>
         <button type="button" class="st-btn st-btn--secondary img-adapt-btn" id="img-adapt" hidden>适配当前模型</button>
-        <div class="img-row">
+        <div class="img-row img-row--primary">
           <label class="st-field img-model-field">生图模型
             <select class="st-input" id="img-model" aria-label="Image generation model">
               <option value="default">当前默认模型</option></select></label>
+          <label class="st-field img-lora-field">LoRA
+            <select class="st-input" id="img-lora" aria-label="Image LoRA">
+              <option value="none">无</option></select></label>
           <label class="st-field">尺寸
             <select class="st-input" id="img-size">
               <option selected>768x768</option><option>1024x1024</option>
               <option>1536x1024</option><option>1024x1536</option><option>512x512</option></select></label>
+        </div>
+        <div class="img-row img-row--secondary">
+          <label class="st-field">种子
+            <input class="st-input" id="img-seed" type="number" min="0" step="1" placeholder="随机"></label>
           <label class="st-field">超分
             <select class="st-input" id="img-upscale">
               <option value="auto" selected>自动（动漫 4 倍超分）</option>
               <option value="off">关闭</option><option value="4x">4 倍</option></select></label>
           <label class="st-field img-steps-field">步数
             <input class="st-input" id="img-steps" type="number" min="1" max="100" step="1" value="8" required></label>
-          <label class="st-field">种子
-            <input class="st-input" id="img-seed" type="number" min="0" step="1" placeholder="随机"></label>
         </div>
+        <p class="muted small" id="img-lora-hint">LoRA 仅作用于本页的 Qwen 生图；当前强度为 1.0，不影响聊天。</p>
         <div class="img-reference">
           <div class="img-reference-head"><strong>参考图</strong>
             <label class="st-btn st-btn--secondary img-ref-upload" for="img-ref-file">上传图片</label>
@@ -483,7 +489,7 @@
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/app.js?v=20261103-mobile"></script>
-<script src="web/image-studio.js"></script>
+<script src="web/image-studio.js?v=20261103-lora"></script>
 <script src="web/sessions.js?v=20261103-history"></script>
 <script src="web/characters.js?v=20261103-cleanup"></script>
 <script src="web/i18n-data.js?v=20261103-cleanup"></script>

@@ -10,6 +10,8 @@
   const draftKey = "image-drafts-v2";
   const drafts = store.get(draftKey, {}) || {};
   let catalog = [];
+  let loraCatalog = [];
+  let chosenLora = store.get("image-lora", "none") || "none";
   let current = store.get("image-profile", "default");
   let sourceModel = null; // non-destructive adaptation suggestion when first switching
   let reference = null; // File kept in this tab only; never uploaded merely by selecting it
@@ -17,6 +19,26 @@
 
   const model = () => catalog.find(m => m.id === current) || catalog[0];
   const defaultSteps = (m) => Number(m?.steps || (m?.family === "sdxl" ? 28 : 8));
+  function refreshLoras() {
+    const select = get("img-lora");
+    const supported = model()?.family === "qwen_turbo";
+    select.replaceChildren(new Option(tr("无", "None", "なし"), "none"));
+    for (const item of loraCatalog) {
+      if (item.family !== "qwen_turbo") continue;
+      const opt = new Option(item.name + (item.available ? "" : " · 文件缺失"), item.id);
+      opt.disabled = !item.available || !supported;
+      select.add(opt);
+    }
+    if (!supported || !loraCatalog.some(l => l.id === chosenLora && l.available)) chosenLora = "none";
+    select.value = chosenLora;
+    select.disabled = !supported;
+    get("img-lora-hint").textContent = !supported ?
+      tr("当前模型不支持 Qwen LoRA。", "Qwen LoRAs are not supported by this model.", "このモデルはQwen LoRAに対応していません。") :
+      tr("仅影响本页生图；LoRA 强度固定 1.0，Qwen Turbo 8 步效果可能因 LoRA 而异。",
+         "Images page only · LoRA strength 1.0 · Results may vary at Turbo's 8 steps.",
+         "画像ページ専用 · LoRA強度 1.0 · Turbo 8ステップでは効果が異なる場合があります。");
+    store.set("image-lora", chosenLora);
+  }
   const pickFields = () => Object.fromEntries(fields.map(k => [k, get(ids[k]).value]));
   const cleanDraft = d => Object.fromEntries(fields.map(k => [k, typeof d?.[k] === "string" ? d[k] : ""]));
   function saveDraft() {
@@ -53,6 +75,7 @@
       `${sourceModel} のプロンプトを保持しています。そのまま生成するか、このモデル用に最適化できます。元の下書きは変更しません。`);
     if (!existing) saveDraft();
     get("img-negative-hint").hidden = selected?.family === "sdxl";
+    refreshLoras();
     refreshReferenceHint();
   }
   function selectModel(id) {
@@ -73,6 +96,7 @@
       if (!Array.isArray(data.models) || !data.models.length) throw Error("No image models configured");
       if (catalog.length) saveDraft();
       catalog = data.models;
+      loraCatalog = Array.isArray(data.loras) ? data.loras : [];
       select.replaceChildren();
       for (const item of catalog) {
         const opt = new Option(item.name + (item.available ? "" : " · 文件缺失"), item.id);
@@ -119,6 +143,10 @@
   }
 
   get("img-model").onchange = e => selectModel(e.target.value);
+  get("img-lora").onchange = e => {
+    chosenLora = e.target.value;
+    store.set("image-lora", chosenLora);
+  };
   for (const k of fields) get(ids[k]).addEventListener("input", saveDraft);
   get("img-natural").value = store.get("image-natural", "");
   get("img-natural").addEventListener("input", () => store.set("image-natural", get("img-natural").value));
@@ -245,6 +273,8 @@
     const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
       size: get("img-size").value, response_format: "b64_json",
       strata_upscale: get("img-upscale").value, strata_image_profile: current};
+    if (chosenLora !== "none" && selected?.family === "qwen_turbo")
+      body.strata_lora_id = chosenLora;
     if (get("img-seed").value !== "") body.seed = Number(get("img-seed").value);
     if (reference && ["img2img", "qwen_edit"].includes(selected?.reference_mode)) {
       body.strata_reference_image = reference.url;
@@ -265,7 +295,9 @@
         pic.src = "data:image/png;base64," + d.b64_json;
         pic.alt = prompt;
         const caption = document.createElement("figcaption");
+        const loraName = loraCatalog.find(l => l.id === j.strata?.lora_id)?.name;
         caption.textContent = `${j.model || selected?.name}, ${j.size}, ${steps} steps, ${ui("Seed")} ${d.seed}, ${((performance.now() - start)/1000).toFixed(0)} s` +
+          (loraName ? ` · LoRA: ${loraName}` : "") +
           (j.strata?.upscale_applied ? " · Anime 4×" : "") + `: ${prompt}`;
         const originalFile = (j.strata?.upscale_original_files || [])[0];
         if (originalFile && /^[a-f0-9]{32}\.png$/.test(originalFile)) {
