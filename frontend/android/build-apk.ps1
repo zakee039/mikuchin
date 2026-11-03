@@ -53,7 +53,12 @@ $env:ANDROID_HOME = $sdkRoot
 $env:ANDROID_SDK_ROOT = $sdkRoot
 $env:ANDROID_NDK_HOME = Join-Path $sdkRoot "ndk\26.1.10909125"
 $escapedSdk = $sdkRoot.Replace("\", "\\").Replace(":", "\:")
-Set-Content -Path (Join-Path $projDir "local.properties") -Value "sdk.dir=$escapedSdk" -Encoding ASCII
+$localPropsPath = Join-Path $projDir "local.properties"
+$extraProps = @()
+if (Test-Path $localPropsPath) {
+    $extraProps = Get-Content -Path $localPropsPath -Encoding UTF8 | Where-Object { $_ -and (-not $_.StartsWith("sdk.dir=")) }
+}
+@("sdk.dir=$escapedSdk") + $extraProps | Set-Content -Path $localPropsPath -Encoding UTF8
 
 Write-Host "==> [3/5] Checking Go + gomobile & verifying tsnetbridge..."
 $tsDir = Join-Path $projDir "tsnetbridge"
@@ -109,13 +114,22 @@ $gradleBat = $gradleExe.FullName
 Write-Host "==> [5/5] Building Mikuchin.apk..."
 Push-Location $projDir
 try {
-    & $gradleBat assembleDebug --no-daemon
-    if ($LASTEXITCODE -ne 0) { throw "Gradle build failed with exit code $LASTEXITCODE" }
-    $apkPath = Join-Path $projDir "app\build\outputs\apk\debug\app-debug.apk"
+    $useRelease = ($env:MIKUCHIN_KEYSTORE_PATH -and (Test-Path $env:MIKUCHIN_KEYSTORE_PATH)) -or ((Test-Path $localPropsPath) -and ((Get-Content $localPropsPath -Raw -Encoding UTF8) -match "sign\.storeFile="))
+    if ($useRelease) {
+        & $gradleBat assembleRelease --no-daemon
+        if ($LASTEXITCODE -ne 0) { throw "Gradle release build failed with exit code $LASTEXITCODE" }
+        $apkPath = Join-Path $projDir "app\build\outputs\apk\release\app-release.apk"
+    } else {
+        & $gradleBat assembleDebug --no-daemon
+        if ($LASTEXITCODE -ne 0) { throw "Gradle debug build failed with exit code $LASTEXITCODE" }
+        $apkPath = Join-Path $projDir "app\build\outputs\apk\debug\app-debug.apk"
+    }
     $outApk = Join-Path $projDir "Mikuchin.apk"
+    $verApk = Join-Path $projDir "Mikuchin-v0.2.4.apk"
     Copy-Item -Path $apkPath -Destination $outApk -Force
+    Copy-Item -Path $apkPath -Destination $verApk -Force
     Write-Host ""
-    Write-Host "SUCCESS! APK generated at: $outApk" -ForegroundColor Green
+    Write-Host "SUCCESS! APK generated at: $outApk (and $verApk)" -ForegroundColor Green
 } finally {
     Pop-Location
 }

@@ -1,7 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) {
+        f.reader(Charsets.UTF_8).use { load(it) }
+    }
+}
+val ksPath = System.getenv("MIKUCHIN_KEYSTORE_PATH") ?: localProps.getProperty("sign.storeFile", "")
+val ksPass = System.getenv("MIKUCHIN_KEYSTORE_PASSWORD") ?: localProps.getProperty("sign.storePassword", "")
+val ksAlias = System.getenv("MIKUCHIN_KEY_ALIAS") ?: localProps.getProperty("sign.keyAlias", "")
+val ksKeyPass = System.getenv("MIKUCHIN_KEY_PASSWORD") ?: localProps.getProperty("sign.keyPassword", "")
+val hasReleaseSigning = ksPath.isNotBlank() && File(ksPath).exists()
 
 android {
     namespace = "com.mikuchin.client"
@@ -15,9 +29,28 @@ android {
         versionName = "0.2.4"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = File(ksPath)
+                storePassword = ksPass
+                keyAlias = ksAlias
+                keyPassword = ksKeyPass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
