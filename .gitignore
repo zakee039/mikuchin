@@ -22,6 +22,7 @@
 /frontend/launcher/dist/
 /frontend/launcher/portable/
 /frontend/launcher/src-tauri/target/
+/dist/release/
 /tools/cloudflared/
 **/__pycache__/
 **/.pytest_cache/

@@ -418,7 +418,11 @@ function projectionText(c) {
 }
 function renderAbout(eng, hw, st) {
   const kv = {int8: "8-bit", q4_0: "4-bit (Hadamard-rotated)", fp16: "16-bit"}[eng.kv] || eng.kv;
+  const v = window.MIKUCHIN_VERSIONS;
   facts($("facts-engine"), [
+    ["Main program version", `Mikuchin v${v.main}`],
+    ["Desktop launcher version", `v${v.launcher}`],
+    ["Android client version", `v${v.android}`],
     ["Model", eng.model],
     ["Engine", eng.version ? `PolyStrata v${eng.version}` : "PolyStrata (built from source)"],
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens` : null],

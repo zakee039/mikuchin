@@ -6,7 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**v0.2.4** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.4)
+**主程序 v0.2.5** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.5)
+
+**独立版本：**主程序 `0.2.5` · Windows 启动器 `0.2.4` · Android 客户端 `0.2.4`（versionCode 204）。本次只更新主程序，启动器与 APK 沿用原版构建。
 
 [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
