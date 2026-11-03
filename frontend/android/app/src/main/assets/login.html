@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light">
+<title>Mikuchin</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-2: #f1f5f9;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --accent: #39C5BB;
+    --accent-soft: rgba(57, 197, 187, 0.12);
+    --danger: #dc2626;
+    --ok: #10b981;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    margin: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    overflow: hidden;
+  }
+  .gate {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100dvh;
+    padding: calc(18px + env(safe-area-inset-top, 0px)) 20px calc(18px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+  }
+  .spacer {
+    flex: 1 1 0%;
+    min-height: 12px;
+  }
+  .card {
+    flex: 0 0 auto;
+    width: min(100%, 390px);
+    margin: 0 auto;
+    padding: 20px 18px;
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .mode-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+  .mode-tab {
+    height: 34px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mode-tab.active {
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  }
+  .ts-box {
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+  }
+  .ts-box.visible {
+    display: flex;
+  }
+  .ts-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .ts-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .ts-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+  .ts-dot.running { background: var(--ok); }
+  .ts-dot.wait { background: var(--warn); }
+  .ts-dot.err { background: var(--danger); }
+  .ts-meta {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+    word-break: break-all;
+  }
+  .ts-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .btn-secondary {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-secondary.accent {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-secondary:disabled {
+    opacity: 0.55;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+  }
+  .label {
+    font-size: 14px;
+    font-weight: 700;
+    text-align: right;
+    user-select: none;
+  }
+  .input {
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    padding: 0 12px;
+    font-size: 14px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--ink);
+    outline: none;
+  }
+  .input:focus {
+    border-color: var(--accent);
+    background: var(--surface);
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 40px;
+    padding-top: 2px;
+  }
+  .error {
+    flex: 1;
+    font-size: 12.5px;
+    color: var(--danger);
+    line-height: 1.35;
+  }
+  .submit {
+    flex: 0 0 auto;
+    min-width: 90px;
+    height: 40px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .submit:disabled {
+    opacity: 0.55;
+  }
+</style>
+</head>
+<body>
+<section class="gate">
+  <div class="spacer"></div>
+  <form class="card" id="login-form" autocomplete="off">
+    <div class="mode-tabs" role="tablist">
+      <button type="button" class="mode-tab active" id="tab-direct" data-mode="direct">直接连接</button>
+      <button type="button" class="mode-tab" id="tab-tailscale" data-mode="tailscale">Tailscale</button>
+    </div>
+
+    <div class="ts-box" id="ts-box">
+      <div class="ts-head">
+        <span class="ts-status">
+          <span class="ts-dot" id="ts-dot"></span>
+          <span id="ts-state-text">未连接</span>
+        </span>
+        <span class="ts-meta" id="ts-ip-text">mikuchin-android</span>
+      </div>
+      <div class="ts-meta" id="ts-hint">首次使用需登录 Tailscale 并确保节点 mikuchin-android 已获 ACL 授权</div>
+      <div class="ts-actions">
+        <button type="button" class="btn-secondary accent" id="ts-login-btn">Tailscale 登录</button>
+        <button type="button" class="btn-secondary" id="ts-auth-btn" style="display:none">打开授权页</button>
+        <button type="button" class="btn-secondary" id="ts-reconnect-btn">重连</button>
+        <button type="button" class="btn-secondary" id="ts-logout-btn">退出</button>
+      </div>
+    </div>
+
+    <label class="row" for="endpoint">
+      <span class="label">接口</span>
+      <input class="input" id="endpoint" type="text" inputmode="url" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="100.96.190.44:15239">
+    </label>
+    <label class="row" for="key">
+      <span class="label">key</span>
+      <input class="input" id="key" type="password" autocomplete="off">
+    </label>
+    <div class="actions">
+      <span class="error" id="error" role="alert"></span>
+      <button type="submit" class="submit" id="submit">连接</button>
+    </div>
+  </form>
+  <div class="spacer"></div>
+</section>
+<script>
+  const form = document.getElementById("login-form");
+  const tabDirect = document.getElementById("tab-direct");
+  const tabTailscale = document.getElementById("tab-tailscale");
+  const tsBox = document.getElementById("ts-box");
+  const tsDot = document.getElementById("ts-dot");
+  const tsStateText = document.getElementById("ts-state-text");
+  const tsIpText = document.getElementById("ts-ip-text");
+  const tsHint = document.getElementById("ts-hint");
+  const tsLoginBtn = document.getElementById("ts-login-btn");
+  const tsAuthBtn = document.getElementById("ts-auth-btn");
+  const tsReconnectBtn = document.getElementById("ts-reconnect-btn");
+  const tsLogoutBtn = document.getElementById("ts-logout-btn");
+  const endpointEl = document.getElementById("endpoint");
+  const keyEl = document.getElementById("key");
+  const errorEl = document.getElementById("error");
+  const submitEl = document.getElementById("submit");
+
+  let currentMode = "direct";
+  let lastAuthUrl = "";
+  let tsRunning = false;
+
+  function applyMode(mode, notifyBridge = true) {
+    currentMode = mode === "tailscale" ? "tailscale" : "direct";
+    tabDirect.classList.toggle("active", currentMode === "direct");
+    tabTailscale.classList.toggle("active", currentMode === "tailscale");
+    tsBox.classList.toggle("visible", currentMode === "tailscale");
+    errorEl.textContent = "";
+    if (currentMode === "tailscale" && !endpointEl.value.trim()) {
+      endpointEl.value = "100.96.190.44:15239";
+    }
+    if (notifyBridge && window.MikuchinAndroid && window.MikuchinAndroid.setConnectionMode) {
+      window.MikuchinAndroid.setConnectionMode(currentMode);
+    }
+    refreshTailscaleStatus();
+  }
+
+  function renderTailscaleStatus(raw) {
+    if (!raw) return;
+    let st = raw;
+    if (typeof raw === "string") {
+      try { st = JSON.parse(raw); } catch { return; }
+    }
+    const state = st.state || "Stopped";
+    lastAuthUrl = st.authUrl || "";
+    tsRunning = state === "Running";
+
+    tsDot.className = "ts-dot";
+    if (state === "Running") {
+      tsDot.classList.add("running");
+      tsStateText.textContent = "已连接";
+      tsIpText.textContent = (st.hostname || "mikuchin-android") + (st.tailscaleIp ? " · " + st.tailscaleIp : "");
+      tsHint.textContent = "Tailnet 已就绪，可验证接口并连接 Mikuchin";
+      tsLoginBtn.style.display = "none";
+      tsAuthBtn.style.display = "none";
+    } else if (state === "NeedsLogin" || lastAuthUrl) {
+      tsDot.classList.add("wait");
+      tsStateText.textContent = "等待授权";
+      tsIpText.textContent = st.hostname || "mikuchin-android";
+      tsHint.textContent = "请点击「打开授权页」完成 Tailscale 网页登录授权";
+      tsLoginBtn.style.display = "inline-block";
+      tsAuthBtn.style.display = lastAuthUrl ? "inline-block" : "none";
+    } else if (state === "Starting") {
+      tsDot.classList.add("wait");
+      tsStateText.textContent = "连接中...";
+      tsIpText.textContent = st.hostname || "mikuchin-android";
+      tsHint.textContent = "正在启动内置用户态 Tailscale 节点...";
+      tsLoginBtn.style.display = "inline-block";
+      tsAuthBtn.style.display = "none";
+    } else if (state === "Error") {
+      tsDot.classList.add("err");
+      tsStateText.textContent = "连接失败";
+      tsIpText.textContent = st.hostname || "mikuchin-android";
+      tsHint.textContent = st.error || "Tailscale 节点异常，请重试";
+      tsLoginBtn.style.display = "inline-block";
+      tsAuthBtn.style.display = "none";
+    } else {
+      tsStateText.textContent = "未连接";
+      tsIpText.textContent = st.hostname || "mikuchin-android";
+      tsHint.textContent = "首次使用需登录 Tailscale 并确保节点 mikuchin-android 已获 ACL 授权";
+      tsLoginBtn.style.display = "inline-block";
+      tsAuthBtn.style.display = "none";
+    }
+  }
+
+  function refreshTailscaleStatus() {
+    if (currentMode !== "tailscale" || !window.MikuchinAndroid || !window.MikuchinAndroid.getTailscaleStatus) return;
+    renderTailscaleStatus(window.MikuchinAndroid.getTailscaleStatus());
+  }
+
+  tabDirect.onclick = () => applyMode("direct");
+  tabTailscale.onclick = () => applyMode("tailscale");
+
+  tsLoginBtn.onclick = () => {
+    errorEl.textContent = "";
+    tsStateText.textContent = "获取授权...";
+    if (window.MikuchinAndroid && window.MikuchinAndroid.startTailscaleLogin) {
+      renderTailscaleStatus(window.MikuchinAndroid.startTailscaleLogin());
+    }
+  };
+
+  tsAuthBtn.onclick = () => {
+    if (lastAuthUrl && window.MikuchinAndroid && window.MikuchinAndroid.openAuthUrl) {
+      window.MikuchinAndroid.openAuthUrl(lastAuthUrl);
+    }
+  };
+
+  tsReconnectBtn.onclick = () => {
+    errorEl.textContent = "";
+    if (window.MikuchinAndroid && window.MikuchinAndroid.reconnectTailscale) {
+      renderTailscaleStatus(window.MikuchinAndroid.reconnectTailscale());
+    }
+  };
+
+  tsLogoutBtn.onclick = () => {
+    errorEl.textContent = "";
+    if (window.MikuchinAndroid && window.MikuchinAndroid.logoutTailscale) {
+      renderTailscaleStatus(window.MikuchinAndroid.logoutTailscale());
+    }
+  };
+
+  window.onTailscaleStatus = (statusJson) => {
+    renderTailscaleStatus(statusJson);
+  };
+
+  if (window.MikuchinAndroid) {
+    endpointEl.value = window.MikuchinAndroid.getSavedEndpoint() || "";
+    keyEl.value = window.MikuchinAndroid.getSavedKey() || "";
+    const savedMode = window.MikuchinAndroid.getConnectionMode ? window.MikuchinAndroid.getConnectionMode() : "direct";
+    applyMode(savedMode, false);
+  }
+
+  setInterval(refreshTailscaleStatus, 1500);
+
+  window.onConnectResult = (ok, message) => {
+    submitEl.disabled = false;
+    if (!ok) errorEl.textContent = message || "无法连接到接口";
+  };
+
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const ep = endpointEl.value.trim();
+    const key = keyEl.value.trim();
+    if (!ep) {
+      errorEl.textContent = "请输入接口地址";
+      return;
+    }
+    if (currentMode === "tailscale" && !tsRunning) {
+      errorEl.textContent = "请先登录并连接 Tailscale 后再连接接口";
+      return;
+    }
+    errorEl.textContent = "";
+    submitEl.disabled = true;
+    if (window.MikuchinAndroid) {
+      window.MikuchinAndroid.connectEndpoint(ep, key);
+    }
+  };
+</script>
+</body>
+</html>

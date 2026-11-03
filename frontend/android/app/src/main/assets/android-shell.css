@@ -1,0 +1,299 @@
+/* Injected by Mikuchin Android WebView client at runtime. frontend/web on disk remains untouched. */
+html, body {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  color-scheme: light !important;
+}
+
+.st-header,
+.chat-main > .chat-mobile-bar,
+.chat-main > .session-expand,
+#theme-btn {
+  display: none !important;
+}
+
+/* Persistent top-left control bar across ALL views (Chat, 图像, 角色, 设置, 监控, 关于) */
+#mk-android-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: calc(50px + env(safe-area-inset-top, 0px));
+  padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px;
+  border-bottom: 1px solid var(--st-line-soft);
+  background: var(--st-surface);
+  position: relative;
+  z-index: 25;
+}
+
+#mk-android-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  min-width: 76px;
+  padding: 0 12px;
+  font: 650 13px/1 var(--st-font);
+  border: 1px solid var(--st-line);
+  border-radius: 11px;
+  background: var(--st-surface-2);
+  color: var(--st-ink);
+  cursor: pointer;
+}
+
+#mk-android-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--st-ink);
+}
+
+#mk-android-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 12px;
+  font: 650 13px/1 var(--st-font);
+  background: var(--st-accent-tint);
+  color: var(--st-accent-text);
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+}
+
+/* Elastic middle content container */
+main {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.view {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.view[hidden] {
+  display: none !important;
+}
+
+.view--chat {
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.chat-main {
+  width: 100% !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.chat-scroll {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  flex: 1 1 0% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 16px 14px 24px;
+}
+
+.chat-empty {
+  margin: auto !important;
+  padding: 24px 12px;
+}
+
+.composer-wrap {
+  flex: 0 0 auto !important;
+  min-width: 0;
+  padding: 6px 10px calc(9px + env(safe-area-inset-bottom, 0px)) !important;
+  background: var(--st-bg);
+}
+
+.view--settings,
+.view--images,
+.view--monitor,
+.view--about,
+.view--characters {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.about,
+.monitor,
+.character-editor {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 14px 12px calc(32px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+/* Global slide-out control drawer: history chats + bottom 5 buttons */
+#session-backdrop:not([hidden]) {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 50 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: rgba(13, 20, 26, 0.36) !important;
+}
+
+#session-sidebar,
+#session-sidebar.collapsed {
+  position: fixed !important;
+  z-index: 55 !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  width: min(330px, 88vw) !important;
+  min-width: 0 !important;
+  max-width: 88vw !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+  border-right: 1px solid var(--st-line) !important;
+  background: var(--st-surface) !important;
+  box-shadow: 9px 0 34px rgba(0, 0, 0, 0.16) !important;
+  transform: translateX(-105%) !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.22s !important;
+}
+
+#session-sidebar.mobile-open {
+  transform: translateX(0) !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+#session-history {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.session-foot {
+  display: none !important;
+}
+
+#mk-android-drawer-nav {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--st-line-soft);
+}
+
+/* Borderless 5 bottom buttons in control drawer */
+.mk-android-nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 50px;
+  padding: 6px 2px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: var(--st-ink-soft);
+  font: 650 12px/1.1 var(--st-font);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mk-android-nav-btn .st-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.mk-android-nav-btn[aria-current="page"] {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #39C5BB !important;
+}
+
+.mk-android-conn-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+
+.mk-android-conn-actions .st-btn {
+  flex: 1 1 auto;
+  min-height: 40px;
+}
+
+.mk-ts-kv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--st-ink);
+}
+
+.mk-ts-kv span:first-child {
+  color: var(--st-ink-soft);
+}
+
+.mk-ts-kv span:last-child {
+  font-weight: 650;
+  word-break: break-all;
+}
