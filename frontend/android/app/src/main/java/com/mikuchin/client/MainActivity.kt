@@ -238,9 +238,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (secureStore.connectionMode == "tailscale") {
+            thread {
+                val statusJson = tailscaleController.getStatus().toJsonString()
+                runOnUiThread {
+                    webView.evaluateJavascript("window.onTailscaleStatus && window.onTailscaleStatus(${JSONObject.quote(statusJson)});", null)
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         tailscaleController.stop()
+    }
+
+    private fun openAuthUrlInternal(url: String) {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("https://login.tailscale.com/")) return
+        runOnUiThread {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trimmed)))
+            } catch (_: Exception) {}
+        }
     }
 
     private fun isAuthorizedWebUrl(url: String): Boolean {
@@ -430,12 +452,24 @@ class MainActivity : ComponentActivity() {
         fun startTailscaleLogin(): String {
             if (!isCallerAuthorized()) return "{}"
             secureStore.connectionMode = "tailscale"
-            val statusJson = tailscaleController.startInteractiveLogin().toJsonString()
-            // Poll briefly in background so when AuthURL arrives we open it or update UI
+            val currentSt = tailscaleController.getStatus()
+            if (currentSt.authUrl.startsWith("https://login.tailscale.com/")) {
+                openAuthUrlInternal(currentSt.authUrl)
+                return currentSt.toJsonString()
+            }
             thread {
+                val initSt = tailscaleController.startInteractiveLogin()
                 var opened = false
-                for (i in 0 until 25) {
-                    Thread.sleep(500)
+                if (initSt.authUrl.startsWith("https://login.tailscale.com/")) {
+                    opened = true
+                    openAuthUrlInternal(initSt.authUrl)
+                }
+                val initJson = initSt.toJsonString()
+                runOnUiThread {
+                    webView.evaluateJavascript("window.onTailscaleStatus && window.onTailscaleStatus(${JSONObject.quote(initJson)});", null)
+                }
+                for (i in 0 until 45) {
+                    Thread.sleep(400)
                     val st = tailscaleController.getStatus()
                     val pubJson = st.toJsonString()
                     runOnUiThread {
@@ -443,24 +477,18 @@ class MainActivity : ComponentActivity() {
                     }
                     if (!opened && st.authUrl.startsWith("https://login.tailscale.com/")) {
                         opened = true
-                        openAuthUrl(st.authUrl)
+                        openAuthUrlInternal(st.authUrl)
                     }
                     if (st.state == "Running") break
                 }
             }
-            return statusJson
+            return TailscaleStatus(state = "Starting", hostname = currentSt.hostname).toJsonString()
         }
 
         @JavascriptInterface
         fun openAuthUrl(url: String) {
             if (!isCallerAuthorized()) return
-            val trimmed = url.trim()
-            if (!trimmed.startsWith("https://login.tailscale.com/")) return
-            runOnUiThread {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trimmed)))
-                } catch (_: Exception) {}
-            }
+            openAuthUrlInternal(url)
         }
 
         @JavascriptInterface

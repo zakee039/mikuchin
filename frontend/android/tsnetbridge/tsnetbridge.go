@@ -179,11 +179,24 @@ func Start(dir string, hostname string) (retErr error) {
 		hostname = "mikuchin-android"
 	}
 	stateDir = filepath.Join(dir, "tsnet-node")
-	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		lastErr = err.Error()
-		mu.Unlock()
-		return err
+	logsDir := filepath.Join(stateDir, "logs")
+	cacheDir := filepath.Join(stateDir, "cache")
+	tmpDir := filepath.Join(stateDir, "tmp")
+	for _, d := range []string{stateDir, logsDir, cacheDir, tmpDir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			lastErr = err.Error()
+			mu.Unlock()
+			return err
+		}
 	}
+	// Android does not set HOME, XDG_CACHE_HOME, TMPDIR, or TS_LOGS_DIR by default,
+	// which causes tailscale.com/logpolicy.LogsDir to panic with "no safe place found to store log state".
+	_ = os.Setenv("TS_LOGS_DIR", logsDir)
+	_ = os.Setenv("HOME", stateDir)
+	_ = os.Setenv("XDG_CACHE_HOME", cacheDir)
+	_ = os.Setenv("XDG_CONFIG_HOME", stateDir)
+	_ = os.Setenv("TMPDIR", tmpDir)
+
 	nodeHostname = hostname
 	if proxyToken == "" {
 		proxyToken = generateToken()
@@ -197,6 +210,7 @@ func Start(dir string, hostname string) (retErr error) {
 		Hostname:  nodeHostname,
 		Ephemeral: false,
 		Logf:      sanitizedLogf,
+		UserLogf:  sanitizedLogf,
 	}
 
 	if err := s.Start(); err != nil {
@@ -270,32 +284,45 @@ func StartLogin() (res string) {
 			res = GetStatusJSON()
 		}
 	}()
-	mu.Lock()
-	s := srv
-	isRunning := running
-	mu.Unlock()
-	if !isRunning || s == nil {
-		return GetStatusJSON()
-	}
-	lc, err := s.LocalClient()
-	if err != nil {
-		mu.Lock()
-		lastErr = err.Error()
-		mu.Unlock()
-		return GetStatusJSON()
-	}
 	go func() {
 		defer func() { _ = recover() }()
+		// Wait if Start() is currently in progress.
+		startMu.Lock()
+		startMu.Unlock()
+
+		mu.Lock()
+		s := srv
+		isRunning := running
+		mu.Unlock()
+		if !isRunning || s == nil {
+			return
+		}
+		lc, err := s.LocalClient()
+		if err != nil {
+			mu.Lock()
+			lastErr = err.Error()
+			mu.Unlock()
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		st, err := lc.StatusWithoutPeers(ctx)
 		if err == nil && st.BackendState == "Running" {
 			return
 		}
-		_ = lc.Start(ctx, ipn.Options{})
+		if err == nil && st.AuthURL != "" {
+			mu.Lock()
+			lastAuthURL = st.AuthURL
+			mu.Unlock()
+		}
+		_, _ = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+			WantRunningSet: true,
+			LoggedOutSet:   true,
+			Prefs:          ipn.Prefs{WantRunning: true, LoggedOut: false},
+		})
 		_ = lc.StartLoginInteractive(ctx)
-		for i := 0; i < 30; i++ {
-			time.Sleep(400 * time.Millisecond)
+		for i := 0; i < 40; i++ {
+			time.Sleep(350 * time.Millisecond)
 			st, err := lc.StatusWithoutPeers(ctx)
 			if err == nil {
 				if st.AuthURL != "" {
@@ -507,7 +534,11 @@ func Reconnect() (retErr error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	return lc.Start(ctx, ipn.Options{})
+	_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		WantRunningSet: true,
+		Prefs:          ipn.Prefs{WantRunning: true},
+	})
+	return err
 }
 
 // Stop shuts down local proxies and the tsnet server.

@@ -145,6 +145,14 @@
   .btn-secondary:disabled {
     opacity: 0.55;
   }
+  .mikuchin-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .mikuchin-fields.hidden {
+    display: none;
+  }
   .row {
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr);
@@ -218,30 +226,32 @@
       <div class="ts-head">
         <span class="ts-status">
           <span class="ts-dot" id="ts-dot"></span>
-          <span id="ts-state-text">未连接</span>
+          <span id="ts-state-text">等待授权</span>
         </span>
         <span class="ts-meta" id="ts-ip-text">mikuchin-android</span>
       </div>
-      <div class="ts-meta" id="ts-hint">首次使用需登录 Tailscale 并确保节点 mikuchin-android 已获 ACL 授权</div>
+      <div class="ts-meta" id="ts-hint">请先点击下方按钮跳转网页完成 Tailscale 授权登录</div>
       <div class="ts-actions">
-        <button type="button" class="btn-secondary accent" id="ts-login-btn">Tailscale 登录</button>
-        <button type="button" class="btn-secondary" id="ts-auth-btn" style="display:none">打开授权页</button>
-        <button type="button" class="btn-secondary" id="ts-reconnect-btn">重连</button>
-        <button type="button" class="btn-secondary" id="ts-logout-btn">退出</button>
+        <button type="button" class="btn-secondary accent" id="ts-login-btn">Tailscale 网页授权登录</button>
+        <button type="button" class="btn-secondary" id="ts-auth-btn" style="display:none">打开授权网页</button>
+        <button type="button" class="btn-secondary" id="ts-reconnect-btn" style="display:none">重连</button>
+        <button type="button" class="btn-secondary" id="ts-logout-btn" style="display:none">退出</button>
       </div>
     </div>
 
-    <label class="row" for="endpoint">
-      <span class="label">接口</span>
-      <input class="input" id="endpoint" type="text" inputmode="url" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="100.96.190.44:15239">
-    </label>
-    <label class="row" for="key">
-      <span class="label">key</span>
-      <input class="input" id="key" type="password" autocomplete="off">
-    </label>
-    <div class="actions">
-      <span class="error" id="error" role="alert"></span>
-      <button type="submit" class="submit" id="submit">连接</button>
+    <div class="mikuchin-fields" id="mikuchin-fields">
+      <label class="row" for="endpoint">
+        <span class="label">接口</span>
+        <input class="input" id="endpoint" type="text" inputmode="url" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="100.96.190.44:15239">
+      </label>
+      <label class="row" for="key">
+        <span class="label">key</span>
+        <input class="input" id="key" type="password" autocomplete="off">
+      </label>
+      <div class="actions">
+        <span class="error" id="error" role="alert"></span>
+        <button type="submit" class="submit" id="submit">连接</button>
+      </div>
     </div>
   </form>
   <div class="spacer"></div>
@@ -251,6 +261,7 @@
   const tabDirect = document.getElementById("tab-direct");
   const tabTailscale = document.getElementById("tab-tailscale");
   const tsBox = document.getElementById("ts-box");
+  const mikuchinFields = document.getElementById("mikuchin-fields");
   const tsDot = document.getElementById("ts-dot");
   const tsStateText = document.getElementById("ts-state-text");
   const tsIpText = document.getElementById("ts-ip-text");
@@ -268,6 +279,14 @@
   let lastAuthUrl = "";
   let tsRunning = false;
 
+  function syncFieldsVisibility() {
+    if (currentMode === "direct") {
+      mikuchinFields.classList.remove("hidden");
+    } else {
+      mikuchinFields.classList.toggle("hidden", !tsRunning);
+    }
+  }
+
   function applyMode(mode, notifyBridge = true) {
     currentMode = mode === "tailscale" ? "tailscale" : "direct";
     tabDirect.classList.toggle("active", currentMode === "direct");
@@ -277,6 +296,7 @@
     if (currentMode === "tailscale" && !endpointEl.value.trim()) {
       endpointEl.value = "100.96.190.44:15239";
     }
+    syncFieldsVisibility();
     if (notifyBridge && window.MikuchinAndroid && window.MikuchinAndroid.setConnectionMode) {
       window.MikuchinAndroid.setConnectionMode(currentMode);
     }
@@ -292,42 +312,53 @@
     const state = st.state || "Stopped";
     lastAuthUrl = st.authUrl || "";
     tsRunning = state === "Running";
+    syncFieldsVisibility();
 
     tsDot.className = "ts-dot";
     if (state === "Running") {
       tsDot.classList.add("running");
-      tsStateText.textContent = "已连接";
+      tsStateText.textContent = "已授权连接";
       tsIpText.textContent = (st.hostname || "mikuchin-android") + (st.tailscaleIp ? " · " + st.tailscaleIp : "");
-      tsHint.textContent = "Tailnet 已就绪，可验证接口并连接 Mikuchin";
+      tsHint.textContent = "Tailnet 已就绪，请在下方输入接口与 key 连接 Mikuchin";
       tsLoginBtn.style.display = "none";
       tsAuthBtn.style.display = "none";
+      tsReconnectBtn.style.display = "inline-block";
+      tsLogoutBtn.style.display = "inline-block";
     } else if (state === "NeedsLogin" || lastAuthUrl) {
       tsDot.classList.add("wait");
-      tsStateText.textContent = "等待授权";
+      tsStateText.textContent = "等待网页授权";
       tsIpText.textContent = st.hostname || "mikuchin-android";
-      tsHint.textContent = "请点击「打开授权页」完成 Tailscale 网页登录授权";
+      tsHint.textContent = "请点击下方按钮打开 Tailscale 网页完成登录与设备授权";
       tsLoginBtn.style.display = "inline-block";
       tsAuthBtn.style.display = lastAuthUrl ? "inline-block" : "none";
+      tsReconnectBtn.style.display = "none";
+      tsLogoutBtn.style.display = "none";
     } else if (state === "Starting") {
       tsDot.classList.add("wait");
-      tsStateText.textContent = "连接中...";
+      tsStateText.textContent = "正在初始化...";
       tsIpText.textContent = st.hostname || "mikuchin-android";
-      tsHint.textContent = "正在启动内置用户态 Tailscale 节点...";
+      tsHint.textContent = "正在准备 Tailscale 节点并获取网页授权链接...";
       tsLoginBtn.style.display = "inline-block";
       tsAuthBtn.style.display = "none";
+      tsReconnectBtn.style.display = "none";
+      tsLogoutBtn.style.display = "none";
     } else if (state === "Error") {
       tsDot.classList.add("err");
-      tsStateText.textContent = "连接失败";
+      tsStateText.textContent = "连接异常";
       tsIpText.textContent = st.hostname || "mikuchin-android";
-      tsHint.textContent = st.error || "Tailscale 节点异常，请重试";
+      tsHint.textContent = st.error || "Tailscale 节点初始化失败，请重试";
       tsLoginBtn.style.display = "inline-block";
       tsAuthBtn.style.display = "none";
+      tsReconnectBtn.style.display = "inline-block";
+      tsLogoutBtn.style.display = "none";
     } else {
-      tsStateText.textContent = "未连接";
+      tsStateText.textContent = "未授权";
       tsIpText.textContent = st.hostname || "mikuchin-android";
-      tsHint.textContent = "首次使用需登录 Tailscale 并确保节点 mikuchin-android 已获 ACL 授权";
+      tsHint.textContent = "请先点击下方按钮跳转网页完成 Tailscale 授权登录";
       tsLoginBtn.style.display = "inline-block";
       tsAuthBtn.style.display = "none";
+      tsReconnectBtn.style.display = "none";
+      tsLogoutBtn.style.display = "none";
     }
   }
 
@@ -341,7 +372,12 @@
 
   tsLoginBtn.onclick = () => {
     errorEl.textContent = "";
-    tsStateText.textContent = "获取授权...";
+    if (lastAuthUrl && window.MikuchinAndroid && window.MikuchinAndroid.openAuthUrl) {
+      window.MikuchinAndroid.openAuthUrl(lastAuthUrl);
+      return;
+    }
+    tsStateText.textContent = "正在获取授权网页...";
+    tsHint.textContent = "获取成功后将自动跳转浏览器完成 Tailscale 授权登录...";
     if (window.MikuchinAndroid && window.MikuchinAndroid.startTailscaleLogin) {
       renderTailscaleStatus(window.MikuchinAndroid.startTailscaleLogin());
     }
