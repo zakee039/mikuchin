@@ -10,7 +10,7 @@
 
 **Independent versions:** main app `0.2.5` · Windows launcher `0.2.4` · Android client `0.2.4` (versionCode 204). Only the main app changes in this release; the launcher and APK binaries are unchanged.
 
-[Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+[Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
 [**简体中文**](README.md) · [**日本語**](README.ja-JP.md) · [**English**](README.en-US.md)
 
@@ -69,7 +69,7 @@ mikuchin/
 ├── character/              # Character cards and reference artwork
 ├── chat/                   # Sessions, generated images and KV snapshots
 ├── config/                 # Local configuration (Git-ignored)
-├── docs/                   # Architecture, specifications and release notes
+├── docs/                   # Official website (GitHub Pages: mikuchin.zakee.fun)
 ├── frontend/
 │   ├── android/            # Kotlin / WebView / tsnet client
 │   ├── launcher/           # Windows Tauri 2 manager
@@ -80,7 +80,7 @@ mikuchin/
 
 ## 📦 Download and build
 
-Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; configure inference separately using the [architecture overview](docs/ARCHITECTURE.md) and [image-model profiles](docs/IMAGE_MODEL_PROFILES.md).
+Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; prepare your local model files and register the configuration in the launcher.
 
 ```bash
 git clone --recurse-submodules https://github.com/zakee039/mikuchin.git

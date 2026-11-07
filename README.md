@@ -10,7 +10,7 @@
 
 **独立版本：**主程序 `0.2.5` · Windows 启动器 `0.2.4` · Android 客户端 `0.2.4`（versionCode 204）。本次只更新主程序，启动器与 APK 沿用原版构建。
 
-[个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+[产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
 [**简体中文**](README.md) · [**日本語**](README.ja-JP.md) · [**English**](README.en-US.md)
 
@@ -91,7 +91,7 @@ mikuchin/
 ├── character/              # 独立于模型的角色卡 SQLite 数据库与角色参考图存储
 ├── chat/                   # 本地运行时会话数据库、生成图片与模型 KV 快照 (Git 忽略)
 ├── config/                 # 本机部署配置与活跃模型设置 (Git 忽略)
-├── docs/                   # 架构说明、各特性设计规范与版本发布记录
+├── docs/                   # 产品宣传官网 (GitHub Pages: mikuchin.zakee.fun)
 ├── frontend/
 │   ├── android/            # Android 原生客户端工程 (Kotlin + WebView + Go tsnetbridge)
 │   ├── launcher/           # Windows 原生桌面管理器与安装包工程 (Tauri 2 + TypeScript + Rust)
@@ -126,7 +126,7 @@ powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 
 ## 📦 下载安装
 
-前往 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 获取 Windows 安装包与 Android APK。**Windows 安装包不包含模型权重**；请按 [架构说明](docs/ARCHITECTURE.md) 和 [模型配置文档](docs/IMAGE_MODEL_PROFILES.md) 配置本机模型与推理服务。
+前往 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 获取 Windows 安装包与 Android APK。**Windows 安装包不包含模型权重**；请在本机准备模型文件并通过启动器注册配置文件。
 
 Android 提供「直接连接」和「Tailscale」两种模式。Tailscale 需先完成浏览器授权、在 Tailnet ACL/Grants 中允许 APK 节点访问后端，且目标机器防火墙需允许 API 端口。**Android 客户端不负责在手机上执行本地模型推理**，它连接你的 Mikuchin 服务。
 

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikuchin · Miku亲 — 住在你电脑里的 AI 伴侣</title>
+<meta name="description" content="Mikuchin 是一个完全本地运行的个人 AI 伴侣：对话、作画、角色扮演，数据始终留在你自己的电脑上。">
+<meta name="theme-color" content="#39c5bb">
+<link rel="icon" href="assets/icon.png">
+<meta property="og:title" content="Mikuchin — 住在你电脑里的 AI 伴侣">
+<meta property="og:description" content="本地推理 · 角色卡 · 图像工作室 · Windows 托盘管理器">
+<meta property="og:image" content="assets/half.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <div class="wrap nav__inner">
+    <a class="brand" href="#top" aria-label="Mikuchin 首页">
+      <img src="assets/icon.png" alt="" width="34" height="34">
+      <span>Mikuchin</span>
+    </a>
+    <nav class="nav__links" aria-label="主导航">
+      <a href="#showcase">界面</a>
+      <a href="#launcher">启动器</a>
+      <a href="#features">能力</a>
+      <a href="#how">原理</a>
+    </nav>
+    <a class="btn btn--small btn--ink" href="#start">立即获取</a>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="hero__bg" aria-hidden="true">
+    <div class="staff"></div>
+    <span class="big-01">01</span>
+  </div>
+
+  <div class="wrap hero__grid">
+    <div class="hero__copy">
+      <p class="eyebrow reveal"><span class="dot"></span>Miku亲 · v0.2.5 · Windows / Android</p>
+      <h1 class="hero__title reveal">
+        她就住在<br>
+        <em>你的显卡里</em>。
+      </h1>
+      <p class="hero__lead reveal">
+        Mikuchin（Miku亲）是一个本地多模态 AI 伴侣与图像创作工作台。聊天、作画、角色扮演，
+        都由你自己的 GPU 完成——模型、对话、角色卡和作品，始终由你自己的设备保管。
+      </p>
+      <div class="hero__cta reveal">
+        <a class="btn btn--miku" href="#start">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+          下载 Windows 版
+        </a>
+        <a class="btn btn--ghost" href="#showcase">看看界面 →</a>
+      </div>
+      <ul class="hero__facts reveal">
+        <li><b>8</b><span>步极速生图</span></li>
+        <li><b>4</b><span>生图模型</span></li>
+        <li><b>3</b><span>界面语言</span></li>
+      </ul>
+    </div>
+
+    <div class="hero__stage reveal">
+      <div class="disc" aria-hidden="true"></div>
+      <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+        <defs><path id="ringPath" d="M100,100 m-88,0 a88,88 0 1,1 176,0 a88,88 0 1,1 -176,0"/></defs>
+        <text><textPath href="#ringPath">MIKUCHIN · LOCAL AI COMPANION · POWERED BY POLYSTRATA · </textPath></text>
+      </svg>
+      <button class="miku" id="miku" type="button" aria-label="Mikuchin">
+        <img src="assets/half.png" alt="Mikuchin 形象：比心的 Miku" width="1254" height="1254">
+      </button>
+
+      <div class="bubble bubble--a float" aria-hidden="true">
+        <span class="bubble__who">Miku</span>
+        晚上好呀～今天的论文写到哪啦？✨
+      </div>
+      <div class="chip chip--think float" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>
+        Thought for 17.8 s
+      </div>
+      <div class="chip chip--tool float" aria-hidden="true">
+        <code>generate_image</code><span class="ok">● Done</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee__track">
+      <span>本地推理</span><i>✦</i><span>角色卡</span><i>✦</i><span>世界书</span><i>✦</i><span>图像工作室</span><i>✦</i>
+      <span>KV 持久化</span><i>✦</i><span>中文 · English · 日本語</span><i>✦</i><span>Windows 托盘</span><i>✦</i><span>移动端适配</span><i>✦</i>
+      <span>本地推理</span><i>✦</i><span>角色卡</span><i>✦</i><span>世界书</span><i>✦</i><span>图像工作室</span><i>✦</i>
+      <span>KV 持久化</span><i>✦</i><span>中文 · English · 日本語</span><i>✦</i><span>Windows 托盘</span><i>✦</i><span>移动端适配</span><i>✦</i>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE (web screenshots) ============ -->
+<section class="section" id="showcase">
+  <div class="wrap">
+    <div class="section__head section__head--row reveal">
+      <span class="index">01</span>
+      <h2>一个浏览器标签页，装下整个陪伴。</h2>
+      <p>聊天、图像、角色——同一套 Web 界面，桌面和手机都能打开。</p>
+    </div>
+
+    <div class="showcase reveal">
+      <div class="showcase__tabs" role="tablist" aria-label="界面截图">
+        <button class="stab is-active" role="tab" aria-selected="true" data-shot="0">
+          <span class="stab__no">01</span>
+          <span class="stab__body">
+            <strong>聊天</strong>
+            <small>会思考、会害羞、会在对话里直接为你画一张图。思考过程可折叠，工具调用一目了然。</small>
+          </span>
+          <span class="stab__bar"><i></i></span>
+        </button>
+        <button class="stab" role="tab" aria-selected="false" data-shot="1">
+          <span class="stab__no">02</span>
+          <span class="stab__body">
+            <strong>图像工作室</strong>
+            <small>自然语言一键解析为提示词，Qwen Image / SDXL 自由切换，支持 LoRA 与动漫 4 倍超分。</small>
+          </span>
+          <span class="stab__bar"><i></i></span>
+        </button>
+        <button class="stab" role="tab" aria-selected="false" data-shot="2">
+          <span class="stab__no">03</span>
+          <span class="stab__body">
+            <strong>角色配置</strong>
+            <small>角色卡、世界书、工作流三件套。身份与性格独立设定，JSON 一键导入导出。</small>
+          </span>
+          <span class="stab__bar"><i></i></span>
+        </button>
+      </div>
+
+      <figure class="browser">
+        <div class="browser__bar">
+          <span class="lights"><i></i><i></i><i></i></span>
+          <span class="browser__url">127.0.0.1 · Mikuchin</span>
+          <span class="browser__zoom">点击放大</span>
+        </div>
+        <div class="browser__view">
+          <img class="shot is-active" src="screenshots/web-chat.png" alt="Mikuchin 聊天界面截图" data-lightbox width="1910" height="865">
+          <img class="shot" src="screenshots/web-image.png" alt="Mikuchin 图像工作室截图" data-lightbox width="1910" height="865" loading="lazy">
+          <img class="shot" src="screenshots/web-character.png" alt="Mikuchin 角色配置截图" data-lightbox width="1910" height="865" loading="lazy">
+        </div>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LAUNCHER ============ -->
+<section class="section section--dark" id="launcher">
+  <div class="wrap">
+    <div class="section__head section__head--light section__head--row reveal">
+      <span class="index">02</span>
+      <h2>藏在托盘里的小小控制台。</h2>
+      <p>基于 Tauri 2 + Rust 的原生 Windows 管理器。点一下托盘图标唤出，关闭即回到托盘，不占任务栏。</p>
+    </div>
+
+    <div class="phones">
+      <figure class="appwin reveal">
+        <div class="appwin__view">
+          <img src="screenshots/launcher-1.png" alt="启动器截图 1" data-lightbox data-slot="launcher-1.png" width="662" height="1020">
+        </div>
+        <figcaption><b>概览</b>模型状态、解码 / 预填充速度、显存与缓存命中率一屏看完。</figcaption>
+      </figure>
+      <figure class="appwin appwin--mid reveal">
+        <div class="appwin__view">
+          <img src="screenshots/launcher-2.png" alt="启动器截图 2" data-lightbox data-slot="launcher-2.png" width="662" height="1020">
+        </div>
+        <figcaption><b>API 与隧道</b>端口、API Key、局域网与 Cloudflare Tunnel，每项一行搞定。</figcaption>
+      </figure>
+      <figure class="appwin reveal">
+        <div class="appwin__view">
+          <img src="screenshots/launcher-3.png" alt="启动器截图 3" data-lightbox data-slot="launcher-3.png" width="662" height="1020">
+        </div>
+        <figcaption><b>设置</b>开机自启、启动后自动加载模型、服务守护、全局语言与空闲卸载时间。</figcaption>
+      </figure>
+    </div>
+
+    <ul class="perks reveal">
+      <li><b>一键加载 / 卸载</b>卸载时保存 KV 并释放显存，API 进程保持在线。</li>
+      <li><b>空闲自动卸载</b>0–1440 分钟可调，不用时让出显存，下一条消息到来自动唤醒。</li>
+      <li><b>配置文件切换</b>注册多个模型配置，安全卸载后无缝切换。</li>
+      <li><b>崩溃看门狗</b>后端异常退出时自动拉起，运行日志随时可查。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ FEATURES ============ -->
+<section class="section section--tint" id="features">
+  <div class="wrap">
+    <div class="section__head section__head--row reveal">
+      <span class="index">03</span>
+      <h2>可爱是外表，硬核是内在。</h2>
+      <p>底层是独立维护的 PolyStrata 推理引擎，上层是为“陪伴”而打磨的每一个细节。</p>
+    </div>
+
+    <div class="grid8">
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7V5m4 2V5m4 2V5m-8 14v-2m4 2v-2m4 2v-2"/></svg></div>
+        <h3>完全本地推理</h3>
+        <p>PolyStrata 引擎驱动，模型权重、会话库、KV 快照与生成图片都留在你自己的电脑上。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg></div>
+        <h3>每个模型独立 KV</h3>
+        <p>切换模型或空闲卸载时自动保存上下文缓存，回来接着聊，不用重新“读”一遍历史。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg></div>
+        <h3>聊着聊着就画了</h3>
+        <p>对话内置生图工具，可参考角色立绘生成专属插画；也能接入外部 MCP 工具服务。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div>
+        <h3>角色卡 · 世界书</h3>
+        <p>兼容 SillyTavern <code>chara_card_v2</code> 导入导出；用户身份可不用、继承全局或按角色独立。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+        <h3>实时监控</h3>
+        <p>显存、内存、Prefill / Decode 速度、Token 统计与 KV 命中率，推理状态一目了然。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><path d="M3 5h12M9 3v2m-4 0c1 4 4 7 8 8m-2-8c-1 4-4 7-8 9"/><path d="m13 21 4-9 4 9m-7-2h6"/></svg></div>
+        <h3>中 / EN / 日</h3>
+        <p>三语界面实时切换，Web、Windows 管理器与托盘菜单同步更新，绝不改动你的聊天内容。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></div>
+        <h3>Android 客户端</h3>
+        <p>内置用户态 Tailscale，不占系统 VPN 槽位，出门也能连回家里的 Mikuchin。</p>
+      </article>
+
+      <article class="card reveal">
+        <div class="card__icon"><svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+        <h3>远程访问，不裸奔</h3>
+        <p>API Key 在 Windows 用 DPAPI、在 Android 用 Keystore 加密；集成 Cloudflare Tunnel 监控。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HOW ============ -->
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="section__head section__head--row reveal">
+      <span class="index">04</span>
+      <h2>算力在你家，入口跟着你走。</h2>
+      <p>推理只发生在你的电脑上；手机通过 Tailscale 或 Cloudflare Tunnel 连回来，API Key 全程把关。</p>
+    </div>
+
+    <ol class="flow reveal">
+      <li class="flow__node">
+        <span class="flow__k">你</span>
+        <strong>浏览器 / Android</strong>
+        <small>局域网 · Tailnet · Tunnel</small>
+      </li>
+      <li class="flow__node">
+        <span class="flow__k">UI</span>
+        <strong>Mikuchin 服务</strong>
+        <small>会话 · 角色 · 附件 · 图像</small>
+      </li>
+      <li class="flow__node flow__node--accent">
+        <span class="flow__k">⚙</span>
+        <strong>PolyStrata 引擎</strong>
+        <small>推理 · KV 缓存 · 工具调用</small>
+      </li>
+      <li class="flow__node">
+        <span class="flow__k">GPU</span>
+        <strong>你的显卡</strong>
+        <small>权重与计算均在本地</small>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ START / CTA ============ -->
+<section class="cta" id="start">
+  <div class="wrap cta__grid">
+    <div class="cta__copy reveal">
+      <span class="index index--light">05</span>
+      <h2>三步，<br>把她接回家。</h2>
+      <ol class="steps">
+        <li><b>下载</b>Windows 安装包（Win 10 / 11），手机可另装 Android APK。</li>
+        <li><b>准备</b>模型权重并注册配置文件——安装包不含模型。</li>
+        <li><b>打开聊天</b>，说一声“晚上好呀”。</li>
+      </ol>
+      <div class="hero__cta">
+        <a class="btn btn--light" href="https://github.com/zakee039/mikuchin/releases/latest" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+          立即下载
+        </a>
+        <a class="btn btn--outline-light" href="https://github.com/zakee039/mikuchin" target="_blank" rel="noopener">GitHub 源码</a>
+      </div>
+    </div>
+    <div class="cta__art reveal" aria-hidden="true">
+      <img src="assets/full.png" alt="" width="1024" height="1536" loading="lazy">
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="brand brand--footer">
+      <img src="assets/icon.png" alt="" width="28" height="28"><span>Mikuchin</span>
+    </div>
+    <p>主程序 v0.2.5 · Windows 启动器 v0.2.4 · Android v0.2.4 · <a href="https://zakee.fun" target="_blank" rel="noopener">个人主页</a> · <a href="https://ifdian.net/a/zakee/plan" target="_blank" rel="noopener">请作者喝杯咖啡</a><br>PolyStrata 推理引擎的来源与许可证以其仓库声明为准。<br>
+      初音ミク / Hatsune Miku 为 Crypton Future Media, INC. 的角色；本项目为个人作品。</p>
+  </div>
+</footer>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lightbox__close" type="button" aria-label="关闭">×</button>
+  <img alt="">
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

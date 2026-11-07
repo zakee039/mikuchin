@@ -10,7 +10,7 @@
 
 **個別バージョン：**メインアプリ `0.2.5` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
 
-[個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
+[公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
 [**简体中文**](README.md) · [**日本語**](README.ja-JP.md) · [**English**](README.en-US.md)
 
@@ -69,7 +69,7 @@ mikuchin/
 ├── character/              # キャラクターカード・参照画像
 ├── chat/                   # 会話履歴・生成画像・KV スナップショット
 ├── config/                 # ローカル設定（Git 管理対象外）
-├── docs/                   # アーキテクチャ・設計・変更履歴
+├── docs/                   # 公式サイト (GitHub Pages: mikuchin.zakee.fun)
 ├── frontend/
 │   ├── android/            # Kotlin / WebView / tsnet クライアント
 │   ├── launcher/           # Windows Tauri 2 マネージャー
@@ -80,7 +80,7 @@ mikuchin/
 
 ## 📦 ダウンロードとビルド
 
-[GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。必要に応じて [アーキテクチャ](docs/ARCHITECTURE.md) と [画像モデル設定](docs/IMAGE_MODEL_PROFILES.md) を参照してください。
+[GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。ローカルのモデルファイルを準備し、ランチャーから設定ファイルを登録してください。
 
 ```bash
 git clone --recurse-submodules https://github.com/zakee039/mikuchin.git

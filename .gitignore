@@ -29,3 +29,15 @@
 .venv/
 
 /config/*.bak
+
+# Local promo media and scratch folders (do not upload to GitHub)
+/Adobe Premiere Pro Audio Previews/
+/Adobe Premiere Pro Auto-Save/
+/output/
+/website/
+/启动器界面*.png
+*.mp4
+*.prin
+*.prproj
+*.pkf
+*.wav
