@@ -78,6 +78,28 @@ mikuchin/
 └── scripts/                # Build and maintenance scripts
 ```
 
+## 📥 Model Preparation & Download Guide
+
+> 💡 **Easiest way to deploy**: Core inference is powered by **PolyStrata**. Simply **copy this repository to your AI assistant and let her deploy and configure it for you~**
+
+The Windows installer and source repository do not include model weights. Prepare the following GGUF / Safetensors files in your local models directory and register the profile in the launcher:
+
+### 1. Chat & Multimodal Vision LLM (2 files)
+Used for roleplay chat, image understanding, and post-generation visual feedback:
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_M.gguf` (4-bit quantized main LLM)
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-mmproj-BF16.gguf` (BF16 multimodal vision projector `mmproj`)
+- **Download**: Hugging Face [`llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF`](https://huggingface.co/llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF)
+
+### 2. Image Generation Suite (Qwen-Image 2.1, 5 files)
+Used for in-chat drawing and the Image Studio:
+- `Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` — 8-step Turbo DiT denoiser ([`AtomicChat/Qwen-Image-2.1-Turbo-GGUF`](https://huggingface.co/AtomicChat/Qwen-Image-2.1-Turbo-GGUF))
+- `qwen_image_2.1-Q4_K.gguf` — Base multi-step DiT denoiser ([`leejet/Qwen-Image-2.1-GGUF`](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF))
+- `Qwen3VL-8B-Instruct-Q4_K_M.gguf` — Text encoder ([`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF))
+- `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — Vision projector for native `--ref-image` editing ([`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF))
+- `qwen_image_2.1_vae_bf16.safetensors` — Shared BF16 VAE ([`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) under `vae/`)
+
+> You can also run PolyStrata's helper script `python backend/polystrata/tools/image/install.py --models-dir models` to build the image backend and fetch core weights, or use standard SDXL checkpoints (`Animagine XL 4.0 Opt`, `SDXL Base 1.0`).
+
 ## 📦 Download and build
 
 Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; prepare your local model files and register the configuration in the launcher.

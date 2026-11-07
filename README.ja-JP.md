@@ -78,6 +78,28 @@ mikuchin/
 └── scripts/                # ビルド・メンテナンス用スクリプト
 ```
 
+## 📥 モデルの準備とダウンロード案内
+
+> 💡 **最も簡単なデプロイ方法**：コア推論エンジンには **PolyStrata** を使用しています。手動設定が面倒な場合は、**このリポジトリをあなたの AI アシスタントに丸ごと渡して、デプロイしてもらいましょう〜**
+
+Windows インストーラーおよびリポジトリにはモデルの重みファイルが含まれていません。以下の GGUF / Safetensors ファイルを準備し、ランチャーから設定ファイルを登録してください：
+
+### 1. 会話・マルチモーダル視覚メインモデル（Chat & Vision LLM、計 2 ファイル）
+日常会話、ロールプレイ、画像認識、および画像生成後のキャラクター視覚フィードバックに使用します：
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_M.gguf`（メイン言語モデル 4-bit 量子化重み）
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-mmproj-BF16.gguf`（BF16 マルチモーダル視覚プロジェクター `mmproj`）
+- **入手先**：Hugging Face [`llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF`](https://huggingface.co/llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF)
+
+### 2. 画像生成モデルスイート（Qwen-Image 2.1 コンポーネント、計 5 ファイル）
+チャット内描画および「画像スタジオ（Image Studio）」で使用します：
+- `Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` — 8 ステップ高速生成 DiT（[`AtomicChat/Qwen-Image-2.1-Turbo-GGUF`](https://huggingface.co/AtomicChat/Qwen-Image-2.1-Turbo-GGUF)）
+- `qwen_image_2.1-Q4_K.gguf` — 標準マルチステップ生成 DiT（[`leejet/Qwen-Image-2.1-GGUF`](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF)）
+- `Qwen3VL-8B-Instruct-Q4_K_M.gguf` — テキストエンコーダー（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
+- `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — ネイティブ参照画像編集（`--ref-image`）用視覚プロジェクター（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
+- `qwen_image_2.1_vae_bf16.safetensors` — 共有 BF16 VAE デコーダー（[`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) `vae/` ディレクトリ）
+
+> PolyStrata 同梱スクリプト `python backend/polystrata/tools/image/install.py --models-dir models` での自動セットアップや、標準 SDXL チェックポイント（`Animagine XL 4.0 Opt`、`SDXL Base 1.0`）にも対応しています。
+
 ## 📦 ダウンロードとビルド
 
 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。ローカルのモデルファイルを準備し、ランチャーから設定ファイルを登録してください。

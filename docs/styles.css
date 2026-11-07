@@ -199,12 +199,19 @@ code{font-family:var(--mono);font-size:.88em;background:rgba(57,197,187,.12);col
 .cta{position:relative;background:linear-gradient(135deg,var(--miku-deep),var(--miku) 60%,#6fe0d6);color:#fff;overflow:hidden}
 .cta::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.12) 0 1px,transparent 1px 26px);mask:linear-gradient(180deg,transparent,#000 40%,transparent)}
 .cta__grid{position:relative;display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:end}
-.cta__copy{padding:110px 0}
-.steps{counter-reset:s;list-style:none;padding:0;margin:32px 0 36px;display:grid;gap:14px;max-width:540px}
-.steps li{counter-increment:s;position:relative;padding-left:40px;font-size:18px;color:rgba(255,255,255,.92)}
+.cta__copy{padding:68px 0}
+.steps{counter-reset:s;list-style:none;padding:0;margin:22px 0 20px;display:grid;gap:12px;max-width:620px}
+.steps li{counter-increment:s;position:relative;padding-left:40px;font-size:17.5px;color:rgba(255,255,255,.94);line-height:1.55}
 .steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.25em;font-family:var(--mono);font-weight:700;font-size:15px;opacity:.78}
 .steps b{margin-right:4px}
 .steps code{background:rgba(255,255,255,.2);color:#fff}
+.models-card{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 24px;padding:14px 16px;border-radius:16px;background:rgba(8,30,28,.26);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(8px);max-width:660px}
+.models-card__head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:13.5px}
+.models-card__head strong{color:#fff;font-weight:700}
+.models-card__head a{color:#d8fffb;text-decoration:none;font-family:var(--mono);font-size:12px;border-bottom:1px dashed rgba(255,255,255,.45)}
+.models-card__head a:hover{color:#fff;border-bottom-style:solid}
+.models-card ul{list-style:none;padding:0;margin:0;display:grid;gap:4px;font-size:12.5px;color:rgba(255,255,255,.88);line-height:1.45}
+.models-card code{background:rgba(255,255,255,.15);color:#fff;padding:1px 6px;border-radius:5px;font-size:11.5px;word-break:break-all}
 .cta__art{align-self:end;height:100%;display:flex;align-items:flex-end;justify-content:center}
 .cta__art img{max-height:600px;width:auto;margin-bottom:-60px;filter:drop-shadow(0 30px 40px rgba(0,40,36,.35))}
 
@@ -266,6 +273,7 @@ code{font-family:var(--mono);font-size:.88em;background:rgba(57,197,187,.12);col
   .phones{grid-template-columns:1fr;max-width:340px}
   .appwin--mid,.appwin--mid.reveal.is-visible{transform:none}
   .perks{grid-template-columns:1fr}
+  .models-card{grid-template-columns:1fr}
   .flow{grid-template-columns:1fr 1fr;row-gap:32px}
   .flow::before{display:none}
   .footer p{text-align:left}

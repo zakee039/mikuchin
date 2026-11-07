@@ -124,6 +124,28 @@ powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 # 编译产物输出至：frontend/android/Mikuchin.apk
 ```
 
+## 📥 模型准备与下载说明
+
+> 💡 **最简单的部署方法**：核心推理部署使用 **PolyStrata**。如果你不想手动折腾配置，**直接将本仓库复制给你的 AI 助手，让她帮你拉取模型并完成部署～**
+
+Windows 安装包与源码仓库不包含模型权重文件，请按需准备以下 GGUF / Safetensors 模型并放入你的模型目录（如 `models/`），再通过 Windows 启动器或配置文件注册：
+
+### 1. 对话与多模态视觉主模型（Chat & Vision LLM，共 2 个文件）
+用于日常对话、角色扮演、图片理解（识图）以及画图完成后的角色视觉反馈：
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_M.gguf`（主语言模型 4-bit 量化权重）
+- `G4-MeroMero-26B-A4B-it-uncensored-heretic-mmproj-BF16.gguf`（BF16 多模态视觉投影器 `mmproj`）
+- **下载源**：Hugging Face [`llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF`](https://huggingface.co/llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF)
+
+### 2. 图像生成模型套件（Qwen-Image 2.1 生图组件，共 5 个文件）
+用于聊天内自动作画与「图像创作工作台（Image Studio）」：
+- `Qwen-Image-2.1-Turbo-AD-Q4_K.gguf` — 8 步极速生图主模型 DiT（[`AtomicChat/Qwen-Image-2.1-Turbo-GGUF`](https://huggingface.co/AtomicChat/Qwen-Image-2.1-Turbo-GGUF)）
+- `qwen_image_2.1-Q4_K.gguf` — 标准多步生图主模型 DiT（[`leejet/Qwen-Image-2.1-GGUF`](https://huggingface.co/leejet/Qwen-Image-2.1-GGUF)）
+- `Qwen3VL-8B-Instruct-Q4_K_M.gguf` — 文本编码器 Text Encoder（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
+- `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — 原生参考图编辑（`--ref-image`）视觉投影器（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
+- `qwen_image_2.1_vae_bf16.safetensors` — 共享 BF16 VAE 解码器（[`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) `vae/` 目录）
+
+> 也可使用 PolyStrata 内置脚本一键编译生图后端并拉取基础组件：`python backend/polystrata/tools/image/install.py --models-dir models`。此外，图像工作台同样兼容标准 SDXL 单文件权重（如 `Animagine XL 4.0 Opt`、`SDXL Base 1.0`）。
+
 ## 📦 下载安装
 
 前往 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 获取 Windows 安装包与 Android APK。**Windows 安装包不包含模型权重**；请在本机准备模型文件并通过启动器注册配置文件。

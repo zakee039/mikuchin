@@ -294,9 +294,32 @@
       <h2>三步，<br>把她接回家。</h2>
       <ol class="steps">
         <li><b>下载</b>Windows 安装包（Win 10 / 11），手机可另装 Android APK。</li>
-        <li><b>准备</b>模型权重并注册配置文件——安装包不含模型。</li>
+        <li><b>准备</b>模型权重并注册配置文件——核心部署使用 <code>PolyStrata</code>，<b>最简单的使用方法：将仓库复制给你的 AI，让她帮你部署～</b></li>
         <li><b>打开聊天</b>，说一声“晚上好呀”。</li>
       </ol>
+      <div class="models-card">
+        <div class="models-card__col">
+          <div class="models-card__head">
+            <strong>对话与视觉主模型（2 个文件）</strong>
+            <a href="https://huggingface.co/llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF" target="_blank" rel="noopener">Hugging Face ↗</a>
+          </div>
+          <ul>
+            <li><code>G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_M.gguf</code></li>
+            <li><code>G4-MeroMero-26B-A4B-it-uncensored-heretic-mmproj-BF16.gguf</code></li>
+          </ul>
+        </div>
+        <div class="models-card__col">
+          <div class="models-card__head">
+            <strong>Qwen-Image 2.1 生图套件（5 个文件）</strong>
+            <a href="https://github.com/zakee039/mikuchin#-模型准备与下载说明" target="_blank" rel="noopener">完整下载源 ↗</a>
+          </div>
+          <ul>
+            <li><code>Qwen-Image-2.1-Turbo-AD-Q4_K.gguf</code> · <code>qwen_image_2.1-Q4_K.gguf</code></li>
+            <li><code>Qwen3VL-8B-Instruct-Q4_K_M.gguf</code> · <code>mmproj-Qwen3VL-8B-Instruct-F16.gguf</code></li>
+            <li><code>qwen_image_2.1_vae_bf16.safetensors</code></li>
+          </ul>
+        </div>
+      </div>
       <div class="hero__cta">
         <a class="btn btn--light" href="https://github.com/zakee039/mikuchin/releases/latest" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
