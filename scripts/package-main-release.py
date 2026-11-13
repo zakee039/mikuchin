@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import re
 import subprocess
 import sys
 import zipfile
+import versioning
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist/release"
@@ -32,11 +32,10 @@ def tracked_files():
 
 
 def main() -> int:
-    versions = (ROOT / "frontend/web/versions.js").read_text(encoding="utf-8")
-    match = re.search(r'\bmain:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', versions)
-    if not match:
-        raise ValueError("Cannot read main-program version from web/versions.js")
-    version = match.group(1)
+    manifest = versioning.manifest()
+    if versioning.validate(manifest, write=False):
+        raise ValueError("Version drift: run python scripts/versioning.py sync")
+    version = manifest["components"]["main"]["version"]
     if git("status", "--porcelain").strip():
         raise ValueError(f"Refusing to archive dirty worktree: {ROOT}")
     if (ROOT / ".gitmodules").exists():

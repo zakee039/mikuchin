@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.2.7** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.7)
+**主程序 v0.2.8** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8)
 
-**独立版本：**主程序 `0.2.7` · Windows 启动器 `0.2.4` · Android 客户端 `0.2.4`（versionCode 204）。本次只更新主程序，启动器与 APK 沿用原版构建。
+**独立版本：**主程序 `0.2.8` · Windows 启动器 `0.2.8` · Android 客户端 `0.2.8`（versionCode 208）。本次三个组件均重新构建；后续仍允许独立升级，所有版本号统一记录在 versions.json。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -152,7 +152,7 @@ Windows 安装包与源码仓库不包含模型权重文件，请按需准备以
 
 Android 提供「直接连接」和「Tailscale」两种模式。Tailscale 需先完成浏览器授权、在 Tailnet ACL/Grants 中允许 APK 节点访问后端，且目标机器防火墙需允许 API 端口。**Android 客户端不负责在手机上执行本地模型推理**，它连接你的 Mikuchin 服务。
 
-v0.2.4 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+v0.2.8 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
 
 ## 🔒 安全及项目说明
 

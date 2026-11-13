@@ -2,6 +2,10 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $projDir = $PSScriptRoot
+$gradleContent = Get-Content (Join-Path $projDir "app/build.gradle.kts") -Raw -Encoding UTF8
+$versionMatch = [regex]::Match($gradleContent, 'versionName\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+if (-not $versionMatch.Success) { throw "Cannot locate Android versionName in app/build.gradle.kts" }
+$versionName = $versionMatch.Groups[1].Value
 $toolchainDir = Join-Path $projDir ".toolchain"
 New-Item -ItemType Directory -Force -Path $toolchainDir | Out-Null
 
@@ -125,7 +129,7 @@ try {
         $apkPath = Join-Path $projDir "app\build\outputs\apk\debug\app-debug.apk"
     }
     $outApk = Join-Path $projDir "Mikuchin.apk"
-    $verApk = Join-Path $projDir "Mikuchin-v0.2.4.apk"
+    $verApk = Join-Path $projDir "Mikuchin-v$versionName.apk"
     Copy-Item -Path $apkPath -Destination $outApk -Force
     Copy-Item -Path $apkPath -Destination $verApk -Force
     Write-Host ""

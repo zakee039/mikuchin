@@ -1,0 +1,26 @@
+name: Version consistency
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify canonical versions
+        run: python scripts/versioning.py check
+      - name: Run version and standalone-source tests
+        run: python -m unittest tests.test_release_versions tests.test_standalone_repo -v
+      - name: Verify tag equals main product version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG=$(python -c 'import json;print(json.load(open("versions.json"))["release"])')
+          test "refs/tags/$TAG" = "$GITHUB_REF"

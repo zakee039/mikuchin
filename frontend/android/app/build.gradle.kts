@@ -25,8 +25,8 @@ android {
         applicationId = "com.mikuchin.client"
         minSdk = 26
         targetSdk = 34
-        versionCode = 204
-        versionName = "0.2.4"
+        versionCode = 208
+        versionName = "0.2.8"
     }
 
     signingConfigs {

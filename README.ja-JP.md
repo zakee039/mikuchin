@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.2.7** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.7)
+**メインアプリ v0.2.8** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8)
 
-**個別バージョン：**メインアプリ `0.2.7` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
+**個別バージョン：**メインアプリ `0.2.8` · Windows ランチャー `0.2.8` · Android クライアント `0.2.8`（versionCode 208）。今回のリリースでは 3 種類を再ビルドしました。以降のバージョンは個別に管理し、versions.json に記録します。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -120,4 +120,4 @@ Android では「直接接続」または「Tailscale」を選択します。Tai
 
 ## 🔒 セキュリティと注意事項
 
-API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。v0.2.4 APK はリリース用署名で配布しています。以前の Android Debug 証明書で署名された APK からの上書き更新はできない場合があるため、設定を控えてから再インストールしてください。同梱エンジンのライセンスと著作権表示を参照してください。
+API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。v0.2.8 APK はリリース用署名で配布しています。以前の Android Debug 証明書で署名された APK からの上書き更新はできない場合があるため、設定を控えてから再インストールしてください。同梱エンジンのライセンスと著作権表示を参照してください。
