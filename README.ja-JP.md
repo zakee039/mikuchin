@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.2.5** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.5)
+**メインアプリ v0.2.6** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.6)
 
-**個別バージョン：**メインアプリ `0.2.5` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
+**個別バージョン：**メインアプリ `0.2.6` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 

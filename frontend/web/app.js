@@ -147,8 +147,11 @@ $("model-select").onchange = async () => {
   await loadHealth();
   await loadModels();
   if (message) { toast("error", "The model was not switched", message, 10000); return; }
+  if (sessionV1) {
+    try { await loadGlobalSampling(); } catch (e) { console.warn("Default refresh failed", e); }
+  }
   messages = [];
-  settings = {...DEFAULTS};
+  settings = {...globalSampling};
   if (sessionV1) { sessionId = makeSessionId(); store.set("session-id", sessionId); }
   saveChat();
   renderChat();
@@ -617,6 +620,7 @@ const THINKING_BUDGET_TOKENS = Object.freeze({none: 0, low: 1024, medium: 4096, 
 const thinkingBudget = (s) => s.thinking === "none" ? 0 : s.budget;
 const DEFAULTS = {thinking: "low", budget: 1024, temperature: 1.0, top_p: 0.95, top_k: 20, max: "", seed: "", show: true, esp: true, mcp: true};
 const OLD_DEFAULT_TEMPERATURE = 0.6;
+let globalSampling = {...DEFAULTS}; // server-owned defaults, shared by browsers and devices
 function samplingUntouched(s) {
   const t = +s.temperature;
   return (t === DEFAULTS.temperature || t === OLD_DEFAULT_TEMPERATURE) && +s.top_p === DEFAULTS.top_p && +s.top_k === DEFAULTS.top_k;
@@ -687,12 +691,21 @@ async function refreshCurrentSampling() {
   const record = await r.json();
   if (sessionId === id) settings = {...DEFAULTS, ...(record.sampling || {})};
 }
+async function loadGlobalSampling() {
+  const r = await fetch("v1/strata/sampling-default", {headers: headers(), cache: "no-store"});
+  if (!r.ok) throw Error("Could not load default sampling: HTTP " + r.status);
+  const data = await r.json();
+  globalSampling = {...DEFAULTS, ...(data.sampling || {})};
+  if (!messages.length) settings = {...globalSampling};
+}
 async function enableServerSessions() {
   try {
     const r = await fetch("v1/strata/sessions", {headers: headers()});
     if (r.status === 401) { toast("warn", "History needs API key", "Enter the local API key under Settings to access saved conversations.", 6500); return; }
     if (!r.ok) return;
     sessionV1 = true;
+    try { await loadGlobalSampling(); }
+    catch (e) { console.warn("Server sampling defaults unavailable", e); }
     const list = (await r.json()).sessions || [];
     $("session-sidebar").hidden = false;
     // Old browser chats deliberately aren't migrated; only server records are authoritative.
@@ -1217,8 +1230,10 @@ $("new-btn").onclick = async () => {
       // stalls; never leave a phantom session pointer with old messages.
       await Promise.race([sessionSaveChain, new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Saving the previous chat timed out")), 10000))]);
+      // Another device may have changed the default since this page was opened.
+      try { await loadGlobalSampling(); } catch (e) { console.warn("Default refresh failed", e); }
       sessionId = makeSessionId();
-      settings = {...DEFAULTS};
+      settings = {...globalSampling};
       store.set("session-id", sessionId);
       await window.polyCharacterNewSession?.();
       messages = [];
@@ -1243,7 +1258,7 @@ $("new-btn").onclick = async () => {
   if (!messages.length) return;
   const backup = messages;
   messages = [];
-  settings = {...DEFAULTS};
+  settings = {...globalSampling};
   saveChat();
   renderChat();
   toast("info", "New chat", "The last one was cleared.", 6000, {label: "Undo", run: () => { messages = backup; saveChat(); renderChat(); }});
@@ -1384,22 +1399,47 @@ for (const id of ["s-temp", "s-topp", "s-topk"]) $(id).oninput = outputs;
 $("s-show").onclick = () => $("s-show").setAttribute("aria-checked", String($("s-show").getAttribute("aria-checked") !== "true"));
 $("s-esp").onclick = () => $("s-esp").setAttribute("aria-checked", String($("s-esp").getAttribute("aria-checked") !== "true"));
 $("s-mcp").onclick = () => $("s-mcp").setAttribute("aria-checked", String($("s-mcp").getAttribute("aria-checked") !== "true"));
-$("s-reset").onclick = () => loadDrawer(DEFAULTS);
-$("s-apply").onclick = async () => {
-  if (busy) { toast("warn", "Finish the response before changing sampling"); return; }
-  if (!sessionV1 || !sessionId) { toast("error", "Chat history unavailable", "Connect to the server before saving conversation settings."); return; }
+// Both Apply and Set default must validate the exact same sampling snapshot.
+function readDrawerSampling() {
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
   const thinking = sel?.dataset.v || "low";
   const budget = thinking === "none" ? 0 : Number($("s-budget").value);
   if (!Number.isInteger(budget) || (thinking !== "none" && budget < 1) || budget > 262144) {
-    toast("error", "Invalid thinking budget", "Choose a whole number from 1 to 262144."); return;
+    throw Error("Choose a whole number from 1 to 262144 for the thinking budget.");
   }
-  const next = {thinking, budget, temperature: +$("s-temp").value, top_p: +$("s-topp").value,
+  return {thinking, budget, temperature: +$("s-temp").value, top_p: +$("s-topp").value,
                 top_k: +$("s-topk").value, max: $("s-max").value.trim() ? +$("s-max").value : "",
                 seed: $("s-seed").value.trim() ? +$("s-seed").value : "",
                 show: $("s-show").getAttribute("aria-checked") === "true",
                 esp: $("s-esp").getAttribute("aria-checked") === "true",
                 mcp: $("s-mcp").getAttribute("aria-checked") === "true"};
+}
+$("s-reset").onclick = () => loadDrawer(globalSampling);
+$("s-default").onclick = async () => {
+  if (busy) { toast("warn", "Finish the response before changing sampling"); return; }
+  if (!sessionV1) { toast("error", "Chat history unavailable", "Connect to the server to save shared defaults."); return; }
+  let next;
+  try { next = readDrawerSampling(); }
+  catch (e) { toast("error", "Invalid sampling", e.message); return; }
+  const button = $("s-default"); button.disabled = true;
+  try {
+    const r = await fetch("v1/strata/sampling-default", {
+      method: "POST", headers: headers(true), body: JSON.stringify({sampling: next})});
+    if (!r.ok) {
+      const error = await r.json().catch(() => ({}));
+      throw Error(error.error?.message || "HTTP " + r.status);
+    }
+    globalSampling = {...DEFAULTS, ...(await r.json()).sampling};
+    toast("success", "Default saved", "New chats on any device use these settings. Current chat is unchanged.");
+  } catch (e) { toast("error", "Could not save default sampling", String(e), 6500); }
+  finally { button.disabled = false; }
+};
+$("s-apply").onclick = async () => {
+  if (busy) { toast("warn", "Finish the response before changing sampling"); return; }
+  if (!sessionV1 || !sessionId) { toast("error", "Chat history unavailable", "Connect to the server before saving conversation settings."); return; }
+  let next;
+  try { next = readDrawerSampling(); }
+  catch (e) { toast("error", "Invalid sampling", e.message); return; }
   const button = $("s-apply"); button.disabled = true;
   try {
     const r = await fetch("v1/strata/sessions/" + encodeURIComponent(sessionId), {
@@ -1410,7 +1450,7 @@ $("s-apply").onclick = async () => {
     }
     settings = next;
     openDrawer(false);
-    toast("success", "Sampling saved", "This conversation only; new chats start with defaults.");
+    toast("success", "Sampling saved", "This conversation only; new chats use your saved default.");
     await refreshSessionPicker();
   } catch (e) { toast("error", "Could not save conversation sampling", String(e), 6500); }
   finally { button.disabled = false; }

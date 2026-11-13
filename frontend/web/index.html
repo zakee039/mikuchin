@@ -7,7 +7,7 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261103-dual-budget">
+<link rel="stylesheet" href="web/app.css?v=20261113-chat-image-controls">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
@@ -391,7 +391,35 @@
               <option value="default">正在读取生图模型…</option>
             </select>
           </label>
-          <p class="muted small" id="global-chat-image-note">仅影响聊天内生图，与「图像」页面独立。角色弱参考目前仅适用于 Official；始终优先遵循用户指令及聊天上下文。</p>
+          <div class="chat-image-controls" role="group" aria-label="聊天生图参数">
+            <label>LoRA
+              <select class="st-input" id="global-chat-image-lora" disabled>
+                <option value="none">无</option>
+              </select>
+            </label>
+            <label>长
+              <select class="st-input" id="global-chat-image-height">
+                <option value="384">384</option><option value="512">512</option>
+                <option value="768" selected>768</option><option value="1024">1024</option>
+              </select>
+            </label>
+            <label>宽
+              <select class="st-input" id="global-chat-image-width">
+                <option value="384">384</option><option value="512">512</option>
+                <option value="768" selected>768</option><option value="1024">1024</option>
+              </select>
+            </label>
+            <label>4X 超分
+              <select class="st-input" id="global-chat-image-upscale">
+                <option value="auto">自动</option><option value="off">关闭</option>
+                <option value="4x">4 倍</option>
+              </select>
+            </label>
+            <label>步数
+              <input class="st-input" id="global-chat-image-steps" type="number" min="1" max="100" step="1" value="8">
+            </label>
+          </div>
+          <p class="muted small" id="global-chat-image-note">上述参数仅作用于聊天生图，与「图像」页面独立。LoRA 强度为 1.0，仅支持 Qwen；角色弱参考目前仅适用于 Official。</p>
           <p class="muted small" id="global-autosave-status" role="status" aria-live="polite">修改后自动保存</p>
         </div>
       </div>
@@ -492,18 +520,19 @@
       <button class="st-toggle" id="s-esp" role="switch" aria-checked="true" aria-label="Experimental speed projection"></button></div>
     <div class="drawer-actions">
       <button class="st-btn st-btn--secondary" id="s-reset" type="button">Reset</button>
+      <button class="st-btn st-btn--secondary" id="s-default" type="button">Set default</button>
       <button class="st-btn st-btn--primary" id="s-apply" type="button">Apply</button>
     </div>
   </div>
 </aside>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/versions.js?v=0.2.5"></script>
-<script src="web/app.js?v=20261103-app-v025"></script>
+<script src="web/versions.js?v=0.2.6"></script>
+<script src="web/app.js?v=20261113-sampling-default"></script>
 <script src="web/image-studio.js?v=20261103-v023"></script>
 <script src="web/sessions.js?v=20261103-session-sampling"></script>
-<script src="web/characters.js?v=20261103-v023"></script>
-<script src="web/i18n-data.js?v=20261103-dual-budget"></script>
+<script src="web/characters.js?v=20261113-chat-image-controls"></script>
+<script src="web/i18n-data.js?v=20261113-chat-image-controls"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 </body>

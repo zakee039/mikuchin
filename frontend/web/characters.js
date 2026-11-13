@@ -5,6 +5,57 @@
 const characterState = {cards: [], global: {user_name:"",user_description:"",default_role:"stateless"}, assignments: {}, available: false, editId: "", stateless: false};
 const characterSubTabs = ["card", "world", "workflow"];
 let chatImageModelsReady = false;
+let chatImageCatalog = [], chatImageLoras = [];
+let lastChatImageModel = "";
+const CHAT_IMAGE_DEFAULTS = {lora_id:"none",height:768,width:768,upscale:"auto",steps:null};
+const chatImageModel = () => chatImageCatalog.find(m => m.id === $("global-chat-image-profile").value);
+function syncChatImageControls() {
+  const selected = chatImageModel();
+  const max = Number(selected?.max_side || 2048);
+  for (const dim of ["height","width"]) {
+    const field = $("global-chat-image-" + dim);
+    for (const option of field.options) option.disabled = Number(option.value) > max;
+    if (Number(field.value) > max) {
+      const supported = [...field.options].filter(option => !option.disabled);
+      field.value = (supported.find(option => option.value === "768") || supported.at(-1))?.value || "768";
+    }
+    field.disabled = !chatImageModelsReady;
+  }
+  const lora = $("global-chat-image-lora");
+  const old = lora.value || characterState.global.chat_image_settings?.lora_id || "none";
+  lora.replaceChildren(new Option(ui("无"), "none"));
+  const supportsLora = selected?.family === "qwen_turbo";
+  for (const item of chatImageLoras) {
+    if (item.family !== "qwen_turbo") continue;
+    const option = new Option(item.name + (item.available ? "" : " · 文件缺失"), item.id);
+    option.disabled = !item.available || !supportsLora;
+    lora.add(option);
+  }
+  lora.value = supportsLora && chatImageLoras.some(x => x.id === old && x.available) ? old : "none";
+  lora.disabled = !chatImageModelsReady || !supportsLora;
+  $("global-chat-image-upscale").disabled = !chatImageModelsReady;
+  $("global-chat-image-steps").disabled = !chatImageModelsReady;
+}
+function loadChatImageControls() {
+  const saved = {...CHAT_IMAGE_DEFAULTS, ...(characterState.global.chat_image_settings || {})};
+  for (const dim of ["height","width"]) $("global-chat-image-" + dim).value = String(saved[dim]);
+  $("global-chat-image-upscale").value = saved.upscale;
+  $("global-chat-image-steps").value = String(saved.steps ?? chatImageModel()?.steps ?? 8);
+  // The catalog arrives asynchronously; restore the saved LoRA after populating it.
+  $("global-chat-image-lora").replaceChildren(new Option(ui("无"), "none"));
+  $("global-chat-image-lora").value = saved.lora_id;
+  lastChatImageModel = $("global-chat-image-profile").value;
+  syncChatImageControls();
+}
+function chatImageSettingsFromControls() {
+  const steps = Number($("global-chat-image-steps").value);
+  if (!Number.isInteger(steps) || steps < 1 || steps > 100)
+    throw Error("聊天生图步数必须为 1–100 的整数");
+  return {lora_id:$("global-chat-image-lora").value || "none",
+    height:Number($("global-chat-image-height").value),
+    width:Number($("global-chat-image-width").value),
+    upscale:$("global-chat-image-upscale").value, steps};
+}
 async function refreshChatImageModels() {
   const selector = $("global-chat-image-profile");
   chatImageModelsReady = false;
@@ -14,6 +65,8 @@ async function refreshChatImageModels() {
     if (!response.ok) throw Error(`HTTP ${response.status}`);
     const json = await response.json();
     const models = Array.isArray(json.models) ? json.models : [];
+    chatImageCatalog = models;
+    chatImageLoras = Array.isArray(json.loras) ? json.loras : [];
     selector.replaceChildren();
     for (const item of models) {
       const opt = new Option(item.name + (item.available ? "" : " · 文件缺失"), item.id);
@@ -30,10 +83,13 @@ async function refreshChatImageModels() {
     } else {
       selector.add(new Option("无可用的生图模型", "default"));
     }
+    loadChatImageControls();
   } catch (error) {
     console.warn("Global chat image model catalog unavailable", error);
     selector.replaceChildren(new Option("无法加载模型列表，请检查 API Key", characterState.global.chat_image_profile || "default"));
     selector.disabled = true;
+    chatImageModelsReady = false;
+    syncChatImageControls();
   }
 }
 
@@ -767,14 +823,17 @@ function flushGlobalSave() {
   globalSaveChain=globalSaveChain.catch(() => {}).then(async () => {
     if (!globalDirty || !characterState.available) return;
     globalDirty=false;
-    const data={user_name:$("global-user-name").value,
-      user_description:$("global-user-description").value,
-      default_role:$("global-default-role").value,
-      chat_image_profile:chatImageModelsReady
-        ? $("global-chat-image-profile").value
-        : (characterState.global.chat_image_profile || "default")};
     $("global-autosave-status").textContent="正在保存…";
     try {
+      const data={user_name:$("global-user-name").value,
+        user_description:$("global-user-description").value,
+        default_role:$("global-default-role").value,
+        chat_image_profile:chatImageModelsReady
+          ? $("global-chat-image-profile").value
+          : (characterState.global.chat_image_profile || "default"),
+        chat_image_settings:chatImageModelsReady
+          ? chatImageSettingsFromControls()
+          : (characterState.global.chat_image_settings || CHAT_IMAGE_DEFAULTS)};
       const r=await characterRequest("global",{global:data});
       characterState.global=r.global;
       $("global-autosave-status").textContent=globalDirty?"有待保存的修改…":"已自动保存";
@@ -786,11 +845,21 @@ function flushGlobalSave() {
   });
   return globalSaveChain;
 }
-for (const id of ["global-user-name","global-user-description","global-default-role","global-chat-image-profile"]) {
+for (const id of ["global-user-name","global-user-description","global-default-role",
+  "global-chat-image-profile","global-chat-image-lora","global-chat-image-height",
+  "global-chat-image-width","global-chat-image-upscale","global-chat-image-steps"]) {
   $(id).addEventListener("input",scheduleGlobalSave);
   $(id).addEventListener("change",scheduleGlobalSave);
   $(id).addEventListener("blur",()=>{if(globalDirty)void flushGlobalSave();});
 }
+$("global-chat-image-profile").addEventListener("change", () => {
+  const prev = chatImageCatalog.find(m => m.id === lastChatImageModel);
+  const next = chatImageModel();
+  const steps = $("global-chat-image-steps");
+  if (prev && next && Number(steps.value) === Number(prev.steps)) steps.value = String(next.steps);
+  lastChatImageModel = $("global-chat-image-profile").value;
+  syncChatImageControls();
+});
 $("chat-character").onchange = async () => {
   if (busy || messages.length > 0) {
     toast("warn","已有对话不能切换角色，请新建会话");

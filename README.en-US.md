@@ -6,9 +6,9 @@
 
 **Self-hosted Multimodal AI Companion & Image Studio**
 
-**Main app v0.2.5** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.5)
+**Main app v0.2.6** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.6)
 
-**Independent versions:** main app `0.2.5` · Windows launcher `0.2.4` · Android client `0.2.4` (versionCode 204). Only the main app changes in this release; the launcher and APK binaries are unchanged.
+**Independent versions:** main app `0.2.6` · Windows launcher `0.2.4` · Android client `0.2.4` (versionCode 204). Only the main app changes in this release; the launcher and APK binaries are unchanged.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 

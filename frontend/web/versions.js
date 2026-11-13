@@ -3,7 +3,7 @@
  * A new main program release does not automatically change client versions.
  */
 window.MIKUCHIN_VERSIONS = Object.freeze({
-  main: "0.2.5",
+  main: "0.2.6",
   launcher: "0.2.4",
   android: "0.2.4",
 });
