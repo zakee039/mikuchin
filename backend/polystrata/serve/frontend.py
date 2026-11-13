@@ -16,6 +16,7 @@ and the formats change often; the engine boundary is token ids in, text deltas o
 from __future__ import annotations
 
 import ast
+import html
 import json
 import logging
 import os
@@ -958,6 +959,73 @@ def parse_glm_tool_call(body: str, schema: dict | None = None) -> ToolCall:
 # format_argument; llama.cpp's common/parsers/gemma4.cpp reads the same).
 GEMMA_CALL, GEMMA_CALL_END, GEMMA_QUOTE = "<|tool_call>", "<tool_call|>", '<|"|>'
 
+# Some Gemma 4 completions use an XML-like self-closing function tag instead
+# of the native <|tool_call> wrapper.  Recover ONLY the explicitly advertised
+# first-party image tool: arbitrary HTML/XML must never become an action.
+GEMMA_IMAGE_XML = "<call:polystrata__generate_image"
+_GEMMA_IMAGE_ATTR = re.compile(
+    r"""\s+([a-z_][a-z_0-9]*)\s*=\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""",
+    re.S,
+)
+GEMMA_IMAGE_ERROR = "图像任务未创建：生图工具调用参数无效或不完整，请重新尝试。"
+
+
+def gemma_image_xml_end(text: str) -> int:
+    """Find /> outside quoted attributes, including streamed split markers."""
+    quote = None
+    i = len(GEMMA_IMAGE_XML)
+    while i < len(text):
+        char = text[i]
+        if quote:
+            if char == "\\" and i + 1 < len(text):
+                i += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in ('"', "'"):
+            quote = char
+        elif text.startswith("/>", i):
+            return i + 2
+        i += 1
+    return -1
+
+
+def image_tool_args_valid(args: dict, schema: dict) -> bool:
+    """Validate the actual image-tool schema before converting text into a call."""
+    props = (schema.get("parameters") or {}).get("properties") or {}
+    return (isinstance(args, dict) and set(args).issubset(props) and
+            isinstance(args.get("prompt"), str) and bool(args["prompt"].strip()) and
+            len(args["prompt"]) <= 16384 and
+            all(type(args[key]) is bool for key in ("character_related", "edit_previous") if key in args) and
+            all(args[key] in props[key]["enum"] for key in ("size", "upscale", "style_hint") if key in args))
+
+
+def parse_gemma_image_xml(body: str, schema: dict) -> ToolCall | None:
+    """Strictly parse <call:polystrata__generate_image prompt="..." />.
+
+    This is not general XML execution; reject unknown, duplicate, unquoted or
+    malformed attributes and never evaluate code from model text.
+    """
+    if not (body.startswith(GEMMA_IMAGE_XML) and body.endswith("/>")):
+        return None
+    attrs, pos, args = body[len(GEMMA_IMAGE_XML):-2], 0, {}
+    while pos < len(attrs):
+        if not attrs[pos:].strip():
+            break
+        match = _GEMMA_IMAGE_ATTR.match(attrs, pos)
+        if match is None or match.group(1) in args:
+            return None
+        key, raw = match.group(1), match.group(2)[1:-1]
+        value = html.unescape(re.sub(r"""\\(["'\\])""", r'\1', raw))
+        if key in ("character_related", "edit_previous"):
+            if value not in ("true", "false"):
+                return None
+            args[key] = value == "true"
+        else:
+            args[key] = value
+        pos = match.end()
+    return ToolCall(name="polystrata__generate_image", arguments=args) if image_tool_args_valid(args, schema) else None
+
 
 def gemma_bare_call_end(text: str) -> int:
     """Find a bare Gemma mapping's close without counting braces in quoted text."""
@@ -1232,6 +1300,7 @@ class OutputParser:
         # Recover only the first-party image tool when explicitly offered.
         self.bare_gemma_image = ("polystrata__generate_image" if
             call_format == "gemma" and "polystrata__generate_image" in self.schemas else None)
+        self.image_xml_opener = GEMMA_IMAGE_XML if self.bare_gemma_image else None
         # stream_tools: a tool call is also reported while it is being written - "tool_start" (its name and id) as
         # soon as the name is known, then "tool_args" pieces of its JSON arguments (string parameters character by
         # character; other types whole, once complete) - before the final "tool_call".  Without it, a client sees
@@ -1637,6 +1706,20 @@ class OutputParser:
                         return out
                     self.buf, self.lead = stripped, False
                 if self.bare_gemma_image:
+                    xml_start = self.image_xml_opener
+                    xml_pos = self.buf.find(xml_start)
+                    if xml_pos >= 0 and self._ok_at(xml_pos):
+                        rest = self.buf[xml_pos + len(xml_start):]
+                        normal = self.buf.find(self.call_start)
+                        if (normal < 0 or xml_pos < normal) and (
+                                not rest or rest[0].isspace() or rest.startswith("/>")):
+                            if xml_pos and self.buf[:xml_pos].strip():
+                                out.append(Event("content", self._track(self.buf[:xml_pos].rstrip("\n"))))
+                            elif xml_pos:
+                                self._track(self.buf[:xml_pos])
+                            self.buf = self.buf[xml_pos:]
+                            self.state = "gemma_image_xml"
+                            continue
                     names = ("call:" + self.bare_gemma_image, self.bare_gemma_image)
                     candidates = [(self.buf.find(name), name) for name in names]
                     candidates = [(pos, name) for pos, name in candidates
@@ -1672,7 +1755,9 @@ class OutputParser:
                 if i < 0:
                     # Hold a partial tag AND the newlines before it: if a tool call follows, they are dropped,
                     # so emitting them early would make streamed and whole outputs differ.
-                    j = len(self.buf) - self._hold(self.buf, (self.call_start,) + self.noise)
+                    tags = (self.call_start,) + self.noise + (
+                        (self.image_xml_opener,) if self.image_xml_opener else ())
+                    j = len(self.buf) - self._hold(self.buf, tags)
                     if self.bare_gemma_image:
                         tail_start = self.buf.rfind("\n") + 1
                         tail = self.buf[tail_start:]
@@ -1757,7 +1842,7 @@ class OutputParser:
                 end = gemma_bare_call_end(self.buf)
                 if end < 0:
                     if len(self.buf) > 65536:
-                        out.append(Event("content", self._track(self.buf)))
+                        out.append(Event("content", self._track(GEMMA_IMAGE_ERROR)))
                         self.buf, self.state = "", "content"
                     return out
                 body, self.buf = self.buf[:end], self.buf[end:]
@@ -1767,15 +1852,23 @@ class OutputParser:
                     "call:" + normalized.removeprefix("call:"),
                     self.schemas[self.bare_gemma_image])
                 args = call.arguments
-                props = self.schemas[self.bare_gemma_image]["parameters"]["properties"]
-                valid = (call.name == self.bare_gemma_image and
-                         isinstance(args, dict) and set(args).issubset(props) and
-                         isinstance(args.get("prompt"), str) and bool(args["prompt"].strip()) and
-                         all(type(args[key]) is bool for key in ("character_related", "edit_previous") if key in args) and
-                         all(args[key] in props[key]["enum"] for key in ("size", "upscale", "style_hint") if key in args))
+                valid = call.name == self.bare_gemma_image and image_tool_args_valid(
+                    args, self.schemas[self.bare_gemma_image])
                 out.append(Event("tool_call", call=call) if valid else
-                           Event("content", self._track(body)))
+                           Event("content", self._track(GEMMA_IMAGE_ERROR)))
                 self.state, self.lead = "content", valid
+            elif self.state == "gemma_image_xml":
+                end = gemma_image_xml_end(self.buf)
+                if end < 0:
+                    if len(self.buf) > 32768:
+                        out.append(Event("content", self._track(GEMMA_IMAGE_ERROR)))
+                        self.buf, self.state = "", "content"
+                    return out
+                body, self.buf = self.buf[:end], self.buf[end:]
+                call = parse_gemma_image_xml(body, self.schemas[self.bare_gemma_image])
+                out.append(Event("tool_call", call=call) if call else
+                           Event("content", self._track(GEMMA_IMAGE_ERROR)))
+                self.state, self.lead = "content", call is not None
             elif self.whole:
                 # the call is announced when its name is complete; its arguments follow whole when it ends
                 name_of, end_of, parse = self.whole
@@ -1848,6 +1941,12 @@ class OutputParser:
         out = []
         if self.pending:
             out += self._release(reason in (None, "stop") and self.state == "reasoning" and not self.buf)
+        if self.state in ("gemma_image_xml", "gemma_bare"):
+            # A truncated image action cannot be executed or presented as if
+            # an image was started. Never leak its partial arguments as prose.
+            self.buf, self.state = "", "content"
+            out.append(Event("content", self._track(GEMMA_IMAGE_ERROR)))
+            return out
         if self.state == "call" and self.bare and function_end(self.buf) >= 0:
             i = function_end(self.buf)          # recover: a bare call is whole at its </function>
             body, rest = self.buf[:i], self.buf[i:].strip()

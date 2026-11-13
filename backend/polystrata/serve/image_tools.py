@@ -95,7 +95,10 @@ SCHEMA = {
                     "preserve everything the user did not ask to change. "
                     "Do not use it for ordinary questions or compliments. The "
                     "result is inserted automatically into the chat by PolyStrata. "
-                    "Write a detailed visual prompt, not a conversation reply. "
+                    "Write a visual prompt faithful to the user's request; do not "
+                    "invent clothing, intimacy, pose, or scene details they did not ask for. "
+                    "Invoke the declared tool rather than writing tool-call syntax "
+                    "in your conversational response; plain text never creates an image task. "
                     "Use 768x768 by default. Respect the user's request to disable "
                     "upscaling, and identify anime styles with style_hint=anime."),
     "parameters": {

@@ -5661,6 +5661,15 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                     box["r"] = hub.call(c.name, c.arguments, cancel)
                 except McpCancelled:
                     box["cancelled"] = True
+                except Exception as exc:
+                    # Never leave an announced image/tool call without a
+                    # terminal result because a provider raised unexpectedly.
+                    # The UI needs a definite failure, not a phantom job.
+                    print(f"[strata] tool {c.name} raised {type(exc).__name__}: {str(exc)[:240]}",
+                          flush=True)
+                    message = f"tool execution failed ({type(exc).__name__})"
+                    box["r"] = {"ok": False, "text": message, "chars": len(message),
+                                "truncated": False, "ms": 0}
             worker = threading.Thread(target=work, daemon=True)
             worker.start()
             try:
