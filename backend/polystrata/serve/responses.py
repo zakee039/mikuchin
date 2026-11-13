@@ -669,7 +669,12 @@ class Assembler:
             return out + [self.event("response.incomplete", response=self.snapshot())]
         self.response["status"] = "completed"
         self.response["completed_at"] = int(time.time())
-        return out + [self.event("response.completed", response=self.snapshot())]
+        event = self.event("response.completed", response=self.snapshot())
+        # Keep OpenAI's response object shape intact. Timing metadata belongs
+        # on the SSE event envelope, as upstream d19ddb23 / 29a268a5.
+        if done.get("timings"):
+            event["timings"] = dict(done["timings"])
+        return out + [event]
 
     def failed(self, message: str, code: str = "server_error") -> dict:
         """response.failed: an error after the stream started (the HTTP status is already sent)."""

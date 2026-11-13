@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve import responses  # noqa: E402
 from serve.frontend import ChatTemplate  # noqa: E402
 from serve.responses import (ENCRYPTED_PREFIX, ResponsesError, collect, input_messages, prompt_made,  # noqa: E402
-                             prompt_tools, request_tools, template_kwargs, text_format, thread_title_events)
+                             prompt_tools, request_tools, template_kwargs, text_format, thread_title_events,
+                             Assembler)
 from serve.server import ByteTokenizer, MockEngine, Service, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,22 @@ TOOLS = [{"type": "function", "name": "exec_command", "description": "Runs a com
 
 # ------------------------------------------------------------------------------------------------ parsing
 class Parsing(unittest.TestCase):
+    def test_completed_event_carries_timings_without_mutating_response(self):
+        asm = Assembler({}, "test-model", 12, {}, encrypted=False)
+        events = asm.start() + asm.finish({"finish": "stop", "completion_tokens": 4,
+                                          "timings": {"predicted_per_second": 31.5, "prompt_ms": 20.0}})
+        final = events[-1]
+        self.assertEqual(final["type"], "response.completed")
+        self.assertEqual(final["timings"], {"predicted_per_second": 31.5, "prompt_ms": 20.0})
+        self.assertNotIn("timings", final["response"])
+        self.assertEqual(final["response"]["usage"]["total_tokens"], 16)
+        self.assertEqual([x["sequence_number"] for x in events], list(range(len(events))))
+
+    def test_missing_timings_does_not_add_event_field(self):
+        asm = Assembler({}, "test-model", 1, {}, encrypted=False)
+        final = asm.finish({"finish": "stop", "completion_tokens": 1})[-1]
+        self.assertNotIn("timings", final)
+
     def test_a_string_input_is_one_user_message(self):
         self.assertEqual(input_messages({"input": "hi", "instructions": "Be brief."}),
                          [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}])
