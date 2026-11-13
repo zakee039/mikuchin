@@ -13,6 +13,9 @@ Mikuchin no longer relies on the personal PolyStrata fork for its source code:
   can continue to use their local runtime, models and sessions.
 - Updated three-language README clone instructions, standalone-repository
   regression tests, source packaging and the official website version.
+- Shortened the paths of 72 legacy benchmark records (without dropping their
+  contents) and added a mapping manifest, so default Git for Windows clones
+  work without enabling `core.longpaths`.
 
 ## Component versions
 

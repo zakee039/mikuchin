@@ -8,6 +8,10 @@ contains the backend code directly as normal Git files.
 - Removed the `.gitmodules` file and the `backend/polystrata` Gitlink.
 - Imported the 4,025 previously tracked engine source files (including
   `backend/polystrata/LICENSE`) into the main repository.
+- Relocated 72 deeply nested historical benchmark records into
+  `backend/polystrata/bench/results/_portable_runs/` to support default
+  Windows Git clones. `PATH_MAP.json` records the former file paths and all
+  original file contents were retained.
 - Retained the existing `backend/polystrata/` on-disk layout, so launcher,
   server, model setup, CMake, and image generation paths remain compatible.
 - Updated release packaging to read **one** Git working tree.

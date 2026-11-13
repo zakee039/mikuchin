@@ -19,6 +19,9 @@ class StandaloneRepositoryTests(unittest.TestCase):
         self.assertGreater(len(included), 3500)
         self.assertIn("backend/polystrata/LICENSE", included)
         self.assertIn("backend/polystrata/serve/server.py", included)
+        # Git for Windows defaults to MAX_PATH-compatible checkouts.
+        self.assertLessEqual(max(map(len, [path for _, path in entries])), 160)
+        self.assertIn("backend/polystrata/bench/results/_portable_runs/PATH_MAP.json", included)
 
     def test_clone_documentation_has_no_submodule_dependency(self):
         for name in ("README.md", "README.en-US.md", "README.ja-JP.md"):
