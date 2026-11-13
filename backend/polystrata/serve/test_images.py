@@ -1,0 +1,528 @@
+"""POST /v1/images/generations (serve/images.py): the request shape, the sd-cli command, the GPU turn and its policies,
+over HTTP with a stand-in sd-cli (serve/fixtures/fake_sd_cli.py) and the mock engine.
+
+    python -m serve.test_images
+"""
+import base64
+import json
+import os
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+from unittest import mock
+
+from serve import images as images_api
+from serve.frontend import ChatTemplate
+from serve.server import ByteTokenizer, MockEngine, Service, serve
+
+ROOT = Path(__file__).resolve().parents[1]
+FAKE = ROOT / "serve" / "fixtures" / "fake_sd_cli.py"
+REAL_ARGS = images_api.sd_cli_args
+
+
+def fake_args(cfg, job, out):
+    """sd-cli's command, run through Python (the stand-in is a script)."""
+    return [sys.executable, str(FAKE), *REAL_ARGS(cfg, job, out)[1:]]
+
+
+def image_cfg(d, **kw):
+    files = {}
+    for k in ("diffusion_model", "vae", "llm"):
+        p = Path(d) / f"{k}.bin"
+        p.write_bytes(b"x" * 1024)
+        files[k] = str(p)
+    return {"exe": str(FAKE), "backend": "vulkan", "quant": "Q8_0", "args": ["--diffusion-fa"],
+            "out_dir": str(Path(d) / "out"), **files, **kw}
+
+
+class Request(unittest.TestCase):
+    CFG = {"max_n": 4, "max_side": 2048}
+
+    def test_defaults(self):
+        j = images_api.parse_request({"prompt": "a cat"}, self.CFG)
+        self.assertEqual((j["width"], j["height"], j["n"], j["steps"], j["response_format"]),
+                         (1024, 1024, 1, 8, "b64_json"))
+        self.assertTrue(0 <= j["seed"] < 2**31)
+
+    def test_fields(self):
+        j = images_api.parse_request({"prompt": "a cat", "size": "1536x1024", "n": 2, "steps": 4, "seed": 7,
+                                      "response_format": "url", "quality": "hd", "model": "dall-e-3"}, self.CFG)
+        self.assertEqual((j["width"], j["height"], j["n"], j["steps"], j["seed"], j["response_format"]),
+                         (1536, 1024, 2, 4, 7, "url"))
+        self.assertEqual(images_api.parse_request({"prompt": "x", "size": "auto"}, self.CFG)["width"], 1024)
+
+    def test_refused(self):
+        bad = [{}, {"prompt": ""}, {"prompt": 5}, {"prompt": "x", "n": 0}, {"prompt": "x", "n": 5},
+               {"prompt": "x", "n": True}, {"prompt": "x", "size": "1000x1000"}, {"prompt": "x", "size": "128x128"},
+               {"prompt": "x", "size": "4096x1024"}, {"prompt": "x", "size": "big"}, {"prompt": "x", "steps": 0},
+               {"prompt": "x", "seed": -1}, {"prompt": "x", "seed": "1"}, {"prompt": "x", "response_format": "png"},
+               {"prompt": "x", "output_format": "jpeg"}, {"prompt": "a\0b"}]
+        for req in bad:
+            with self.subTest(req=req), self.assertRaises(images_api.ImageRequestError):
+                images_api.parse_request(req, self.CFG)
+
+    def test_lora_catalog_and_selection_are_safe_and_optional(self):
+        with tempfile.TemporaryDirectory() as d:
+            lora = Path(d) / "Genitalia-Anatomy-2.1-v1.safetensors"
+            lora.write_bytes(b"test safetensors fixture")
+            cfg = {"family": "qwen_turbo", "lora_dir": d, "loras": {
+                "anatomy-fix": {"name": "Anatomy Fix", "path": str(lora)}}}
+            self.assertIsNone(images_api.parse_request({"prompt": "test"}, cfg)["lora"])
+            entries = images_api.available_loras(cfg)
+            self.assertEqual([(i["id"], i["available"]) for i in entries], [("anatomy-fix", True)])
+            job = images_api.parse_request({"prompt": "test", "strata_lora_id": "anatomy-fix"}, cfg)
+            self.assertEqual(job["lora"]["path"], lora)
+            self.assertEqual(job["lora"]["strength"], 1.0)
+            args = images_api.sd_cli_args(
+                {"exe": "sd-cli", "diffusion_model": "m.gguf", "vae": "v.st",
+                 "llm": "t.gguf", **cfg}, job, "result.png")
+            self.assertEqual(args[args.index("--lora-model-dir") + 1], d)
+            self.assertEqual(args[args.index("--lora-apply-mode") + 1], "at_runtime")
+            self.assertIn("<lora:Genitalia-Anatomy-2.1-v1:1>", args[args.index("-p") + 1])
+            for bad in ("../bad", "not-registered", 123):
+                with self.subTest(bad=bad), self.assertRaises(images_api.ImageRequestError):
+                    images_api.parse_request({"prompt": "x", "strata_lora_id": bad}, cfg)
+            with self.assertRaises(images_api.ImageRequestError):
+                images_api.parse_request({"prompt": "x", "strata_lora_id": "anatomy-fix"},
+                                         {**cfg, "family": "sdxl"})
+            other = Path(d).parent / "outside-model.safetensors"
+            cfg["loras"]["anatomy-fix"]["path"] = str(other)
+            other.write_bytes(b"test fixture")
+            try:
+                with self.assertRaises(images_api.ImageRequestError):
+                    images_api.parse_request({"prompt": "x", "strata_lora_id": "anatomy-fix"}, cfg)
+            finally:
+                other.unlink(missing_ok=True)
+
+
+class Command(unittest.TestCase):
+    def test_the_model_cards_command(self):
+        """Unsloth's stable-diffusion.cpp command for Turbo: 8 steps, CFG 1, euler, the Turbo sigmas, --diffusion-fa."""
+        cfg = {"exe": "sd-cli", "diffusion_model": "dit.gguf", "vae": "vae.st", "llm": "te.gguf",
+               "args": ["--diffusion-fa", "--vae-tiling"]}
+        job = {"prompt": "a sloth", "width": 1024, "height": 768, "n": 1, "steps": 8, "seed": 42}
+        self.assertEqual(images_api.sd_cli_args(cfg, job, "o/img_%d.png"), [
+            "sd-cli", "--diffusion-model", "dit.gguf", "--vae", "vae.st", "--llm", "te.gguf", "-p", "a sloth",
+            "--steps", "8", "--cfg-scale", "1.0", "--sampling-method", "euler", "-W", "1024", "-H", "768",
+            "--sigmas", "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0",
+            "-s", "42", "-o", "o/img_%d.png", "--diffusion-fa", "--vae-tiling"])
+
+    def test_qwen_official_encoder_and_weak_reference_flags(self):
+        import base64, io
+        from PIL import Image
+        cfg = {"family": "qwen_turbo", "exe":"sd-cli", "diffusion_model":"turbo.gguf",
+               "vae":"vae.safetensors", "llm":"Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+               "llm_vision":"mmproj-Qwen3VL-8B-Instruct-F16.gguf"}
+        img=Image.new("RGB",(64,64),(9,100,150))
+        buf=io.BytesIO();img.save(buf,format="PNG")
+        encoded='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
+        job=images_api.parse_request({"prompt":"Festival coat", "size":"512x512", "steps":8,
+               "strata_reference_image":encoded},cfg)
+        job.update({"init_image_path":"character.png", "character_weak_reference":True})
+        cmd=images_api.sd_cli_args(cfg,job,"output.png")
+        self.assertEqual(cmd[cmd.index("--ref-image")+1],"character.png")
+        self.assertEqual(cmd[cmd.index("--llm_vision")+1],cfg["llm_vision"])
+        self.assertEqual(cmd[cmd.index("--img-cfg-scale")+1],"0.7")
+        self.assertNotIn("--init-img",cmd)
+        self.assertIn("--sigmas",cmd)
+        cfg_no_vision=dict(cfg);cfg_no_vision.pop("llm_vision")
+        with self.assertRaises(images_api.ImageRequestError):
+            images_api.parse_request({"prompt":"cat","strata_reference_image":encoded},cfg_no_vision)
+
+    def test_sdxl_checkpoint_arguments_and_defaults(self):
+        cfg = {"exe": "sd-cli", "family": "sdxl", "checkpoint": "animagine.safetensors",
+               "model_name": "Animagine XL 4.0 Opt", "steps": 28, "cfg_scale": 7.0,
+               "args": ["--backend", "vulkan1", "--offload-to-cpu"]}
+        job = images_api.parse_request({"prompt": "miku", "size": "768x768", "seed": 7}, cfg)
+        self.assertEqual(job["steps"], 28)
+        cmd = images_api.sd_cli_args(cfg, job, "out.png")
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "animagine.safetensors")
+        self.assertEqual(cmd[cmd.index("--cfg-scale") + 1], "7.0")
+        for forbidden in ("--sigmas", "--llm", "--vae", "--diffusion-model"):
+            self.assertNotIn(forbidden, cmd)
+        with tempfile.TemporaryDirectory() as d:
+            checkpoint = Path(d) / "animagine.safetensors"
+            checkpoint.write_bytes(b"weights")
+            gen = images_api.ImageGen({**cfg, "checkpoint": str(checkpoint), "exe": str(FAKE)})
+            self.assertEqual(gen.missing(), [])
+            self.assertEqual(gen.family, "sdxl")
+            self.assertGreater(images_api.need_mib(gen.cfg, 768, 768), 2000)
+
+    def test_reference_and_negative_prompts(self):
+        import base64, io
+        from PIL import Image
+        image = Image.new("RGB", (256, 256), (40, 120, 220))
+        buff = io.BytesIO(); image.save(buff, format="PNG")
+        encoded = "data:image/png;base64," + base64.b64encode(buff.getvalue()).decode()
+        cfg = {"exe":"sd-cli", "family":"sdxl", "checkpoint":"sdxl.safetensors"}
+        job = images_api.parse_request({"prompt":"portrait", "negative_prompt":"watermark", "size":"512x512",
+                                        "strata_reference_image":encoded, "strata_denoise_strength":0.65}, cfg)
+        self.assertEqual(job["negative_prompt"], "watermark")
+        self.assertTrue(job["reference_png"].startswith(b"\x89PNG"))
+        self.assertEqual(job["denoise_strength"], 0.65)
+        cmd = images_api.sd_cli_args(cfg, {**job,"init_image_path":"reference.png"}, "out.png")
+        self.assertEqual(cmd[cmd.index("--negative-prompt")+1], "watermark")
+        self.assertEqual(cmd[cmd.index("--init-img")+1], "reference.png")
+        self.assertEqual(cmd[cmd.index("--strength")+1], "0.65")
+        for invalid in ["garbage", 123, "data:image/png;base64,YWJj"]:
+            with self.assertRaises(images_api.ImageRequestError):
+                images_api.parse_request({"prompt":"x", "strata_reference_image":invalid}, cfg)
+        for wrong in ["x"*3001, 123, "with\x00null"]:
+            with self.assertRaises(images_api.ImageRequestError):
+                images_api.parse_request({"prompt":"x", "negative_prompt":wrong}, cfg)
+        with self.assertRaises(images_api.ImageRequestError):
+            images_api.parse_request({"prompt":"x", "strata_reference_image":encoded},
+                                     {"family":"qwen_turbo"})
+
+    def test_other_steps_and_batch(self):
+        cfg = {"exe": "sd-cli", "diffusion_model": "d", "vae": "v", "llm": "l"}
+        cmd = images_api.sd_cli_args(cfg, {"prompt": "p", "width": 512, "height": 512, "n": 3, "steps": 4,
+                                           "seed": 1}, "x")
+        self.assertNotIn("--sigmas", cmd)          # Turbo's sigmas are an 8-step schedule
+        self.assertEqual(cmd[cmd.index("-b") + 1], "3")
+
+    def test_native_switch(self):
+        cfg = {"exe": "sd-cli", "diffusion_model": "d", "vae": "v", "llm": "l", "native": True}
+        job = {"prompt": "p", "width": 512, "height": 512, "n": 1, "steps": 8, "seed": 1}
+        self.assertEqual(images_api.sd_cli_args(cfg, job, "x")[-2:], ["--model-args", "qwen_image_2_1_native=1"])
+        cfg["native"] = False
+        self.assertNotIn("--model-args", images_api.sd_cli_args(cfg, job, "x"))
+
+    def test_env(self):
+        env = images_api.image_env({"backend": "cuda", "gpu": 1, "env": {"X": 2}}, {"PATH": "p"})
+        self.assertEqual((env["CUDA_VISIBLE_DEVICES"], env["CUDA_DEVICE_ORDER"], env["X"]), ("1", "PCI_BUS_ID", "2"))
+        with tempfile.TemporaryDirectory() as d:
+            env = images_api.image_env({"backend": "hip", "gpu": 0, "lib_dirs": [d, d + "-missing"]}, {})
+            self.assertEqual(env["HIP_VISIBLE_DEVICES"], "0")
+            self.assertEqual(env["PATH" if os.name == "nt" else "LD_LIBRARY_PATH"], d)
+        self.assertEqual(images_api.image_env({"backend": "vulkan", "gpu": 2}, {})["GGML_VK_VISIBLE_DEVICES"], "2")
+
+    def test_config_checked(self):
+        with self.assertRaises(ValueError):
+            images_api.ImageGen({"exe": "x", "diffusion_model": "d", "vae": "v"})
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                images_api.ImageGen(image_cfg(d, gpu_policy="sometimes"))
+
+
+class FakeEngine:
+    """An engine with the parts the GPU turn uses: alive/unload/restart, vram (elastic) and session files."""
+
+    def __init__(self, elastic=False):
+        self.up, self.calls, self.info = True, [], {"vram_elastic": elastic}
+        self.spawn = (["strata"], ["--vram-elastic"] if elastic else [])
+        self.unloaded = False
+
+    def alive(self):
+        return self.up
+
+    def exit_code(self):
+        return 0
+
+    def unload(self):
+        self.calls.append("unload")
+        self.up, self.unloaded = False, True
+
+    def restart(self):
+        self.calls.append("restart")
+        self.up, self.unloaded = True, False
+
+    def vram(self, reserve):
+        self.calls.append(("vram", reserve))
+        return {"vram_free_mib": 9000}
+
+    def session_file(self, action, path):
+        self.calls.append((action, os.path.basename(path)))
+        if action == "save":
+            Path(path).write_bytes(b"kv")
+        else:
+            assert Path(path).read_bytes() == b"kv"
+        return {"tokens": 123, "bytes": 2, "ms": 1.0}
+
+    def generate(self, ids, max_new, sampling, cancel, embeddings=None):
+        return iter(())
+
+
+class Policy(unittest.TestCase):
+    def svc(self, engine):
+        tok = ByteTokenizer()
+        return Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+
+    def test_resolve(self):
+        with tempfile.TemporaryDirectory() as d:
+            gen = images_api.ImageGen(image_cfg(d))
+            eng = FakeEngine()
+            svc = self.svc(eng)
+            with mock.patch.object(svc, "free_vram_mib", return_value=20000):
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "keep")
+            with mock.patch.object(svc, "free_vram_mib", return_value=None):
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "keep")
+            with mock.patch.object(svc, "free_vram_mib", return_value=4000):
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "unload")
+                svc.engine = FakeEngine(elastic=True)
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "shrink")
+                gen.cfg["uma"] = True
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "keep")
+                gen.cfg["uma"] = False
+                gen.policy = "unload"
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "unload")
+                svc.engine.up = False                   # nothing loaded: nothing to give back
+                self.assertEqual(images_api.resolve_policy(svc, gen, 15000), "keep")
+            self.assertEqual(images_api.resolve_policy(self.svc(MockEngine(ByteTokenizer(), "x")), gen, 1), "keep")
+
+    def test_unload_saves_and_the_next_start_restores(self):
+        with tempfile.TemporaryDirectory() as d:
+            gen = images_api.ImageGen(image_cfg(d, gpu_policy="unload"))
+            eng = FakeEngine()
+            svc = self.svc(eng)
+            job = {"width": 1024, "height": 1024}
+            with images_api.gpu_turn(svc, gen, job) as policy:
+                self.assertEqual(policy, "unload")
+                self.assertTrue(svc.fifo.locked())          # no chat turn meanwhile
+                self.assertFalse(eng.up)
+                self.assertTrue(svc.status["busy"])
+            self.assertFalse(svc.fifo.locked())
+            self.assertFalse(svc.status["busy"])
+            self.assertEqual([c if isinstance(c, str) else c[0] for c in eng.calls], ["save", "unload"])
+            self.assertTrue(svc.restore_after_load)
+            with svc.fifo:
+                svc.ensure_loaded()                          # the next request: start, then the conversation back
+            self.assertEqual([c if isinstance(c, str) else c[0] for c in eng.calls],
+                             ["save", "unload", "restart", "restore"])
+            self.assertIsNone(svc.restore_after_load)
+            self.assertEqual(list(Path(gen.dir).glob("llm-session-*")), [])
+
+    def test_eager_reload(self):
+        with tempfile.TemporaryDirectory() as d:
+            gen = images_api.ImageGen(image_cfg(d, gpu_policy="unload", reload="eager"))
+            eng = FakeEngine()
+            svc = self.svc(eng)
+            with images_api.gpu_turn(svc, gen, {"width": 512, "height": 512}):
+                pass
+            self.assertEqual([c if isinstance(c, str) else c[0] for c in eng.calls],
+                             ["save", "unload", "restart", "restore"])
+            self.assertTrue(eng.up)
+
+    def test_shrink_gives_the_cache_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            gen = images_api.ImageGen(image_cfg(d, gpu_policy="shrink"))
+            eng = FakeEngine(elastic=True)
+            svc = self.svc(eng)
+            svc.vram_reserve = 512
+            with images_api.gpu_turn(svc, gen, {"width": 1024, "height": 1024}):
+                self.assertEqual(eng.calls[0][0], "vram")
+                self.assertEqual(eng.calls[0][1], 6 * 1024)     # 2 GiB + 4 GiB per megapixel (+ 3 KiB of files)
+            self.assertEqual(eng.calls[-1], ("vram", 512))
+            self.assertTrue(eng.up)
+
+    def test_keep_touches_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            gen = images_api.ImageGen(image_cfg(d, gpu_policy="keep"))
+            eng = FakeEngine()
+            svc = self.svc(eng)
+            with images_api.gpu_turn(svc, gen, {"width": 1024, "height": 1024}):
+                pass
+            self.assertEqual(eng.calls, [])
+
+
+@mock.patch.object(images_api, "sd_cli_args", fake_args)
+class OverHttp(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        tok = ByteTokenizer()
+        self.engine = MockEngine(tok, "</think>\n\nok")
+        self.svc = Service(self.engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        self.svc.images = images_api.ImageGen(image_cfg(self.tmp.name, keep_files=3))
+        self.httpd = serve(self.svc, port=0)
+        self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.tmp.cleanup()
+
+    def post(self, body, path="/v1/images/generations"):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def get(self, path):
+        try:
+            with urllib.request.urlopen(self.base + path, timeout=30) as r:
+                return r.status, r.read(), r.headers.get("Content-Type")
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read(), None
+
+    def test_named_official_default_profile_alias(self):
+        self.svc.images.cfg["profile_id"] = "qwen-image-2.1-turbo-official"
+        mmproj = Path(self.tmp.name) / "mock-mmproj.gguf"
+        mmproj.write_bytes(b"mock projector")
+        self.svc.images.cfg["llm_vision"] = str(mmproj)
+        code, payload, _ = self.get("/v1/mikuchin/image-models")
+        self.assertEqual(code, 200)
+        result = json.loads(payload)["models"]
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "qwen-image-2.1-turbo-official")
+        self.assertEqual(result[0]["reference_mode"], "qwen_edit")
+        for name in ("default", "qwen-image-2.1-turbo-official"):
+            code, result = self.post({"prompt":"a paper bird", "size":"512x512",
+                                      "strata_image_profile":name})
+            self.assertEqual(code, 200, result)
+            self.assertEqual(result["strata"]["image_profile"], name)
+
+    def test_page_only_profiles_and_chat_default(self):
+        checkpoint = Path(self.tmp.name) / "animagine.safetensors"
+        checkpoint.write_bytes(b"sdxl mock weights")
+        cfg = {**self.svc.images.cfg, "family": "sdxl", "checkpoint": str(checkpoint),
+               "model_name": "Animagine XL 4.0 Opt", "steps": 28, "cfg_scale": 7.0}
+        self.svc.image_profiles["animagine-xl"] = images_api.ImageGen(cfg)
+        code, payload, _ = self.get("/v1/mikuchin/image-models")
+        self.assertEqual(code, 200)
+        models = json.loads(payload)["models"]
+        self.assertEqual([m["id"] for m in models], ["default", "animagine-xl"])
+        self.assertTrue(all(m["available"] for m in models))
+        self.assertEqual(models[0]["reference_mode"], "none")
+        self.assertEqual(models[1]["reference_mode"], "img2img")
+        self.assertEqual(models[1]["steps"], 28)
+        code, result = self.post({"prompt": "a watercolor cat", "size": "512x512",
+                                  "strata_image_profile": "animagine-xl"})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result["model"], "Animagine XL 4.0 Opt")
+        self.assertEqual(result["strata"]["image_profile"], "animagine-xl")
+        self.assertEqual(result["strata"]["steps"], 28)
+        code, result = self.post({"prompt": "same default", "size": "512x512"})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result["strata"]["image_profile"], "default")
+        self.assertEqual(result["strata"]["steps"], 8)
+        for invalid in ("other", "../secrets", 123, None):
+            self.assertEqual(self.post({"prompt": "x", "strata_image_profile": invalid})[0], 400)
+        checkpoint.unlink()
+        self.assertEqual(self.post({"prompt": "x", "strata_image_profile": "animagine-xl"})[0], 400)
+
+    def test_persistent_chat_image_works_after_restart_and_profile_switch(self):
+        # Regression: Chat's non-default model stored valid images, while GET
+        # looked only in the default generator's freshly created temp dir.
+        durable = Path(self.tmp.name) / "sessions"
+        durable.mkdir()
+        self.svc.session_v1 = type("SessionStore", (), {"root": durable})()
+        checkpoint = Path(self.tmp.name) / "animagine.safetensors"
+        checkpoint.write_bytes(b"mock weights")
+        cfg = {**self.svc.images.cfg, "family": "sdxl", "checkpoint": str(checkpoint),
+               "model_name": "Animagine", "steps": 28}
+        self.svc.image_profiles["animagine-xl-4-opt"] = images_api.ImageGen(cfg)
+        # Model A (non-default), with SessionV1 durable output directory.
+        code, resp = self.post({"prompt": "anime test", "size": "512x512",
+                                "strata_image_profile": "animagine-xl-4-opt",
+                                "response_format": "url"})
+        self.assertEqual(code, 200, resp)
+        url = resp["data"][0]["url"]
+        name = url.rsplit("/", 1)[1]
+        self.assertTrue((durable / "generated-images" / name).is_file())
+        self.assertNotEqual(self.svc.images.dir, durable / "generated-images")
+        code, png, mime = self.get(url[len(self.base):])
+        self.assertEqual((code, mime), (200, "image/png"))
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        # Simulate an application restart: both ImageGen objects now use fresh
+        # temporary directories, but the persistent file remains on disk.
+        self.svc.images.dir = Path(self.tmp.name) / "new-default-temp-dir"
+        self.svc.image_profiles["animagine-xl-4-opt"].dir = Path(self.tmp.name) / "new-profile-temp-dir"
+        code, png2, mime = self.get(url[len(self.base):])
+        self.assertEqual((code, mime), (200, "image/png"))
+        self.assertEqual(png2, png)
+        self.assertEqual(self.get("/v1/images/files/../../secrets")[0], 404)
+        self.assertEqual(self.get("/v1/images/files/" + "a" * 32 + ".png.bak")[0], 404)
+        # Regular official Chat generation also persists in the same directory.
+        code, resp = self.post({"prompt": "regular cat", "size": "512x512",
+                                "response_format": "url"})
+        self.assertEqual(code, 200, resp)
+        name2 = resp["data"][0]["url"].rsplit("/", 1)[1]
+        self.svc.images.dir = Path(self.tmp.name) / "reloaded-default-temp"
+        self.assertEqual(self.get("/v1/images/files/" + name2)[0], 200)
+
+    def test_b64(self):
+        code, body = self.post({"prompt": "a red fox", "seed": 11, "n": 2, "size": "512x768"})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(len(body["data"]), 2)
+        pngs = [base64.b64decode(x["b64_json"]) for x in body["data"]]
+        sys.path.insert(0, str(FAKE.parent))
+        import fake_sd_cli
+        self.assertEqual(pngs, [fake_sd_cli.png(512, 768, 11, "a red fox"), fake_sd_cli.png(512, 768, 12, "a red fox")])
+        self.assertEqual([x["seed"] for x in body["data"]], [11, 12])
+        self.assertEqual(body["size"], "512x768")
+        self.assertEqual(body["strata"]["steps"], 8)
+        self.assertEqual(body["strata"]["sampling_s"], 0.08)
+        self.assertEqual(body["strata"]["gpu_policy"], "keep")
+        self.assertEqual(self.svc.images.totals["images"], 2)
+        self.assertEqual([p.name for p in Path(self.svc.images.dir).iterdir()], [])   # nothing left behind
+
+    def test_url(self):
+        names = []
+        for i in range(4):
+            code, body = self.post({"prompt": "a lighthouse", "seed": i, "response_format": "url"})
+            self.assertEqual(code, 200, body)
+            url = body["data"][0]["url"]
+            self.assertTrue(url.startswith(self.base + "/v1/images/files/"), url)
+            names.append(url.rsplit("/", 1)[1])
+            code, data, ctype = self.get(url[len(self.base):])
+            self.assertEqual((code, ctype), (200, "image/png"))
+            self.assertTrue(data.startswith(b"\x89PNG"))
+        self.assertEqual(self.get("/v1/images/files/" + names[0])[0], 404)   # keep_files 3: the oldest went
+        self.assertEqual(self.get("/v1/images/files/../../setup.py")[0], 404)
+        self.assertEqual(self.get("/v1/images/files/" + "0" * 32 + ".png")[0], 404)
+
+    def test_bad_request_and_failure(self):
+        self.assertEqual(self.post({"prompt": "x", "size": "999x999"})[0], 400)
+        with mock.patch.dict(os.environ, {"FAKE_SD_FAIL": "1"}):
+            code, body = self.post({"prompt": "x"})
+        self.assertEqual(code, 500)
+        self.assertIn("ErrorDeviceLost", body["error"]["message"])
+        self.assertEqual(self.svc.images.totals["failed"], 1)
+        self.assertFalse(self.svc.status["busy"])
+        self.assertFalse(self.svc.fifo.locked())
+
+    def test_listed(self):
+        code, data, _ = self.get("/v1/models")
+        ids = [m["id"] for m in json.loads(data)["data"]]
+        self.assertIn("qwen-image-2.1-turbo", ids)
+        st = json.loads(self.get("/v1/status")[1])
+        self.assertTrue(st["image_generation"]["enabled"])
+        self.assertTrue(json.loads(self.get("/health")[1])["image_generation"])
+
+    def test_not_set_up(self):
+        self.svc.images = None
+        code, body = self.post({"prompt": "x"})
+        self.assertEqual((code, body["error"]["code"]), (404, "images_not_set_up"))
+
+    def test_chat_waits_for_the_image(self):
+        """One job at a time on the GPU: a chat request sent during an image job is answered after it."""
+        done = {}
+        with mock.patch.dict(os.environ, {"FAKE_SD_SLEEP": "1.5"}):
+            t = threading.Thread(target=lambda: done.setdefault("img", (self.post({"prompt": "x"}), time.time())))
+            t.start()
+            time.sleep(0.5)
+            req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(
+                {"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                self.assertEqual(r.status, 200)
+            chat_at = time.time()
+            t.join()
+        (code, _), img_at = done["img"]
+        self.assertEqual(code, 200)
+        self.assertGreaterEqual(chat_at, img_at - 0.05)
+
+
+if __name__ == "__main__":
+    unittest.main()

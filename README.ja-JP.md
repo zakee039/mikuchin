@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.2.6** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.6)
+**メインアプリ v0.2.7** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.7)
 
-**個別バージョン：**メインアプリ `0.2.6` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
+**個別バージョン：**メインアプリ `0.2.7` · Windows ランチャー `0.2.4` · Android クライアント `0.2.4`（versionCode 204）。今回の更新対象はメインアプリのみで、ランチャーと APK のバイナリは変更ありません。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -64,7 +64,7 @@
 mikuchin/
 ├── assets/                 # アイコン・ブランド画像
 ├── backend/
-│   ├── polystrata/         # 推論エンジン（Git サブモジュール）
+│   ├── polystrata/         # 推論エンジンの同梱ソース（本リポジトリで管理）
 │   └── services/           # サービス・オーケストレーション
 ├── character/              # キャラクターカード・参照画像
 ├── chat/                   # 会話履歴・生成画像・KV スナップショット
@@ -105,9 +105,10 @@ Windows インストーラーおよびリポジトリにはモデルの重みフ
 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。ローカルのモデルファイルを準備し、ランチャーから設定ファイルを登録してください。
 
 ```bash
-git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
-# すでに clone 済みの場合: git submodule update --init --recursive
+git clone https://github.com/zakee039/mikuchin.git
 ```
+
+推論エンジンのソースは本リポジトリに含まれ、**Git サブモジュールや個人の PolyStrata fork は不要**です。推論にはモデルの重み、GPU 用ライブラリやビルド済みのネイティブエンジンが別途必要です。元の MIT ライセンスと著作権表示は [backend/polystrata/LICENSE](backend/polystrata/LICENSE) と [第三者ライセンス表示](THIRD_PARTY_NOTICES.md) に残しています。
 
 ```powershell
 python scripts/build-locales.py
@@ -119,4 +120,4 @@ Android では「直接接続」または「Tailscale」を選択します。Tai
 
 ## 🔒 セキュリティと注意事項
 
-API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。v0.2.4 APK はリリース用署名で配布しています。以前の Android Debug 証明書で署名された APK からの上書き更新はできない場合があるため、設定を控えてから再インストールしてください。PolyStrata のライセンスと帰属はサブモジュールの原文をご確認ください。
+API Key、Tailnet の認証状態、会話データ、モデル重みは GitHub に含めないでください。ネットワーク環境により VPN の共存動作が変わるため、端末上で検証してください。v0.2.4 APK はリリース用署名で配布しています。以前の Android Debug 証明書で署名された APK からの上書き更新はできない場合があるため、設定を控えてから再インストールしてください。同梱エンジンのライセンスと著作権表示を参照してください。

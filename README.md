@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.2.6** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.6)
+**主程序 v0.2.7** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.7)
 
-**独立版本：**主程序 `0.2.6` · Windows 启动器 `0.2.4` · Android 客户端 `0.2.4`（versionCode 204）。本次只更新主程序，启动器与 APK 沿用原版构建。
+**独立版本：**主程序 `0.2.7` · Windows 启动器 `0.2.4` · Android 客户端 `0.2.4`（versionCode 204）。本次只更新主程序，启动器与 APK 沿用原版构建。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -86,7 +86,7 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
 mikuchin/
 ├── assets/                 # 官方品牌插画与权威图标资源 (icon.png, half.png, full.png)
 ├── backend/
-│   ├── polystrata/         # 高性能本地推理引擎 (独立 Git 子模块)
+│   ├── polystrata/         # 内置的本地推理引擎源码（随 Mikuchin 一同维护）
 │   └── services/           # 编排与引擎无关的服务基础设施
 ├── character/              # 独立于模型的角色卡 SQLite 数据库与角色参考图存储
 ├── chat/                   # 本地运行时会话数据库、生成图片与模型 KV 快照 (Git 忽略)
@@ -102,12 +102,12 @@ mikuchin/
 
 ## 🚀 快速开始与构建指南
 
-### 1. 克隆仓库（含推理引擎子模块）
+### 1. 克隆仓库（完整源码，零子模块）
 ```bash
-git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
-# 若已克隆主仓库，请初始化子模块：
-git submodule update --init --recursive
+git clone https://github.com/zakee039/mikuchin.git
 ```
+
+推理引擎源码已随主仓库直接提供，无需另行克隆 PolyStrata，也不依赖任何个人 fork 存在。推理模型权重、驱动及编译产生的原生引擎仍需按部署文档准备。所集成引擎的 MIT 版权与许可全文保留于 [backend/polystrata/LICENSE](backend/polystrata/LICENSE)，另见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ### 2. 构建多语言词典与 Windows 桌面管理器
 ```powershell

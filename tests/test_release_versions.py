@@ -6,7 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "frontend/web"
-MAIN_VERSION = "0.2.6"
+MAIN_VERSION = "0.2.7"
 
 
 class ReleaseVersionTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class ReleaseVersionTests(unittest.TestCase):
 
     def test_about_page_loads_versions_before_app(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        self.assertIn('src="web/versions.js?v=0.2.6"', html)
+        self.assertIn('src="web/versions.js?v=0.2.7"', html)
         self.assertLess(html.index("web/versions.js"), html.index("web/app.js"))
         app = (WEB / "app.js").read_text(encoding="utf-8")
         for key in ("main", "launcher", "android"):
@@ -47,7 +47,7 @@ class ReleaseVersionTests(unittest.TestCase):
             self.assertIn("Miku亲", doc)
             self.assertIn("https://zakee.fun", doc)
             self.assertIn("https://ifdian.net/a/zakee/plan", doc)
-            self.assertIn("releases/tag/v0.2.6", doc)
+            self.assertIn("releases/tag/v0.2.7", doc)
             self.assertIn("0.2.4", doc)
             self.assertGreater(len(doc), 4500, name)
 

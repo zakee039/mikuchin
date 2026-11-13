@@ -1,8 +1,8 @@
-"""Package the *complete tracked source* including the PolyStrata submodule.
+"""Package Mikuchin's complete tracked source, including its bundled backend.
 
-GitHub's automatic source archives do not include Git submodule contents, so
-this main-program archive includes both committed trees. The archive NEVER
-contains generated images, conversations, credentials, models, or virtualenvs.
+No Git submodule or secondary repository is required. Only files tracked in
+the Mikuchin repository enter the archive: never package generated images,
+conversations, credentials, local model files, runtimes or virtual environments.
 
 Usage: python scripts/package-main-release.py
 """
@@ -16,7 +16,6 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SUBMODULE = ROOT / "backend/polystrata"
 DIST = ROOT / "dist/release"
 
 
@@ -24,10 +23,10 @@ def git(*args: str, cwd: Path = ROOT) -> bytes:
     return subprocess.check_output(["git", *args], cwd=cwd)
 
 
-def tracked_files(path: Path):
-    for name in git("ls-files", "-z", cwd=path).decode("utf-8").split("\0"):
+def tracked_files():
+    for name in git("ls-files", "-z").decode("utf-8").split("\0"):
         if name:
-            file = path / name
+            file = ROOT / name
             if file.is_file():
                 yield file
 
@@ -38,13 +37,12 @@ def main() -> int:
     if not match:
         raise ValueError("Cannot read main-program version from web/versions.js")
     version = match.group(1)
-    for cwd in (ROOT, SUBMODULE):
-        if git("status", "--porcelain", cwd=cwd).strip():
-            raise ValueError(f"Refusing to archive dirty worktree: {cwd}")
-    sub_head = git("rev-parse", "HEAD", cwd=SUBMODULE).decode().strip()
-    expected_sub = git("rev-parse", "HEAD:backend/polystrata").decode().strip()
-    if sub_head != expected_sub:
-        raise ValueError("Submodule checkout does not match pinned main-program commit")
+    if git("status", "--porcelain").strip():
+        raise ValueError(f"Refusing to archive dirty worktree: {ROOT}")
+    if (ROOT / ".gitmodules").exists():
+        raise ValueError("This release must not depend on Git submodules")
+    if not (ROOT / "backend/polystrata/LICENSE").is_file():
+        raise ValueError("Missing bundled engine source or license")
 
     out = DIST / f"Mikuchin-Main-v{version}-source.zip"
     DIST.mkdir(parents=True, exist_ok=True)
@@ -52,10 +50,9 @@ def main() -> int:
     count = 0
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6,
                          allowZip64=True) as archive:
-        for directory in (ROOT, SUBMODULE):
-            for file in tracked_files(directory):
-                archive.write(file, prefix + file.relative_to(ROOT).as_posix())
-                count += 1
+        for file in tracked_files():
+            archive.write(file, prefix + file.relative_to(ROOT).as_posix())
+            count += 1
 
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
     (DIST / f"{out.name}.sha256").write_text(f"{digest}  {out.name}\n", encoding="ascii")

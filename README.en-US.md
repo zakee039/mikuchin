@@ -6,9 +6,9 @@
 
 **Self-hosted Multimodal AI Companion & Image Studio**
 
-**Main app v0.2.6** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.6)
+**Main app v0.2.7** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.7)
 
-**Independent versions:** main app `0.2.6` · Windows launcher `0.2.4` · Android client `0.2.4` (versionCode 204). Only the main app changes in this release; the launcher and APK binaries are unchanged.
+**Independent versions:** main app `0.2.7` · Windows launcher `0.2.4` · Android client `0.2.4` (versionCode 204). Only the main app changes in this release; the launcher and APK binaries are unchanged.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -64,7 +64,7 @@ You manage models, conversations, character data, and generated images on your o
 mikuchin/
 ├── assets/                 # Brand images and icons
 ├── backend/
-│   ├── polystrata/         # Inference engine (Git submodule)
+│   ├── polystrata/         # Bundled inference engine sources, tracked by this repository
 │   └── services/           # Model-independent services
 ├── character/              # Character cards and reference artwork
 ├── chat/                   # Sessions, generated images and KV snapshots
@@ -105,9 +105,10 @@ Used for in-chat drawing and the Image Studio:
 Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; prepare your local model files and register the configuration in the launcher.
 
 ```bash
-git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
-# Already cloned? git submodule update --init --recursive
+git clone https://github.com/zakee039/mikuchin.git
 ```
+
+The inference engine is included in this repository: **no Git submodules or external PolyStrata fork are required**. Model weights, native dependencies and GPU backends must still be installed for inference. Original MIT attribution is preserved in [backend/polystrata/LICENSE](backend/polystrata/LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ```powershell
 python scripts/build-locales.py
@@ -119,4 +120,4 @@ On Android, choose Direct or Tailscale connection. Tailscale mode requires brows
 
 ## 🔒 Security and compatibility
 
-Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.4 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the PolyStrata submodule for its own licensing and attribution.
+Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.4 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the bundled engine's license and third-party notices for attribution.
