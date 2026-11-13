@@ -12,6 +12,7 @@
 #include "mmq.hpp"
 #include "qwen35.hpp"
 #include "runtime.hpp"
+#include "thread_policy.hpp"
 #include "strata/poly/kernels.hpp"
 #include "strata/kernels/native_mmvq.hpp"
 
@@ -68,7 +69,7 @@ int tile_class(int rows) {
 }
 
 // A container's CPU quota is not in the affinity mask: a 25-CPU pod on a 208-thread host shows 208.
-int usable_cpus() {
+int usable_cpus(bool* quota_set = nullptr) {
     long long n = (long long) std::thread::hardware_concurrency();
 #ifdef __linux__
     cpu_set_t set;
@@ -85,9 +86,22 @@ int usable_cpus() {
             std::fclose(p);
         }
     }
-    if (quota > 0 && period > 0) n = std::min(n, std::max(1LL, quota / period));
+    if (quota > 0 && period > 0) {
+        n = std::min(n, std::max(1LL, quota / period));
+        if (quota_set) *quota_set = true;
+    }
+#else
+    (void) quota_set;
 #endif
     return (int) std::max(n, 1LL);
+}
+
+// On desktop hosts reserve some CPU time for foreground apps. Preserve explicit
+// --threads N and containers with a CPU quota. Ported from PolyStrata 95e8fadb.
+int default_threads() {
+    bool quota = false;
+    const int n = usable_cpus(&quota);
+    return auto_cpu_threads(n, quota);
 }
 
 // On a machine with several NUMA nodes the file cache's pages are on the node whose CPU read them first, and the
@@ -2138,7 +2152,7 @@ void Engine::load(const Options& o) {
             }
         }
     }
-    const int threads = opt_.threads > 0 ? opt_.threads : usable_cpus();
+    const int threads = opt_.threads > 0 ? opt_.threads : default_threads();
     mind_memory();
     // the routed experts in the mapped files, and of them the ones the CPU reads through the mapping: those the
     // card does not have, as many as Options::ram_experts_mib keeps

@@ -36,6 +36,11 @@ void unlock_resident(void* p, uint64_t bytes);
 /// `why` says so) when the query is not possible - always elsewhere than Windows.
 bool gpu_shared_memory_budget(const void* luid, uint64_t& budget, uint64_t& usage, std::string& why);
 
+/// Windows WDDM DXGI local VRAM budget and current process usage for CUDA LUID.
+/// Read-only; never reserves VRAM or changes the model's cache.
+/// Adapted from PolyStrata aa31d266.
+bool gpu_local_memory_budget(const void* luid, uint64_t& budget, uint64_t& usage, std::string& why);
+
 /// The machine's physical RAM in bytes (0 when unknown).
 uint64_t total_physical_memory();
 

@@ -1226,6 +1226,39 @@ class StrataEngine:
             if time.time() > deadline:
                 raise EngineDied("the engine did not answer the VRAM command")
 
+    def budget(self, timeout: float = 1.0) -> dict:
+        """Read the native engine's WDDM local VRAM budget without changing allocations.
+
+        Caller holds the service admission locks. Older engines do not advertise
+        budget_query=1 and must not receive this command.
+        """
+        if not self.alive():
+            raise EngineDied("the engine is not running")
+        if self.info.get("budget_query") != 1:
+            return {"supported": False, "reason": "the native engine does not support WDDM budget queries"}
+        self.proc.stdin.write("BUDGET\n")
+        self.proc.stdin.flush()
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            raise EngineDied("the engine did not answer the BUDGET command") from None
+        if line is None:
+            raise EngineDied("the engine ended while querying its GPU budget")
+        if not line.startswith("BUDGET "):
+            raise ValueError("unexpected GPU budget reply: " + line.strip()[:100])
+        out = {}
+        for kv in line.split()[1:]:
+            key, _, value = kv.partition("=")
+            out[key] = int(value) if value.lstrip("-").isdigit() else value
+        if out.get("supported") != 1:
+            return {"supported": False, "reason": "WDDM local VRAM budget is unavailable on this GPU"}
+        if not all(isinstance(out.get(key), int) and out[key] >= 0 for key in
+                   ("local_budget_mib", "local_usage_mib", "gpu_index")):
+            raise ValueError("invalid native GPU budget response")
+        return {"supported": True, "gpu_index": out["gpu_index"],
+                "local_budget_mib": out["local_budget_mib"],
+                "local_usage_mib": out["local_usage_mib"]}
+
     @staticmethod
     def sampling_keys(sampling: dict) -> str:
         keys = ""
@@ -4043,6 +4076,41 @@ class Service:
                 ctl.release()
             self.fifo.release()
 
+    def gpu_budget(self) -> dict:
+        """Cached, read-only WDDM budget sample for the API monitor.
+
+        Never wait behind an active request or take the admission queue away
+        from inference. Legacy binaries report unsupported until rebuilt.
+        """
+        now = time.monotonic()
+        if not self.loaded() or getattr(self.engine, "info", {}).get("budget_query") != 1:
+            return {"supported": False, "reason": "requires a loaded, rebuilt strata-poly engine"}
+        generation = getattr(self.engine, "gen", 0)
+        cache = getattr(self, "_gpu_budget_cache", None) if getattr(
+            self, "_gpu_budget_generation", generation) == generation else None
+        if cache is not None and now - getattr(self, "_gpu_budget_at", 0) < 5.0:
+            return dict(cache)
+        if not self.fifo.acquire(blocking=False):
+            return dict(cache, stale=True) if cache is not None else {
+                "supported": False, "reason": "inference is busy"}
+        ctl = getattr(self.engine, "ctl", None) if getattr(self.engine, "batch", 0) else None
+        if ctl is not None and not ctl.acquire(blocking=False):
+            self.fifo.release()
+            return dict(cache, stale=True) if cache is not None else {
+                "supported": False, "reason": "inference is busy"}
+        try:
+            result = self.engine.budget(timeout=1.0)
+            self._gpu_budget_cache, self._gpu_budget_at = result, now
+            self._gpu_budget_generation = generation
+            return dict(result)
+        except (EngineDied, ValueError, OSError) as e:
+            return dict(cache, stale=True) if cache is not None else {
+                "supported": False, "reason": str(e)[:160]}
+        finally:
+            if ctl is not None:
+                ctl.release()
+            self.fifo.release()
+
     def _say_died(self, e: Exception) -> None:
         """The server window's line for an engine that died (or was ended, #481) in the middle of a request."""
         note = self.engine.death_note() if hasattr(self.engine, "death_note") else ""
@@ -6335,6 +6403,14 @@ def make_handler(svc: Service):
                     self._json(404, {"error": {"message": "V1 sessions disabled"}})
                     return
                 self._json(200, {"sampling": svc.session_v1.default_sampling()})
+                return
+            if path == "/v1/strata/gpu-budget":
+                if not self._authorized():
+                    return
+                if not svc.api_key and self._foreign_origin():
+                    self._json(403, {"error": {"message": "GPU budget requires a trusted origin or API key"}})
+                    return
+                self._json(200, svc.gpu_budget())
                 return
             if path == "/v1/strata/sessions" or path.startswith("/v1/strata/sessions/"):
                 if not self._authorized():

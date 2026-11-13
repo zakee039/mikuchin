@@ -10,8 +10,10 @@
 #include "engine.hpp"
 #include "guesses.hpp"
 #include "strata/core/conversation_memory.hpp"
+#include "strata/platform/memory.hpp"
 #include "strata/spec/draft_policy.hpp"
 #include "strata/spec/suffix_drafter.hpp"
+#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <atomic>
@@ -60,6 +62,29 @@ using strata::poly::Options;
 using Clock = std::chrono::steady_clock;
 
 double ms_since(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
+
+// A read-only WDDM query. Never resize the cache or claim VRAM here: model and image
+// generators share the same card in Mikuchin. Based on upstream aa31d266.
+void report_local_vram_budget() {
+#if defined(_WIN32) && defined(STRATA_POLY_NVIDIA_CUDA)
+    int gpu = -1;
+    cudaDeviceProp prop{};
+    uint64_t budget = 0, usage = 0;
+    std::string why;
+    if (cudaGetDevice(&gpu) != cudaSuccess || gpu < 0 ||
+        cudaGetDeviceProperties(&prop, gpu) != cudaSuccess ||
+        !strata::platform::gpu_local_memory_budget(prop.luid, budget, usage, why)) {
+        (void) cudaGetLastError();
+        std::printf("BUDGET supported=0\n");
+    } else {
+        std::printf("BUDGET supported=1 gpu_index=%d local_budget_mib=%llu local_usage_mib=%llu\n",
+                    gpu, (unsigned long long) (budget >> 20), (unsigned long long) (usage >> 20));
+    }
+#else
+    std::printf("BUDGET supported=0\n");
+#endif
+    std::fflush(stdout);
+}
 
 // serve() saves the experts' use after its first answer and then after an answer when the last save is this long
 // ago, and not only when it is told to quit: a server that is ended on Windows takes its engine with it at once.
@@ -617,7 +642,7 @@ int serve(Session& ss, uint64_t signature) {
     engine.trim();
     std::printf("INFO context=%d expert_slots=%d expert_cache_mib=%lld pool_workers=%d conversation_cache_mib=%lld "
                 "conversation_cache_slots=%d conversation_cache_min_free_mib=%lld vram_free_mib=%lld vram_elastic=1 "
-                "batch_slots=%d session_files=1 engine=" STRATA_VERSION "\n",
+                "batch_slots=%d session_files=1 budget_query=1 engine=" STRATA_VERSION "\n",
                 engine.max_context(), engine.cached_experts(), (long long) (engine.cached_gib() * 1024.0),
                 engine.threads(), (long long) ss.flags.o.park_mib, ss.flags.o.park_slots, ss.flags.min_free_mib,
                 (long long) engine.vram_free_mib(), (int) slots.size());
@@ -741,6 +766,11 @@ int serve(Session& ss, uint64_t signature) {
             continue;
         }
         if (line.rfind("BYIELD", 0) == 0) continue;
+        // Safe even while batch slots are generating: this reads only the WDDM budget.
+        if (line == "BUDGET") {
+            report_local_vram_budget();
+            continue;
+        }
         lines.stop.store(false);   // a STOP that came between requests is stale
         // BGEN <slot> <max_new> ... reads the prompt and picks its first token as GEN 1 does, then the request goes
         // on in that slot (BADM <slot> 1), or ends there (BADM <slot> 0)
@@ -1083,7 +1113,8 @@ void usage() {
     std::fprintf(stderr,
                  "usage: strata-poly --model FILE.gguf (--serve | --tokens ID,ID,... [--max-new N])\n"
                  "  --max-context N        tokens the attention caches hold (default 8192)\n"
-                 "  --threads N            CPU threads for the experts that are not in VRAM (default: all usable)\n"
+                 "  --threads N            CPU threads for experts outside VRAM (default: ~70%% of usable CPUs\n"
+                 "                         on desktop; all quota-limited CPUs in containers; explicit N wins)\n"
                  "  --vram-reserve-mib N   VRAM left free beside the expert cache, 256 at least (default: a\n"
                  "                         thirty-second of the card, 256 to 768, or a sixteenth, 512 to 1024,\n"
                  "                         when the PC's free RAM is within 4 GiB of the model's files, and then\n"

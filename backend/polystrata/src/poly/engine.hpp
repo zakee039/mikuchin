@@ -49,7 +49,7 @@ enum class KvFmt { kFp16 = 0, kQ8_0 = 1, kInt8 = 2, kInt8K = 3 };
 struct Options {
     std::string model;
     int max_context = 8192;
-    int threads = 0;              ///< 0: the CPUs this process may use
+    int threads = 0;              ///< 0: auto (70% on desktop, all quota-limited CPUs); >0: manual
     int vram_reserve_mib = -1;    ///< left free after the expert cache is filled; below 0: by the card's size
     std::string profile;          ///< expert use counts; orders the expert cache, and save_profile() adds to it
     bool gpu_experts = true;

@@ -72,7 +72,9 @@ async function showDetail() {
 }
 async function refresh() {
   try {
-    const [status, history] = await Promise.all([api("/v1/status"), api("/api/requests")]);
+    const [status, history, budget] = await Promise.all([
+      api("/v1/status"), api("/api/requests"),
+      api("/v1/strata/gpu-budget").catch(() => ({supported:false}))]);
     state = status; records = history.requests;
     status.loaded = history.loaded; status.auto_load = history.auto_load;
     if (selected && !records.some(r => r.id === selected)) {
@@ -83,6 +85,9 @@ async function refresh() {
     text("loaded", loading ? "Loading…" : inflight ? "In use" : status.loaded ? "Loaded" : "Unloaded");
     $("model-state").className = `value ${inflight || loading ? "busy" : status.loaded ? "loaded" : ""}`;
     text("model", status.model); text("count", records.length);
+    text("wddm-budget", budget.supported
+      ? `WDDM GPU ${budget.gpu_index}: ${budget.local_usage_mib} / ${budget.local_budget_mib} MiB${budget.stale ? " (cached)" : ""}`
+      : "WDDM VRAM: —");
     text("active", inflight ? `${inflight} active / queued` : status.auto_load ? "Loads automatically on the next request" : "No active requests");
     const last = records.find(r => !active(r));
     text("wall", last ? seconds(last.wallclock_s) : "—"); text("speed", speed(last?.timings?.predicted_per_second));
