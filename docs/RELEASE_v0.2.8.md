@@ -1,5 +1,24 @@
 # Mikuchin v0.2.8 — 版本统一与 PolyStrata 增量更新
 
+## 2026-11-13 同版本覆盖发布（生图调用补丁）
+
+用户要求覆盖既有 `v0.2.8` Git Tag 和 GitHub Release，保留版本号与原有的二进制版本轴。
+
+- 主程序修复 Gemma 4 偶发输出 `<call:polystrata__generate_image ... />`
+  而没有真正生图的问题；仅允许在声明了第一方生图工具时解析这类调用。
+- 参数无效、工具调用未闭合或者生图后台异常时提供明确的失败回执；
+  生图提示词保持用户意图，不擅自强化内容。
+- 已运行 25 项图像工具/解析器测试、42 项 Responses 测试、34 项并发测试、
+  93 项前端及 MCP 解析测试、12 项项目测试；有 1 项预期跳过。
+  真实生图联动产生完整 `start → call → result`、返回 `ok=true`
+  和有效 PNG，视觉回复随后完成；单次工具执行约 180 秒，仍有冷启动性能成本。
+- 仅重新打包并覆盖 `Mikuchin-Main-v0.2.8-source.zip`、`.sha256` 和
+  `Mikuchin-v0.2.8-release-manifest.json`；不替换 Launcher 便携版/安装包、
+  Android APK 或 CUDA 引擎资产，保留此前实际构建和验证的 SHA256。
+- 最初发布时 Tag 对应提交 `b62a05c3fe43cb74bdd456feb657a3bb2564a37c`。
+  本次覆盖后仍沿用名称 `v0.2.8`，旧 ZIP 下载者应重新获取新归档。
+- 具体实现、完整生图验收及回滚记录：`docs/IMAGE_TOOL_FIX_2026-11-13.md`。
+
 ## 版本矩阵（以 versions.json 为准）
 
 | 组件 | 上一发布版本 | 本次发布版本 | 发布要求 |
