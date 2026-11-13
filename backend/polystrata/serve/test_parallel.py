@@ -94,6 +94,8 @@ while True:
         continue                              # too late: the read it was for has ended
     if line.startswith("BSTOP "):
         b = int(line.split()[1])
+        if log:
+            log.write(f"BSTOP {b} {'active' if b in active else 'idle'}\n"); log.flush()
         if b in active:
             active[b][1] = 0
             stopped.add(b)
@@ -832,6 +834,57 @@ class ParallelService(unittest.TestCase):
             e.slot_claims.discard(0)
             self.assertEqual(e._reap_orphan_slots(), [0])
             self.assertEqual(e.slot_busy, [False, True])
+
+    def test_gemma_style_engine_stop_token_does_not_stop_an_idle_slot(self):
+        """An EOS other than ChatML's (Gemma <turn|>) is an actual slot finish, not an early disconnect."""
+        self.start(2, slot_cache=True, reuse=True)
+        self.assertIn(257, self.engine.eos_ids)
+        result = {}
+        a = threading.Thread(target=lambda: result.setdefault("a", self.chat("List three primes please", 200)))
+        b = threading.Thread(target=lambda: result.setdefault("b", self.chat("Name two rivers in Germany", 200)))
+        a.start(); b.start(); a.join(30); b.join(30)
+        self.assertEqual(sorted(result), ["a", "b"])
+        logs = self.log.read_text().splitlines()
+        self.assertIn("BGEN", [line.split()[0] for line in logs])
+        self.assertEqual([line for line in logs if line.startswith("BSTOP") and line.endswith(" idle")], [], logs)
+        self.assertFalse(any(self.engine.slot_busy))
+        self.assertEqual(self.engine.slot_claims, set())
+
+    def test_release_hands_claim_to_bdone_wait_before_slot_reuse(self):
+        """A queued BDONE must not delete a subsequent request's slot claim (#1994)."""
+        self.start(2)
+        e = self.engine
+        e.ORPHAN_SLOT_S = 0.0
+        with e.slot_cv:
+            e._claim_slot(0)
+        e.slot_q[0].put("BDONE 0 9 stop 12.0\n")
+        e._release_slot_when_done(0)
+        self.assertNotIn(0, e.slot_claims)
+        deadline = time.time() + 5
+        while e.slot_busy[0] and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(e.slot_busy[0])
+        with e.slot_cv:
+            e._claim_slot(0)
+        time.sleep(0.1)
+        with e.slot_cv:
+            self.assertIn(0, e.slot_claims)
+            self.assertEqual(e._reap_orphan_slots(), [])
+
+    def test_claim_resets_old_orphan_grace_timer(self):
+        """An old sighting of an ownerless slot must not shorten the next request's grace window."""
+        self.start(2)
+        e = self.engine
+        e.ORPHAN_SLOT_S = 0.3
+        with e.slot_cv:
+            e.slot_busy[0] = True
+            self.assertEqual(e._reap_orphan_slots(), [])
+        time.sleep(0.4)
+        with e.slot_cv:
+            e._claim_slot(0)
+            e.slot_claims.discard(0)
+            self.assertEqual(e._reap_orphan_slots(), [])
+            self.assertTrue(e.slot_busy[0])
 
     def test_a_parallel_request_does_not_wait_for_the_fifo_on_a_loaded_engine(self):
         """#1603: parallel requests used to take the FIFO (held by an image encode, /v1/vram, load) just to find the
