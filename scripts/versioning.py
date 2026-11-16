@@ -102,19 +102,19 @@ def expected_files(data: dict) -> dict[str, str]:
         if file == "README.en-US.md":
             detail = ("Only the main application was updated this release; the launcher and Android "
                       "client retain their existing binaries." if only_main_bumped else
-                      "See the release manifest for the actual artifacts and rebuild status.")
+                      "All three artifacts were rebuilt for this release; see the release manifest.")
             line = (f"**Independent versions:** main app `{m}` · Windows launcher `{l}` · "
                     f"Android client `{a}` (versionCode {c}). {detail} "
                     "They remain independently versioned for future changes.")
         elif file == "README.ja-JP.md":
             detail = ("今回はメインアプリのみ更新。ランチャーと Android は既存バイナリを継続使用します。"
-                      if only_main_bumped else "実際のビルド資産は Release のマニフェストを参照してください。")
+                      if only_main_bumped else "今回は全 3 コンポーネントを再ビルドしました。Release のマニフェストを参照してください。 ")
             line = (f"**個別バージョン：**メインアプリ `{m}` · Windows ランチャー `{l}` · "
                     f"Android クライアント `{a}`（versionCode {c}）。{detail}"
                     "以降のバージョンは個別に管理し、versions.json に記録します。")
         else:
             detail = ("本次仅更新主程序；启动器与安卓端继续使用原版二进制。"
-                      if only_main_bumped else "实际构建产物以 GitHub Release 资产清单为准。")
+                      if only_main_bumped else "本次三个组件均重新构建，详见 GitHub Release 资产清单。")
             line = (f"**独立版本：**主程序 `{m}` · Windows 启动器 `{l}` · "
                     f"Android 客户端 `{a}`（versionCode {c}）。{detail}"
                     "后续仍允许独立升级，所有版本号统一记录在 versions.json。")

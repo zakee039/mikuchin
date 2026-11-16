@@ -8,7 +8,7 @@
 
 **Main app v0.2.9** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.9)
 
-**Independent versions:** main app `0.2.9` · Windows launcher `0.2.8` · Android client `0.2.8` (versionCode 208). Only the main application was updated this release; the launcher and Android client retain their existing binaries. They remain independently versioned for future changes.
+**Independent versions:** main app `0.2.9` · Windows launcher `0.2.9` · Android client `0.2.9` (versionCode 209). All three artifacts were rebuilt for this release; see the release manifest. They remain independently versioned for future changes.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -52,7 +52,7 @@ You manage models, conversations, character data, and generated images on your o
    - System tray integration, one-click model config switching, manual model load/unload while keeping the API resident, watchdog auto-restart, configurable **Idle Unload Timeout** (`0–1440` minutes), LAN access toggle, Windows DPAPI credential encryption, and integrated **Cloudflare Tunnel** monitoring, HTTPS latency probing, and restart controls.
 
 6. **Android Client with Built-in User-Space Tailscale (`tsnet`)**
-   - **Adaptive Light-Theme Mobile Shell**: Opens with a minimal connection gate before authentication and jumps straight to the most recent chat session once connected, featuring a persistent top-left history drawer toggle and a borderless 5-button bottom navigation bar (`Images`, `Characters`, `Settings`, `Monitor`, `About`).
+   - **Adaptive Light-Theme Mobile Shell**: Opens with a minimal connection gate before authentication and jumps straight to the most recent chat session once connected, featuring a persistent top-left history drawer toggle and a borderless 6-button bottom navigation bar (`Image Gen`, `Gallery`, `Characters`, `Settings`, `Monitor`, `About`).
    - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration), without requiring root access or the official Tailscale app.
    - **Two-Step Web OAuth & Hardware-Backed Security**: Supports **Direct** and **Tailscale** connection modes. In Tailscale mode, users first complete interactive web OAuth device login before the endpoint and API key fields unfold. API keys are encrypted via **Android Keystore (`AES/GCM/NoPadding`)**, and all native checks, SSE streaming chats, and uploads traverse a localhost-only (`127.0.0.1`) reverse proxy guarded by per-session random tokens.
 
@@ -121,4 +121,4 @@ On Android, choose Direct or Tailscale connection. Tailscale mode requires brows
 
 ## 🔒 Security and compatibility
 
-Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.8 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the bundled engine's license and third-party notices for attribution.
+Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.9 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the bundled engine's license and third-party notices for attribution.

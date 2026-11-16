@@ -12,7 +12,8 @@
 
   const TAB_TITLES = {
     chat: "Mikuchin",
-    images: "图像",
+    images: "生图",
+    gallery: "画廊",
     characters: "角色",
     settings: "设置",
     monitor: "监控",
@@ -142,13 +143,14 @@
     const toggleBtn = document.getElementById("sidebar-toggle");
     if (toggleBtn) toggleBtn.onclick = () => setDrawerOpen(false);
 
-    // 3. Create bottom 5 navigation buttons inside #session-sidebar: 图像, 角色, 设置, 监控, 关于 (borderless)
+    // 3. Create six bottom navigation buttons inside #session-sidebar: 生图, 画廊, 角色, 设置, 监控, 关于
     if (!document.getElementById("mk-android-drawer-nav")) {
       const nav = document.createElement("nav");
       nav.id = "mk-android-drawer-nav";
       nav.setAttribute("aria-label", "功能导航");
       const items = [
-        ["images", "i-image", "图像"],
+        ["images", "i-image", "生图"],
+        ["gallery", "i-layers", "画廊"],
         ["characters", "i-character", "角色"],
         ["settings", "i-settings", "设置"],
         ["monitor", "i-activity", "监控"],

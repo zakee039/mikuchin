@@ -20,7 +20,7 @@ html, body {
   display: none !important;
 }
 
-/* Persistent top-left control bar across ALL views (Chat, 图像, 角色, 设置, 监控, 关于) */
+/* Persistent top-left control bar across ALL views (Chat, 生图, 画廊, 角色, 设置, 监控, 关于) */
 #mk-android-topbar {
   flex: 0 0 auto;
   display: flex;
@@ -228,14 +228,14 @@ main {
 #mk-android-drawer-nav {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 2px;
   padding-top: 8px;
   margin-top: 4px;
   border-top: 1px solid var(--st-line-soft);
 }
 
-/* Borderless 5 bottom buttons in control drawer */
+/* Borderless 6 bottom buttons in control drawer */
 .mk-android-nav-btn {
   display: flex;
   flex-direction: column;

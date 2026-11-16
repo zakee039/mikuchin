@@ -4,7 +4,7 @@
   "previous_release": "v0.2.8",
   "components": {
     "main": { "version": "0.2.9", "previous_version": "0.2.8" },
-    "launcher": { "version": "0.2.8", "previous_version": "0.2.4" },
-    "android": { "version": "0.2.8", "versionCode": 208, "previous_version": "0.2.4", "previous_versionCode": 204 }
+    "launcher": { "version": "0.2.9", "previous_version": "0.2.8" },
+    "android": { "version": "0.2.9", "versionCode": 209, "previous_version": "0.2.8", "previous_versionCode": 208 }
   }
 }

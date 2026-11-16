@@ -2,13 +2,13 @@
 
 ## 发布范围（2026-11-16）
 
-本次**仅主程序升级 0.2.8 → 0.2.9**：Web 工作台与随仓库交付的 PolyStrata/Mikuchin 服务端代码更新。
+本版最初仅发布主程序 0.2.9；**2026-11-16 同版本补发**时，根据画廊在 Android 导航中的入口缺失问题，重新构建 Windows Launcher 0.2.9 和 Android 0.2.9（versionCode 209），三轴统一至 0.2.9。保留既有 v0.2.9 Release 页面，Tag 随补发提交更新，旧版下载者应重新下载。
 
 | 组件 | 当前发布 | 是否更新 | 说明 |
 |---|---|---|---|
 | Mikuchin Main | **0.2.9** | 是 | 独立源码 ZIP 含最新版前后端；部署时依原有 README 配置 Python/模型 |
-| Windows Launcher | **0.2.8** | 否 | 沿用上一版已构建的 EXE / NSIS 安装包，不重新编译 |
-| Android | **0.2.8 / 208** | 否 | 沿用上一版签名 APK，不改变 package/versionCode |
+| Windows Launcher | **0.2.9** | 是 | 重新构建 Tauri 便携 EXE 与 NSIS 安装包；不再使用 v0.2.8 二进制 |
+| Android | **0.2.9 / 209** | 是 | 重新构建并用既有证书签名，升级保持相同应用 ID 和签名证书 |
 | Windows CUDA SM86 推理引擎（可选） | **0.2.8** | 否 | 不重命名旧版可执行文件，详见此前发布 |
 
 ## 主要改动
@@ -34,14 +34,19 @@
 ## 构建与验证
 
 - `versions.json` 为三轴版本唯一来源；运行 `python scripts/versioning.py sync` 与 `check` 核实。
-- 画廊 9 项、API 生图 17 项回归测试通过；JavaScript 语法、Python 编译、版本及敏感路径检查在发布前执行。
+- 画廊 9 项、API 生图 17 项回归测试通过；增加 Android 画廊导航 2 项回归验证；全项目共 **40 项**自动化测试通过，完成 JavaScript 语法、版本及运行路径审计。
 - 本地历史目录 17 个图片文件能合并为 10 组作品（7 对原图/超分）；测试在隔离目录中删除模拟图，**未删除用户实际作品**。
+- Android 导航增加「画廊」，将「图像」更名「生图」，从五入口改为六入口，保留聊天历史抽屉及当前页面高亮。
+- Android 正式签名 APK 已经 `apksigner verify` 通过，签名证书 SHA256 与 v0.2.8 完全一致，`aapt` 确认包名 `com.mikuchin.client`、版本 `0.2.9 / 209`；APK 内包含新的「画廊」与「生图」导航代码。
+- Windows Tauri Release EXE 的 PE `FileVersion`、`ProductVersion` 均为 `0.2.9`，NSIS 安装包真实构建成功；已核对单独输出的便携 EXE 与编译产物 SHA256 一致。
+- 运行中的启动器锁定了 `portable/Mikuchin.exe`，构建脚本改为保留正在运行的二进制，并安全地输出 `portable/Mikuchin-v0.2.9.exe`；不强行终止主程序/服务。
 - 真实付费第三方图像服务可能有非标准参数/尺寸限制；不同厂商需自行测试。
 
 ## 发布资产与版本规则
 
 - `Mikuchin-Main-v0.2.9-source.zip`、`Mikuchin-Main-v0.2.9-source.zip.sha256`：本次重新打包。
-- `Mikuchin-Launcher-v0.2.8.exe`、`Mikuchin-Launcher-v0.2.8-Setup.exe`、`Mikuchin-Android-v0.2.8.apk`：**原版产物按位复用**，不更改其真实内部版本和文件名。
+- `Mikuchin-Launcher-v0.2.9.exe`、`Mikuchin-Launcher-v0.2.9-Setup.exe`：v0.2.9 重新构建的 Windows 便携启动器与 NSIS 安装包。
+- `Mikuchin-Android-v0.2.9.apk`：v0.2.9 / versionCode 209，重新构建并使用相同的正式发布证书签名。
 - `Mikuchin-v0.2.9-release-manifest.json`：列出实际文件哈希、字节数和三个组件版本。
 - CUDA SM86 独立引擎沿用 [v0.2.8](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8) 提供的二进制，不以 v0.2.9 名义重命名发布。
 

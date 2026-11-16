@@ -4,6 +4,6 @@
  */
 window.MIKUCHIN_VERSIONS = Object.freeze({
   main: "0.2.9",
-  launcher: "0.2.8",
-  android: "0.2.8",
+  launcher: "0.2.9",
+  android: "0.2.9",
 });
