@@ -73,14 +73,60 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
 - **空闲自动卸载（Idle Unload）**：支持设置 `0–1440` 分钟空闲超时自动释放显存，配置更新时自动备份并平滑重启后端。
 - **网络与远程接入管理**：一键开关局域网（LAN）访问、管理 API 密钥（基于 Windows DPAPI 加密保护），并集成 **Cloudflare Tunnel** 状态监控、HTTPS 延迟测试与隧道快速重启。
 
-### 7. Android 手机客户端（内置用户态 Tailscale）
+### 7. 从其它设备访问（Remote Access）
+
+Mikuchin 的模型推理、会话和生成图片保存在运行服务的主机上。其它设备只需连接该主机，无须重复部署模型。请确保服务在线，API Key 有效，并按连接方式配置监听地址、防火墙和访问权限。
+
+#### 7.1 桌面设备访问（Windows / Linux）
+
+1. 在主机上启动 Mikuchin，并确认 API 端口（示例：`15239`）。
+2. 在可信局域网内，通过另一台电脑的浏览器打开 `http://<主机局域网 IP>:15239/`；需要主机开启 LAN 监听，且防火墙允许访问。
+3. 跨网络访问可通过已授权的 **Tailscale Tailnet** 或配置好访问控制的 **Cloudflare Tunnel HTTPS 域名**连接。输入 Mikuchin API Key 后即可使用聊天、生图和画廊。Mac 的浏览器访问方式也适用，见下方苹果设备小节。
+
+#### 7.2 安卓设备访问（Android）
+
+1. 从 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 下载并安装正式签名的 Mikuchin APK。**安卓客户端只连接远端推理服务，不在手机上运行大模型。**
+2. 启动客户端后，选择 **「直接连接」** 或 **「Tailscale」**：
+   - **直接连接**：输入可访问的服务地址（例如同一局域网地址，或自己的 HTTPS Cloudflare Tunnel 域名）和 Mikuchin API Key。
+   - **Tailscale**：先通过「Tailscale 网页授权登录」完成浏览器授权，再填写目标 Mikuchin 服务信息和 API Key；确保 Tailnet ACL/Grants、主机监听和防火墙允许手机访问 API 端口。
+3. 连接成功后即可使用聊天、生图和画廊。
+
+**Android 客户端特性：**
+
 - **亮色自适应弹性移动端壳层**：专为不同屏幕比例手机打造的紧凑扁平化界面（延续 `#39C5BB` 薄荷绿主题），未登录时仅展示极简连接卡片；连接成功后**自动直达最近一次聊天会话**，左上角常驻历史记录抽屉按钮，底部配备六项无外框功能栏（`生图`、`画廊`、`角色`、`设置`、`监控`、`关于`）。
 - **内置用户态 Tailscale（`tsnet`）网络模块**：
   - 基于官方 `tailscale.com/tsnet`（Go 编写并通过 `gomobile` 编译为原生 AAR）实现应用内独立组网。
   - **不使用 Android `VpnService`**：不占用系统 VPN 槽位，可在系统代理 VPN 运行时使用，但具体路由仍取决于设备与代理配置，无需 Root 权限，也无需安装官方 Tailscale 客户端。
-- **分步式网页 OAuth 授权与硬件级安全**：
-  - 支持 **「直接连接」** 与 **「Tailscale」** 双模式切换。在 Tailscale 模式下，先通过「Tailscale 网页授权登录」拉起浏览器完成 OAuth 授权并持久化节点状态，授权就绪后再展开 Mikuchin 接口与 Key 输入框。
-  - API Key 采用 **Android Keystore (`AES/GCM/NoPadding`)** 硬件级加密存储；应用内部通过仅绑定 `127.0.0.1` 随机端口的 SOCKS5 与带一次性会话 Token 校验的本地 HTTP 反向代理统一承载原生校验、SSE 流式聊天与图片上传。
+- **凭据与本地通信保护**：API Key 使用 **Android Keystore（`AES/GCM/NoPadding`）** 加密保存；应用内部以仅绑定 `127.0.0.1` 随机端口的 SOCKS5 和一次性会话 Token 校验的 HTTP 反向代理承载校验、SSE 流式聊天和图片上传。
+
+**升级提醒：** v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+
+#### 7.3 苹果设备访问（iPhone / iPad / Mac）
+
+**目前无需 Mac、Xcode、开发者签名或侧载 IPA。** Apple 设备直接使用 Mikuchin 的 Web 工作台：模型与会话仍运行/保存在你自己的 Mikuchin 主机上，iPhone/iPad/Mac 负责访问网页。**这是免安装的浏览器/主屏幕快捷方式，不是原生 iOS/macOS 客户端。**
+
+##### iPhone / iPad：Stash + Tailscale + Safari
+
+1. **准备主机**：在 Windows 上启动 Mikuchin，确保服务持续运行；启用允许 Tailnet 地址访问的监听方式（例如 LAN 访问），让系统防火墙放行所用 API 端口（默认示例 `15239`）。在 Tailscale ACL/Grants 中允许 Apple 设备访问此主机和端口。无需向公网开放端口。
+2. **在 Stash 加入 Tailnet**：使用支持内置 Tailscale 的 Stash（iOS 3.4+；推荐 3.6+ 以使用 Tailnet 路由自动识别）。在现有 Stash 配置的 `proxies` 中**追加**如下节点，不要覆盖其他代理；然后进入该节点的 **Tailscale** 菜单完成浏览器交互授权。不要把 Tailscale 的认证密钥写入公开配置：
+
+   ```yaml
+   proxies:
+     - name: mikuchin-tailnet
+       type: tailscale
+   ```
+
+   Stash 3.6+ 可自动处理 Tailnet 地址路由和 MagicDNS；**不必再同时开启官方 Tailscale VPN**，从而避免 iOS 单 VPN 槽位冲突。不同 Stash 版本或分流规则可能仍需按实际网络调整。参考 [Stash 内置 Tailscale](https://stash.wiki/proxy-protocols/proxy-types#tailscale) 与 [Stash 内网穿透](https://stash.wiki/features/nat-traversal)。
+3. **Safari 打开 Mikuchin**：在 Stash 的 Tailnet 节点已连接后，打开 `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`（将占位符换成运行 Mikuchin 电脑的 Tailscale IPv4 和实际端口），或使用可解析的 MagicDNS 主机名；在网页按提示输入 **Mikuchin API Key**。若无法连接，先检查主机是否在线、监听地址、防火墙、Tailnet 授权和 Stash 的路由策略。
+4. **固定到主屏幕**：Safari 打开成功后，点击 **分享 → 添加到主屏幕**，如有 **「作为网页 App 打开 / Open as Web App」** 选项可开启，再点「添加」。此后可像启动应用一样从桌面图标进入。网页图标不会让模型在手机端离线运行，也不是可侧载的 `.ipa`。参考 [Apple 官方操作说明](https://support.apple.com/guide/iphone/iphea86e5236/ios)。
+
+##### 其他 Apple 接入方式
+
+- **没有 Stash 的 iPhone/iPad**：可使用官方 [Tailscale iOS 客户端](https://tailscale.com/docs/install/ios) 加入同一 Tailnet，再用 Safari 打开上述地址；若需要同时使用另一款系统级代理 VPN，须考虑 iOS 的 VPN 配置互斥。
+- **不使用 Tailnet**：可使用自己配置并授权的 **HTTPS Cloudflare Tunnel 域名**，直接在 Safari 打开并完成 API Key 验证；不要把 [项目官网](https://mikuchin.zakee.fun) 误当作个人推理服务地址。
+- **Mac**：用 Safari/其他浏览器通过 Tailnet 地址或已配置的 HTTPS 域名直接打开 Web 工作台即可；无需编译专用 Mac 程序。
+
+**安全说明：** `http://` 地址在**正确建立的 Tailscale 加密隧道内部**传输时受到隧道层加密，但 HTTP 本身没有 HTTPS 的浏览器端 TLS/安全上下文属性；对浏览器安全上下文有要求时请使用有效证书的 HTTPS 入口。务必保留 API Key 验证和 Tailnet ACL，不要通过明文公网 HTTP 暴露服务。网络断开、主机休眠或重启期间，主屏幕图标也无法独立连接模型。
 
 ### 8. 全局中日英三语实时国际化（Trilingual i18n）
 - 内置完整的 **简体中文（`zh-CN`）**、**日本語（`ja-JP`）** 与 **English（`en-US`）** 语言包。
@@ -157,53 +203,6 @@ Windows 安装包与源码仓库不包含模型权重文件，请按需准备以
 ## 📦 下载安装
 
 前往 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 获取 Windows 安装包与 Android APK。**Windows 安装包不包含模型权重**；请在本机准备模型文件并通过启动器注册配置文件。
-
-## 9. 从其它设备访问（Remote Access）
-
-Mikuchin 的模型推理、会话和生成图片保存在运行服务的主机上。其它设备只需连接该主机，无须重复部署模型。请确保服务在线，API Key 有效，并按连接方式配置监听地址、防火墙和访问权限。
-
-### 9.1 桌面设备访问（Windows / Linux）
-
-1. 在主机上启动 Mikuchin，并确认 API 端口（示例：`15239`）。
-2. 在可信局域网内，通过另一台电脑的浏览器打开 `http://<主机局域网 IP>:15239/`；需要主机开启 LAN 监听，且防火墙允许访问。
-3. 跨网络访问可通过已授权的 **Tailscale Tailnet** 或配置好访问控制的 **Cloudflare Tunnel HTTPS 域名**连接。输入 Mikuchin API Key 后即可使用聊天、生图和画廊。Mac 的浏览器访问方式也适用，见下方苹果设备小节。
-
-### 9.2 安卓设备访问（Android）
-
-1. 从 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 下载并安装正式签名的 Mikuchin APK。**安卓客户端只连接远端推理服务，不在手机上运行大模型。**
-2. 启动客户端后，选择 **「直接连接」** 或 **「Tailscale」**：
-   - **直接连接**：输入可访问的服务地址（例如同一局域网地址，或自己的 HTTPS Cloudflare Tunnel 域名）和 Mikuchin API Key。
-   - **Tailscale**：先通过「Tailscale 网页授权登录」完成浏览器授权，再填写目标 Mikuchin 服务信息和 API Key；确保 Tailnet ACL/Grants、主机监听和防火墙允许手机访问 API 端口。
-3. 连接成功后即可使用聊天、生图和画廊。应用内置用户态 `tsnet`，不占用 Android 系统 VPN 槽位；实际连通性仍取决于代理和路由配置。
-
-**升级提醒：** v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
-
-### 9.3 苹果设备访问（iPhone / iPad / Mac）
-
-**目前无需 Mac、Xcode、开发者签名或侧载 IPA。** Apple 设备直接使用 Mikuchin 的 Web 工作台：模型与会话仍运行/保存在你自己的 Mikuchin 主机上，iPhone/iPad/Mac 负责访问网页。**这是免安装的浏览器/主屏幕快捷方式，不是原生 iOS/macOS 客户端。**
-
-#### iPhone / iPad：Stash + Tailscale + Safari
-
-1. **准备主机**：在 Windows 上启动 Mikuchin，确保服务持续运行；启用允许 Tailnet 地址访问的监听方式（例如 LAN 访问），让系统防火墙放行所用 API 端口（默认示例 `15239`）。在 Tailscale ACL/Grants 中允许 Apple 设备访问此主机和端口。无需向公网开放端口。
-2. **在 Stash 加入 Tailnet**：使用支持内置 Tailscale 的 Stash（iOS 3.4+；推荐 3.6+ 以使用 Tailnet 路由自动识别）。在现有 Stash 配置的 `proxies` 中**追加**如下节点，不要覆盖其他代理；然后进入该节点的 **Tailscale** 菜单完成浏览器交互授权。不要把 Tailscale 的认证密钥写入公开配置：
-
-   ```yaml
-   proxies:
-     - name: mikuchin-tailnet
-       type: tailscale
-   ```
-
-   Stash 3.6+ 可自动处理 Tailnet 地址路由和 MagicDNS；**不必再同时开启官方 Tailscale VPN**，从而避免 iOS 单 VPN 槽位冲突。不同 Stash 版本或分流规则可能仍需按实际网络调整。参考 [Stash 内置 Tailscale](https://stash.wiki/proxy-protocols/proxy-types#tailscale) 与 [Stash 内网穿透](https://stash.wiki/features/nat-traversal)。
-3. **Safari 打开 Mikuchin**：在 Stash 的 Tailnet 节点已连接后，打开 `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`（将占位符换成运行 Mikuchin 电脑的 Tailscale IPv4 和实际端口），或使用可解析的 MagicDNS 主机名；在网页按提示输入 **Mikuchin API Key**。若无法连接，先检查主机是否在线、监听地址、防火墙、Tailnet 授权和 Stash 的路由策略。
-4. **固定到主屏幕**：Safari 打开成功后，点击 **分享 → 添加到主屏幕**，如有 **「作为网页 App 打开 / Open as Web App」** 选项可开启，再点「添加」。此后可像启动应用一样从桌面图标进入。网页图标不会让模型在手机端离线运行，也不是可侧载的 `.ipa`。参考 [Apple 官方操作说明](https://support.apple.com/guide/iphone/iphea86e5236/ios)。
-
-#### 其他 Apple 接入方式
-
-- **没有 Stash 的 iPhone/iPad**：可使用官方 [Tailscale iOS 客户端](https://tailscale.com/docs/install/ios) 加入同一 Tailnet，再用 Safari 打开上述地址；若需要同时使用另一款系统级代理 VPN，须考虑 iOS 的 VPN 配置互斥。
-- **不使用 Tailnet**：可使用自己配置并授权的 **HTTPS Cloudflare Tunnel 域名**，直接在 Safari 打开并完成 API Key 验证；不要把 [项目官网](https://mikuchin.zakee.fun) 误当作个人推理服务地址。
-- **Mac**：用 Safari/其他浏览器通过 Tailnet 地址或已配置的 HTTPS 域名直接打开 Web 工作台即可；无需编译专用 Mac 程序。
-
-**安全说明：** `http://` 地址在**正确建立的 Tailscale 加密隧道内部**传输时受到隧道层加密，但 HTTP 本身没有 HTTPS 的浏览器端 TLS/安全上下文属性；对浏览器安全上下文有要求时请使用有效证书的 HTTPS 入口。务必保留 API Key 验证和 Tailnet ACL，不要通过明文公网 HTTP 暴露服务。网络断开、主机休眠或重启期间，主屏幕图标也无法独立连接模型。
 
 ## 🔒 安全及项目说明
 
