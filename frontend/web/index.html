@@ -7,8 +7,10 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261113-chat-image-controls">
+<link rel="stylesheet" href="web/app.css?v=20261115-image-api">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
+<link rel="stylesheet" href="web/image-api.css?v=20261116-image-status-upscale">
+<link rel="stylesheet" href="web/gallery.css?v=20261116-gallery-2">
 <script>
   // the theme before the first paint: the saved choice, else the system's
   try {
@@ -26,6 +28,8 @@
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-chat"/></svg>Chat</button>
     <button class="st-tab" role="tab" id="tab-btn-images" aria-controls="view-images" aria-selected="false" data-tab="images" hidden>
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-image"/></svg>Images</button>
+    <button class="st-tab" role="tab" id="tab-btn-gallery" aria-controls="view-gallery" aria-selected="false" data-tab="gallery">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-layers"/></svg>Gallery</button>
     <button class="st-tab" role="tab" id="tab-btn-characters" aria-controls="view-characters" aria-selected="false" data-tab="characters">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-character"/></svg>Characters</button>
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
@@ -252,7 +256,7 @@
         <p class="img-adapt-note muted small" id="img-adapt-note" hidden></p>
         <button type="button" class="st-btn st-btn--secondary img-adapt-btn" id="img-adapt" hidden>适配当前模型</button>
         <div class="img-row img-row--primary">
-          <label class="st-field img-model-field">生图模型
+          <label class="st-field img-model-field">生图服务
             <select class="st-input" id="img-model" aria-label="Image generation model">
               <option value="default">当前默认模型</option></select></label>
           <label class="st-field img-lora-field">LoRA
@@ -261,19 +265,21 @@
           <label class="st-field">长
             <select class="st-input" id="img-height">
               <option value="384">384</option><option value="512">512</option>
-              <option value="768" selected>768</option><option value="1024">1024</option></select></label>
+              <option value="768" selected>768</option><option value="1024">1024</option><option value="1536">1536</option></select></label>
           <label class="st-field">宽
             <select class="st-input" id="img-width">
               <option value="384">384</option><option value="512">512</option>
-              <option value="768" selected>768</option><option value="1024">1024</option></select></label>
-        </div>
-        <div class="img-row img-row--secondary">
-          <label class="st-field">种子
-            <input class="st-input" id="img-seed" type="number" min="0" step="1" placeholder="随机"></label>
-          <label class="st-field">超分
+              <option value="768" selected>768</option><option value="1024">1024</option><option value="1536">1536</option></select></label>
+          <label class="st-field img-upscale-local-field">超分
             <select class="st-input" id="img-upscale">
               <option value="auto" selected>自动（动漫 4 倍超分）</option>
               <option value="off">关闭</option><option value="4x">4 倍</option></select></label>
+          <label class="st-field img-upscale-api-field" hidden>本地超分
+            <span class="img-api-upscale-control"><input type="checkbox" id="img-api-upscale">启用 4 倍超分</span></label>
+        </div>
+        <div class="img-row img-row--secondary">
+          <label class="st-field img-seed-field">种子
+            <input class="st-input" id="img-seed" type="number" min="0" step="1" placeholder="随机"></label>
           <label class="st-field img-steps-field">步数
             <input class="st-input" id="img-steps" type="number" min="1" max="100" step="1" value="8" required></label>
         </div>
@@ -281,17 +287,78 @@
         <div class="img-reference">
           <div class="img-reference-head"><strong>参考图</strong>
             <label class="st-btn st-btn--secondary img-ref-upload" for="img-ref-file">上传图片</label>
-            <input type="file" id="img-ref-file" accept="image/png,image/jpeg,image/webp" hidden>
+            <input type="file" id="img-ref-file" accept="image/png,image/jpeg,image/webp" multiple hidden>
             <button class="st-btn st-btn--secondary" type="button" id="img-ref-clear" hidden>移除</button></div>
-          <div id="img-ref-preview" class="img-ref-preview" hidden>
-            <img id="img-ref-thumbnail" alt="参考图预览"><span id="img-ref-name"></span></div>
+          <div id="img-ref-preview" class="img-ref-preview" hidden></div>
           <div class="img-ref-actions"><span class="muted small" id="img-ref-hint">上传参考图后，将根据当前模型选择使用方式。</span>
             <button type="button" class="st-btn st-btn--secondary" id="img-ref-convert" hidden>立即转换</button></div>
         </div>
-        <div class="img-actions"><span class="composer-hint" id="img-hint">每次仅生成一张图片；生成图像与聊天请求会相互等待。</span>
-          <button type="submit" class="st-btn st-btn--primary" id="img-go">生成</button></div>
+        <div class="img-actions"><div class="img-task-details" role="status" aria-live="polite">
+          <div class="img-task-line"><span class="composer-hint" id="img-hint">等待生成</span>
+            <span id="img-elapsed" class="img-elapsed" hidden>00:00</span></div>
+          <div id="img-task-error" class="img-task-error" hidden></div>
+        </div><button type="submit" class="st-btn st-btn--primary" id="img-go">生成</button></div>
       </form>
       <div class="img-results" id="img-results"></div>
+    </div>
+  </section>
+
+  <!-- ============================ Gallery ============================ -->
+  <section class="view view--gallery" id="view-gallery" role="tabpanel" aria-labelledby="tab-btn-gallery" hidden>
+    <div class="st-card gallery-panel">
+      <div class="gallery-heading">
+        <div class="gallery-title-group"><span class="card-title">Gallery</span><span id="gallery-count" class="muted small">0</span></div>
+        <div class="gallery-actions">
+          <label class="gallery-nsfw-toggle"><input type="checkbox" id="gallery-show-nsfw">NSFW</label>
+          <button class="st-btn st-btn--secondary" id="gallery-select-mode" type="button">选择</button>
+        </div>
+      </div>
+      <div class="gallery-filters">
+        <label class="gallery-mini-field">来源
+          <select id="gallery-source" class="st-input"><option value="all">全部</option>
+            <option value="studio">生图</option><option value="chat">聊天</option>
+            <option value="local">本地模型</option><option value="api">API</option></select>
+        </label>
+        <label class="gallery-mini-field">排序
+          <select id="gallery-order" class="st-input"><option value="newest">最新优先</option>
+            <option value="oldest">最旧优先</option></select>
+        </label>
+        <button class="st-btn st-btn--secondary" id="gallery-refresh" type="button">刷新</button>
+      </div>
+      <div id="gallery-selection-bar" class="gallery-selection-bar" hidden>
+        <span id="gallery-selected-count">已选择 0 张</span>
+        <button class="st-btn st-btn--secondary" id="gallery-batch-nsfw" type="button" disabled>标记为NSFW</button>
+        <button class="st-btn st-btn--secondary" id="gallery-select-all" type="button">全选已加载</button>
+        <button class="st-btn st-btn--secondary" id="gallery-select-none" type="button">取消选择</button>
+        <button class="st-btn st-btn--secondary gallery-delete-btn" id="gallery-delete-selected" type="button" disabled>删除所选</button>
+      </div>
+      <div id="gallery-grid" class="gallery-grid" aria-live="polite"></div>
+      <div id="gallery-empty" class="gallery-empty muted" hidden>暂无生图记录</div>
+      <div class="gallery-footer"><button class="st-btn st-btn--secondary" type="button" id="gallery-more" hidden>加载更多</button></div>
+    </div>
+    <div id="gallery-viewer" class="gallery-viewer" hidden role="dialog" aria-modal="true" aria-label="查看图片">
+      <div class="gallery-viewer-top">
+        <span id="gallery-position">1 / 1</span>
+        <span class="gallery-viewer-top-actions">
+          <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-original" hidden>删除原图</button>
+          <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-upscaled" hidden>删除4×</button>
+          <button class="gallery-icon-button" type="button" id="gallery-mark-nsfw">标记 NSFW</button>
+          <button class="gallery-icon-button" type="button" id="gallery-viewer-delete">删除</button>
+          <button class="gallery-icon-button gallery-viewer-close" type="button" id="gallery-close" aria-label="关闭">✕</button>
+        </span>
+      </div>
+      <div class="gallery-viewer-stage" id="gallery-viewer-stage">
+        <button class="gallery-viewer-arrow" type="button" id="gallery-prev" aria-label="上一张">‹</button>
+        <div class="gallery-viewer-image-wrap" id="gallery-viewer-wrap">
+          <img id="gallery-full" alt="生成图片">
+          <div id="gallery-viewer-spoiler" class="gallery-viewer-spoiler" hidden>
+            <span>NSFW · 内容已隐藏</span>
+            <button class="st-btn st-btn--secondary" type="button" id="gallery-reveal">仅查看此图</button>
+          </div>
+        </div>
+        <button class="gallery-viewer-arrow" type="button" id="gallery-next" aria-label="下一张">›</button>
+      </div>
+      <div class="gallery-viewer-info"><span id="gallery-details"></span><p id="gallery-prompt"></p></div>
     </div>
   </section>
 
@@ -400,13 +467,13 @@
             <label>长
               <select class="st-input" id="global-chat-image-height">
                 <option value="384">384</option><option value="512">512</option>
-                <option value="768" selected>768</option><option value="1024">1024</option>
+                <option value="768" selected>768</option><option value="1024">1024</option><option value="1536">1536</option>
               </select>
             </label>
             <label>宽
               <select class="st-input" id="global-chat-image-width">
                 <option value="384">384</option><option value="512">512</option>
-                <option value="768" selected>768</option><option value="1024">1024</option>
+                <option value="768" selected>768</option><option value="1024">1024</option><option value="1536">1536</option>
               </select>
             </label>
             <label>4X 超分
@@ -424,6 +491,11 @@
         </div>
       </div>
 
+      <div class="st-card mk-image-services">
+        <div class="mk-image-services-head"><span class="card-title">API 生图服务</span>
+          <button type="button" class="st-btn st-btn--secondary" id="mk-api-add">＋ 添加服务</button></div>
+        <div id="mk-api-list" class="mk-api-list"></div>
+      </div>
       <div class="st-card">
         <span class="card-title">Connect your tools</span>
         <p class="muted">Any OpenAI- or Anthropic-compatible client works with these addresses.</p>
@@ -525,15 +597,62 @@
     </div>
   </div>
 </aside>
+<div class="mk-api-backdrop" id="mk-api-backdrop" hidden>
+  <div class="st-card mk-api-dialog" role="dialog" aria-modal="true" aria-labelledby="mk-api-title">
+    <div class="mk-api-heading"><span class="card-title" id="mk-api-title">添加 API 服务</span>
+      <button class="st-btn st-btn--secondary" id="mk-api-close" type="button" aria-label="关闭">✕</button></div>
+    <form id="mk-api-form" class="mk-api-form">
+      <div class="mk-api-two">
+        <label class="st-field">服务名称<input class="st-input" id="mk-api-name" maxlength="80" required placeholder="例如：云端生图"></label>
+        <label class="st-field">API 类型<select class="st-input" id="mk-api-type"><option>OpenAI Images API</option></select></label>
+      </div>
+      <label class="st-field">Base URL<input class="st-input" id="mk-api-url" required placeholder="https://api.example.com/v1" spellcheck="false"></label>
+      <label class="mk-api-check"><input type="checkbox" id="mk-api-proxy">通过代理访问</label>
+      <label class="st-field mk-api-proxy-address" id="mk-api-proxy-wrap" hidden>代理地址
+        <input class="st-input" id="mk-api-proxy-url" placeholder="socks5h://127.0.0.1:7897" spellcheck="false"></label>
+      <div class="mk-api-two">
+        <label class="st-field">API Key<input class="st-input" type="password" id="mk-api-key" autocomplete="new-password" placeholder="输入密钥"></label>
+        <div class="st-field mk-api-model-field">
+          <label for="mk-api-model">模型 ID</label>
+          <div class="mk-api-model-row">
+            <input class="st-input" id="mk-api-model" maxlength="120" required placeholder="image-model-id">
+            <button class="st-btn st-btn--secondary" id="mk-api-discover" type="button">获取模型</button>
+          </div>
+          <select class="st-input" id="mk-api-model-list" aria-label="探测到的模型" hidden></select>
+          <span class="muted small" id="mk-api-discover-status" role="status" hidden></span>
+        </div>
+      </div>
+      <div class="st-field">参考图能力<div class="mk-api-choices">
+        <label><input type="radio" name="mk-api-ref" value="multi" checked>多图</label>
+        <label><input type="radio" name="mk-api-ref" value="single">单图</label>
+        <label><input type="radio" name="mk-api-ref" value="none">不支持</label></div></div>
+      <div class="st-field">其他能力<div class="mk-api-checks">
+        <label class="mk-api-check"><input type="checkbox" id="mk-api-negative">Negative Prompt</label>
+        <label class="mk-api-check"><input type="checkbox" id="mk-api-seed">Seed</label>
+        <label class="mk-api-check"><input type="checkbox" id="mk-api-steps">Steps</label>
+      </div></div>
+      <label class="st-field">尺寸<select class="st-input" id="mk-api-sizes">
+        <option value="standard">标准（1024 / 1536）</option>
+        <option value="all">自定义（384 / 512 / 768 / 1024 / 1536）</option>
+        <option value="square">仅 1024 × 1024</option></select></label>
+      <p class="muted small">云端请求会向该服务发送提示词及使用的参考图。</p>
+      <div class="mk-api-actions"><button type="button" class="st-btn st-btn--secondary" id="mk-api-cancel">取消</button>
+        <button type="submit" class="st-btn st-btn--primary" id="mk-api-save">保存服务</button></div>
+    </form>
+  </div>
+</div>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/versions.js?v=0.2.8"></script>
+<script src="web/versions.js?v=0.2.9"></script>
 <script src="web/app.js?v=20261113-sampling-default"></script>
-<script src="web/image-studio.js?v=20261103-v023"></script>
+<script src="web/image-studio.js?v=20261116-image-status-upscale"></script>
 <script src="web/sessions.js?v=20261103-session-sampling"></script>
 <script src="web/characters.js?v=20261113-chat-image-controls"></script>
 <script src="web/i18n-data.js?v=20261113-chat-image-controls"></script>
+<script src="web/gallery-i18n.js?v=20261116-gallery-1"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
+<script src="web/image-api-settings.js?v=20261116-model-discovery"></script>
+<script src="web/gallery.js?v=20261116-gallery-2"></script>
 </body>
 </html>

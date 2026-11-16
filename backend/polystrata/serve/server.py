@@ -87,6 +87,9 @@ from serve.structured import StructuredOutputError, prepare_format, validated_js
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
 from serve import images as images_api  # noqa: E402
+from serve import image_api_services as api_images  # noqa: E402
+from serve import image_task_status  # noqa: E402
+from serve import gallery as gallery_api  # noqa: E402
 
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
@@ -6323,10 +6326,33 @@ def make_handler(svc: Service):
             if path == "/v1/mikuchin/ui-language" and MIKUCHIN_LANGUAGE_FILE:
                 self._json(200, {"language": mikuchin_language()})
                 return
+            if path == "/v1/mikuchin/gallery" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                try:
+                    query = parse_qs(urlsplit(self.path).query)
+                    result = gallery_api.listing(svc,
+                        limit=int(query.get("limit", ["60"])[0]),
+                        offset=int(query.get("offset", ["0"])[0]),
+                        source=query.get("source", ["all"])[0],
+                        order=query.get("order", ["newest"])[0])
+                    self._json(200, result)
+                except (ValueError, OSError) as exc:
+                    self._json(400, {"error": {"message": str(exc)}})
+                return
+            if path == "/v1/mikuchin/image-api-services" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                try:
+                    self._json(200, {"services": api_images.list_services(svc)})
+                except (ValueError, OSError) as exc:
+                    self._json(500, {"error": {"message": str(exc)}})
+                return
+            if path == "/v1/mikuchin/image-task-status" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                task_id = parse_qs(urlsplit(self.path).query).get("id", [None])[0]
+                self._json(200, image_task_status.snapshot(task_id, gen=svc.images, profiles=svc.image_profiles))
+                return
             if path == "/v1/mikuchin/image-models":
                 if not self._authorized():return
-                if not svc.images:
-                    self._json(200, {"models": []});return
                 def image_model_info(ident, gen):
                     return {"id": ident, "name": gen.model, "family": gen.family,
                             "available": not gen.missing(),
@@ -6334,10 +6360,13 @@ def make_handler(svc: Service):
                             "max_side": int(gen.cfg.get("max_side") or 2048),
                             "reference_mode": ("img2img" if gen.family == "sdxl" else
                                                "qwen_edit" if gen.cfg.get("llm_vision") else "none")}
-                available = [image_model_info(svc.images.cfg.get("profile_id") or "default", svc.images)]
+                available = ([image_model_info(svc.images.cfg.get("profile_id") or "default", svc.images)]
+                             if svc.images else [])
                 available += [image_model_info(ident, gen) for ident, gen in svc.image_profiles.items()]
+                if MIKUCHIN_LANGUAGE_FILE:
+                    available.extend(api_images.catalog(svc))
                 self._json(200, {"models": available,
-                                 "loras": images_api.available_loras(svc.images.cfg)})
+                                 "loras": images_api.available_loras(svc.images.cfg) if svc.images else []})
                 return
             if path == "/metrics/prometheus":
                 if self._authorized():
@@ -6460,8 +6489,23 @@ def make_handler(svc: Service):
             elif path in ("/health", "/api/health"):
                 self._json(200, {"status": "ok", "max_context": svc.reported_ctx(), "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key),
-                                 "image_generation": svc.images is not None,
+                                 "image_generation": svc.images is not None or bool(MIKUCHIN_LANGUAGE_FILE),
                                  "loaded": svc.loaded(), "service": "strata"})
+            elif path.startswith("/v1/mikuchin/gallery/thumb/") and MIKUCHIN_LANGUAGE_FILE:
+                name = path[len("/v1/mikuchin/gallery/thumb/"):]
+                try:
+                    thumb = gallery_api.thumbnail(svc, name)
+                except (ValueError, OSError):
+                    thumb = None
+                if thumb is None:
+                    self._json(404, {"error": {"message": "thumbnail not found"}})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.send_header("Content-Length", str(len(thumb)))
+                self.end_headers()
+                self.wfile.write(thumb)
             elif path.startswith("/v1/images/files/"):
                 # The name is a random capability token. SessionV1 images are
                 # stored in a persistent shared directory, not necessarily in
@@ -6560,6 +6604,51 @@ def make_handler(svc: Service):
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
             if path.startswith("/v1/") and self._foreign_page():
+                return
+            if path == "/v1/mikuchin/gallery" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._own_page("gallery items can be modified"):
+                    return
+                try:
+                    req = json.loads(self._body() or b"{}")
+                    if not isinstance(req, dict):
+                        raise ValueError("expected JSON object")
+                    action = req.get("action")
+                    if action == "nsfw":
+                        result = gallery_api.set_nsfw(svc, req.get("id"), req.get("nsfw"))
+                    elif action == "nsfw_many":
+                        result = gallery_api.set_nsfw_many(svc, req.get("ids"), req.get("nsfw"))
+                    elif action == "delete_variant":
+                        result = gallery_api.delete_variant(svc, req.get("id"), req.get("variant"))
+                    elif action == "delete":
+                        result = gallery_api.delete_many(svc, req.get("ids"))
+                    elif action == "repair":
+                        result = gallery_api.repair(svc)
+                    else:
+                        raise ValueError("unknown gallery action")
+                    self._json(200, result)
+                except (ValueError, OSError) as exc:
+                    self._json(400, {"error": {"message": str(exc)}})
+                return
+            if path == "/v1/mikuchin/image-api-services" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._own_page("image API services can be configured"):
+                    return
+                try:
+                    req = json.loads(self._body() or b"{}")
+                    if not isinstance(req, dict):
+                        raise ValueError("JSON object required")
+                    if req.get("action") == "discover":
+                        self._json(200, api_images.discover_models(svc, req.get("connection")))
+                    elif req.get("action") == "save":
+                        self._json(200, {"service": api_images.save_service(svc, req.get("service"))})
+                    elif req.get("action") == "delete":
+                        api_images.delete_service(svc, req.get("id"))
+                        self._json(200, {"deleted": True})
+                    else:
+                        raise ValueError("unknown image service action")
+                except api_images.ImageProviderError as exc:
+                    self._json(502, {"error": {"message": str(exc)}})
+                except (ValueError, OSError) as exc:
+                    self._json(400, {"error": {"message": str(exc)}})
                 return
             if path == "/v1/mikuchin/ui-language" and MIKUCHIN_LANGUAGE_FILE:
                 if not self._own_page("the UI language can be changed"):
@@ -6660,6 +6749,11 @@ def make_handler(svc: Service):
                                              if not gen.missing())
                             image_configs.update({ident: gen.cfg for ident, gen in svc.image_profiles.items()
                                                   if not gen.missing()})
+                        if MIKUCHIN_LANGUAGE_FILE:
+                            for api in api_images.catalog(svc):
+                                image_ids.add(api["id"])
+                                image_configs[api["id"]] = {"family": "api", "max_side": 1536,
+                                    "sizes": api["sizes"]}
                         self._json(200, {"global": cards.set_global(
                             req.get("global"), allowed_image_profiles=image_ids,
                             image_profile_configs=image_configs)})
@@ -6878,6 +6972,36 @@ def make_handler(svc: Service):
 
         def _images(self, req):
             """POST /v1/images/generations (serve/images.py): one sd-cli job in the GPU's turn."""
+            profile_id = req.get("strata_image_profile", "default")
+            task_id = req.get("strata_image_task_id")
+            if MIKUCHIN_LANGUAGE_FILE and isinstance(profile_id, str) and profile_id.startswith("api-"):
+                image_task_status.mark(task_id, "正在请求 API", provider="api", profile=profile_id)
+                try:
+                    out = api_images.generate(svc, req, ident=profile_id,
+                        on_status=lambda phase: image_task_status.mark(task_id, phase, provider="api"))
+                    try:
+                        result_meta = out.get("strata") or {}
+                        created = gallery_api.register(svc, result_meta.get("image_file"),
+                            source="studio", provider="api", model=out.get("model"),
+                            prompt=req.get("prompt"))
+                        for original in result_meta.get("upscale_original_files") or []:
+                            if original:
+                                gallery_api.register(svc, original, source="studio", provider="api",
+                                    model=out.get("model"), prompt=req.get("prompt"), parent_id=created)
+                    except Exception as exc:
+                        print(f"[mikuchin] gallery index: {type(exc).__name__}: {exc}", flush=True)
+                    image_task_status.mark(task_id, "已完成", provider="api", state="done")
+                    self._json(200, out)
+                except api_images.ImageServiceError as exc:
+                    image_task_status.mark(task_id, "生成失败", provider="api", state="error", error=str(exc))
+                    self._json(400, {"error": {"type": "invalid_request_error", "message": str(exc)}})
+                except api_images.ImageProviderError as exc:
+                    image_task_status.mark(task_id, "生成失败", provider="api", state="error", error=str(exc))
+                    self._json(502, {"error": {"type": "provider_error", "message": str(exc)}})
+                except Exception as exc:
+                    image_task_status.mark(task_id, "生成失败", provider="api", state="error", error=str(exc))
+                    raise
+                return
             gen = svc.images
             if gen is None:
                 self._json(404, {"error": {"type": "invalid_request_error", "code": "images_not_set_up",
@@ -6896,6 +7020,7 @@ def make_handler(svc: Service):
                 raise images_api.ImageRequestError("selected image model is unavailable: " +
                                                    ", ".join(Path(f).name for f in missing))
             job = images_api.parse_request(req, gen.cfg)        # ImageRequestError (a ValueError): 400
+            image_task_status.mark(task_id, "等待本地生成任务", provider="local", profile=profile_id)
             if svc.session_v1:
                 # Generated images belong to this deployment even when the client requests base64.
                 gen.dir = svc.session_v1.root / "generated-images"
@@ -6908,25 +7033,46 @@ def make_handler(svc: Service):
                   f"seed {job['seed']}", flush=True)
             try:
                 with images_api.gpu_turn(svc, gen, job, cancel) as policy:
+                    image_task_status.mark(task_id, "本地模型生成中", provider="local")
                     images, figures = gen.run(job, cancel)
+                    image_task_status.mark(task_id, "正在检查本地超分", provider="local")
                     images, up = images_api.postprocess(gen, images, job, cancel)
                     if gen.cfg.get("upscaler", {}).get("enabled"):
                         figures.update(up)
             except images_api.ImageJobFailed as e:
+                image_task_status.mark(task_id, "生成失败", provider="local", state="error", error=str(e))
                 self._json(500, {"error": {"type": "server_error", "code": "image_generation_failed",
                                            "message": str(e)}})
                 return
+            image_task_status.mark(task_id, "正在保存图片", provider="local")
             figures["gpu_policy"] = policy
             figures["image_profile"] = profile_id
             if job.get("lora"):
                 figures["lora_id"] = job["lora"]["id"]
+            gallery_files = []
             if svc.session_v1 and job["response_format"] != "url":
                 for png in images:
-                    gen.store(png)  # base64 responses also get durable PNG files
+                    gallery_files.append(gen.store(png))  # base64 responses also get durable PNG files
             print(f"[strata] image done in {figures['seconds']:.1f} s ({policy})", flush=True)
             host = self.headers.get("Host") or f"{self.server.server_address[0]}:{self.server.server_address[1]}"
             scheme = "https" if (self.headers.get("X-Forwarded-Proto") or "").lower() == "https" else "http"
-            self._json(200, gen.response(images, job, figures, f"{scheme}://{host}"))
+            out = gen.response(images, job, figures, f"{scheme}://{host}")
+            if svc.session_v1:
+                if job["response_format"] == "url":
+                    gallery_files = [str(d.get("url", "")).rsplit("/",1)[-1]
+                                     for d in out.get("data",[]) if isinstance(d,dict)]
+                try:
+                    ids = [gallery_api.register(svc, name, source="studio", provider="local",
+                            model=gen.model, prompt=job.get("prompt")) for name in gallery_files]
+                    parent = ids[0] if ids else ""
+                    for original in figures.get("upscale_original_files") or []:
+                        if original:
+                            gallery_api.register(svc, original, source="studio", provider="local",
+                                model=gen.model, prompt=job.get("prompt"), parent_id=parent)
+                except Exception as exc:
+                    print(f"[mikuchin] gallery index: {type(exc).__name__}: {exc}", flush=True)
+            image_task_status.mark(task_id, "已完成", provider="local", state="done")
+            self._json(200, out)
 
         def _props(self):
             model = parse_qs(urlsplit(self.path).query).get("model", [svc.model])[0]
@@ -7211,7 +7357,8 @@ def make_handler(svc: Service):
             max_req = max_new = int(req.get("max_completion_tokens") or req.get("max_tokens") or 0)   # 0/-1: the rest
             bias_api.validate_request(req, svc.engine, len(getattr(svc.tok, "tokens", ())) or None)
             use_external_mcp = req.get("strata_mcp") is True and svc.mcp is not None
-            use_image_tool = req.get("strata_image_tool") is True and svc.images is not None
+            use_image_tool = req.get("strata_image_tool") is True and (svc.images is not None or
+                        (MIKUCHIN_LANGUAGE_FILE and bool(api_images.list_services(svc))))
             use_mcp = use_external_mcp or use_image_tool
             own = {t.get("name") for t in tools or [] if isinstance(t, dict)}   # #592: a second line of defence
             if use_mcp:

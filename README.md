@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.2.8** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8)
+**主程序 v0.2.9** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.9)
 
-**独立版本：**主程序 `0.2.8` · Windows 启动器 `0.2.8` · Android 客户端 `0.2.8`（versionCode 208）。本次三个组件均重新构建；后续仍允许独立升级，所有版本号统一记录在 versions.json。
+**独立版本：**主程序 `0.2.9` · Windows 启动器 `0.2.8` · Android 客户端 `0.2.8`（versionCode 208）。本次仅更新主程序；启动器与安卓端继续使用原版二进制。后续仍允许独立升级，所有版本号统一记录在 versions.json。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -54,6 +54,7 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
   - 点击 **「一键解析（Parse with AI）」** 可调用当前活跃的大语言模型（以无状态单轮模式）将自然语言构思转化为专业英文正反提示词。
 - **双轨参考图工作流**：支持 SDXL 原生 `img2img` 重绘、Qwen Official 原生参考图引导，或调用多模态视觉 LLM 将参考图解析为英文画面描述并追加至 Positive Prompt。
 - **精细参数控制与一键清空**：支持独立选择画面长宽（`384` / `512` / `768` / `1024`）、采样步数、随机种子（Seed）与高清放大（Upscale）；提供「一键清空」重置当前输入与参考图而不误删已生成的作品；与聊天请求智能共享 GPU 队列。
+- **OpenAI 兼容 API 生图与画廊（v0.2.9）**：在设置中管理可选代理与 API 密钥、探测模型 ID、上传多张参考图；支持生成阶段/耗时与本机 4× 超分。全局画廊索引聊天与独立生图，支持 NSFW 模糊、多选及原图/超分图分组管理（删除不可撤销）。
 
 ### 4. 实时硬件与推理遥测监控（Live Monitor）
 - 实时可视化展示 GPU 显存占用（已用/总显存）、系统内存（RAM）、处理器与显卡型号。

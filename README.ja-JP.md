@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.2.8** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8)
+**メインアプリ v0.2.9** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.9)
 
-**個別バージョン：**メインアプリ `0.2.8` · Windows ランチャー `0.2.8` · Android クライアント `0.2.8`（versionCode 208）。今回のリリースでは 3 種類を再ビルドしました。以降のバージョンは個別に管理し、versions.json に記録します。
+**個別バージョン：**メインアプリ `0.2.9` · Windows ランチャー `0.2.8` · Android クライアント `0.2.8`（versionCode 208）。今回はメインアプリのみ更新。ランチャーと Android は既存バイナリを継続使用します。以降のバージョンは個別に管理し、versions.json に記録します。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -43,6 +43,7 @@
    - **複数モデルプロファイル対応**：**Qwen-Image 2.1 Turbo Official**（8ステップ高速生成、`--ref-image` ネイティブ参照編集、Qwen LoRA 対応）、**Qwen-Image 2.1 Turbo Uncensored**、**Animagine XL 4.0**、**SDXL Base 1.0**（`img2img` 対応）を自由に切り替え可能。
    - **3層プロンプト＆AI ワンクリック解析**：モデル間で共有される「自然言語入力」と、モデルごとに保存される「Positive / Negative Prompt」下書きを備え、現在の LLM を使って自然言語から英語プロンプトへの自動変換が可能。
    - 縦横サイズの個別指定（`384` / `512` / `768` / `1024`）、ステップ数、シード値、アップスケール、LoRA 選択、ワンクリッククリアに対応。
+   - **外部画像 API とギャラリー（v0.2.9）**：OpenAI 互換サービス、プロキシ、モデル ID 検出、複数参照画像に対応。生成状態・時間とローカル 4× 超解像を表示。チャットと画像生成の作品を一元管理し、NSFW ぼかし、元画像と 4× 画像のグループ化、複数選択・完全削除をサポート。
 
 4. **リアルタイムハードウェア＆推論モニター（Monitor）**
    - GPU VRAM 使用量、システム RAM、Prefill / Decode 速度（tok/s）、入出力トークン統計、KV キャッシュヒット率、直近リクエストのレイテンシをリアルタイム表示。

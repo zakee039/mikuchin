@@ -136,20 +136,26 @@ class ChatImageHub:
         self.character_reference = None
         self.recent_image = None
         self.gen = getattr(svc, "images", None)
+        self.remote_id = None
         self.profile_id = self.gen.cfg.get("profile_id", "default") if self.gen else "default"
         self.chat_image_settings = None
         cards = None
-        if self.gen is not None and getattr(svc, "session_v1", None) is not None:
+        if getattr(svc, "session_v1", None) is not None:
             from serve.character_cards import CharacterStore
             cards = CharacterStore(svc.session_v1.root.parent / "character")
             self.chat_image_settings = cards.chat_image_settings()
             selected = cards.chat_image_profile()
             profiles = getattr(svc, "image_profiles", {})
-            if selected in ("default", self.profile_id):
+            if selected in ("default", self.profile_id) and self.gen is not None:
                 self.profile_id = self.gen.cfg.get("profile_id", "default")
             elif selected in profiles:
                 self.gen = profiles[selected]
                 self.profile_id = selected
+            elif isinstance(selected, str) and selected.startswith("api-"):
+                from serve import image_api_services
+                if image_api_services.get(svc, selected):
+                    self.remote_id = selected
+                    self.profile_id = selected
             # Obsolete profile settings fall back to the current default.
         # Resolve per request so saving a new choice takes effect immediately.
 
@@ -174,15 +180,15 @@ class ChatImageHub:
 
     def routes(self):
         routes = dict(self.mcp.routes()) if self.mcp else {}
-        if self.gen is not None:
+        if self.gen is not None or self.remote_id is not None:
             routes[NAME] = (self.builtin, "generate_image")
         return routes
 
     def template_tools(self, exclude=()):
         tools = list(self.mcp.template_tools(exclude=exclude)) if self.mcp else []
-        if self.gen is not None and NAME not in exclude:
+        if (self.gen is not None or self.remote_id is not None) and NAME not in exclude:
             tools = [tool for tool in tools if tool.get("name") != NAME]
-            if self.character_reference is not None and self.gen.cfg.get("family", "qwen_turbo") == "qwen_turbo" and self.gen.cfg.get("llm_vision"):
+            if self.gen is not None and self.character_reference is not None and self.gen.cfg.get("family", "qwen_turbo") == "qwen_turbo" and self.gen.cfg.get("llm_vision"):
                 tool = {**SCHEMA, "description": SCHEMA["description"] +
                         f" The current chat character is {self.character_name!r}, and a weak appearance reference is available."}
             else:
@@ -192,17 +198,134 @@ class ChatImageHub:
                         " A previously generated image is available in THIS chat; "
                         "use edit_previous=true for changes to it."}
             # Adapt the tool's visual prompt style to the selected backend.
-            if self.gen.cfg.get("family") == "sdxl":
+            if self.gen is not None and self.gen.cfg.get("family") == "sdxl":
                 tool = {**tool, "description": tool["description"] +
                         " For this SDXL model, write concise ENGLISH descriptive phrases "
                         "or anime tags where appropriate; include the user's specified "
                         "scene, costume, pose and holiday exactly."}
+            if self.remote_id is not None:
+                from serve import image_api_services
+                remote = image_api_services.get(self.svc, self.remote_id)
+                preset = remote.get("sizes", "standard") if remote else "standard"
+                sizes = (["1024x1024"] if preset == "square" else
+                         ["1024x1024", "1024x1536", "1536x1024"] if preset == "standard"
+                         else ["512x512", "768x768", "1024x1024", "1024x1536", "1536x1024"])
+                params = {**tool["parameters"], "properties": dict(tool["parameters"]["properties"])}
+                params["properties"]["size"] = {"type": "string", "enum": sizes,
+                                               "description": "Default 1024x1024."}
+                params["properties"].pop("upscale", None)  # local enhancement only
+                tool = {**tool, "parameters": params,
+                        "description": tool["description"].replace(
+                            "Use 768x768 by default.", "Use 1024x1024 by default.")}
             tools.append(tool)
         return tools
+
+    def _remote_call(self, arguments, cancel=None):
+        """Generate chat images with a configured OpenAI Images provider."""
+        import base64
+        from io import BytesIO
+        from PIL import Image, ImageOps
+        from serve import image_api_services
+        start = time.monotonic()
+        output = {"server": "Mikuchin", "tool": "generate_image", "truncated": False}
+        try:
+            if not isinstance(arguments, dict) or not isinstance(arguments.get("prompt"), str):
+                raise ValueError("image prompt must be a string")
+            if cancel and cancel.is_set():
+                raise RuntimeError("image generation cancelled")
+            service = image_api_services.get(self.svc, self.remote_id)
+            if not service:
+                raise ValueError("selected API image service is missing")
+            sizes = {"square": (1024,), "standard": (1024, 1536),
+                     "all": (384, 512, 768, 1024, 1536)}[service["sizes"]]
+            requested = arguments.get("size") or "1024x1024"
+            try:
+                w, h = (int(n) for n in requested.split("x"))
+            except (ValueError, AttributeError):
+                w = h = 1024
+            if w not in sizes or h not in sizes:
+                w = h = 1024 if 1024 in sizes else sizes[0]
+            request = {
+                "prompt": arguments["prompt"], "size": f"{w}x{h}", "n": 1,
+                "response_format": "url",
+            }
+            if self.chat_image_settings:
+                preset = self.chat_image_settings
+                w, h = preset.get("width"), preset.get("height")
+                if w in sizes and h in sizes:
+                    request["size"] = f"{w}x{h}"
+                if service["steps"] and isinstance(preset.get("steps"), int):
+                    request["steps"] = preset["steps"]
+
+            edit_previous = (arguments.get("edit_previous") is True or
+                             (self.recent_image is not None and
+                              clearly_editing_recent_image(self.latest_user_text,
+                                                            self.recent_image["user_turns_since"])))
+            ref_file = None
+            if edit_previous:
+                if not self.recent_image:
+                    raise ValueError("no prior generated image to edit in this conversation")
+                ref_file = self.recent_image["edit_path"]
+                request["prompt"] = ("Edit the provided image: " + request["prompt"] +
+                                     "\nPreserve all visual details not explicitly changed.")
+            elif arguments.get("character_related") is True and self.character_reference is not None:
+                ref_file = self.character_reference
+                request["prompt"] += (
+                    "\nCharacter reference is for identity only. The user's scene, "
+                    "outfit, pose, colors and holiday instructions take precedence.")
+            if ref_file is not None and service["reference_mode"] != "none":
+                with Image.open(ref_file) as img:
+                    img = ImageOps.exif_transpose(img).convert("RGB")
+                    img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                    buf = BytesIO()
+                    img.save(buf, format="PNG")
+                if buf.tell() > 5 * 1024 * 1024:
+                    raise ValueError("reference image exceeds 5 MB")
+                request["strata_reference_images"] = [
+                    "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")]
+            result = image_api_services.generate(self.svc, request, ident=self.remote_id)
+            filename = result["strata"].get("image_file")
+            if not filename:
+                raise RuntimeError("API image was not persisted")
+            output.update({
+                "image_file": filename,
+                "image_profile": self.remote_id,
+                "image_model": service["model"],
+                "image_prompt": str(arguments["prompt"]),
+                "edited_previous": edit_previous,
+                "character_reference_used": bool(ref_file and not edit_previous
+                                                  and service["reference_mode"] != "none"),
+                "upscale_applied": False,
+                "ok": True,
+                "text": "Generated the requested image successfully using the API service. "
+                        "The image is already displayed in this conversation; do not generate it again.",
+            })
+            if self.session_id and getattr(self.svc.session_v1, "register_generated_image", None):
+                self.svc.session_v1.register_generated_image(self.session_id, filename, None)
+            try:
+                from serve import gallery as gallery_api
+                gallery_api.register(self.svc, filename, source="chat", provider="api",
+                    model=service["model"], prompt=arguments.get("prompt",""),
+                    session_id=self.session_id or "")
+                for original in result["strata"].get("upscale_original_files") or []:
+                    if original:
+                        gallery_api.register(self.svc, original, source="chat", provider="api",
+                            model=service["model"], prompt=arguments.get("prompt",""),
+                            session_id=self.session_id or "", parent_id=filename[:-4])
+            except Exception as gallery_exc:
+                print(f"[mikuchin] gallery chat API index failed: {gallery_exc}", flush=True)
+        except Exception as exc:
+            output["ok"] = False
+            output["text"] = "error: API image generation failed: " + str(exc)[:500]
+        output["chars"] = len(output["text"])
+        output["ms"] = int((time.monotonic() - start) * 1000)
+        return output
 
     def call(self, name, arguments, cancel: threading.Event | None = None):
         if name != NAME:
             return self.mcp.call(name, arguments, cancel)
+        if self.remote_id is not None:
+            return self._remote_call(arguments, cancel)
         start = time.monotonic()
         output = {"server": "PolyStrata", "tool": "generate_image", "truncated": False}
         try:
@@ -298,6 +421,18 @@ class ChatImageHub:
             if self.session_id and getattr(self.svc.session_v1, "register_generated_image", None):
                 self.svc.session_v1.register_generated_image(
                     self.session_id, filename, output.get("image_original_file"))
+            try:
+                from serve import gallery as gallery_api
+                gallery_api.register(self.svc, filename, source="chat", provider="local",
+                    model=output.get("image_model",""), prompt=arguments.get("prompt",""),
+                    session_id=self.session_id or "")
+                if output.get("image_original_file"):
+                    gallery_api.register(self.svc, output["image_original_file"],
+                        source="chat", provider="local",
+                        model=output.get("image_model",""), prompt=arguments.get("prompt",""),
+                        session_id=self.session_id or "", parent_id=filename[:-4])
+            except Exception as gallery_exc:
+                print(f"[mikuchin] gallery chat local index failed: {gallery_exc}", flush=True)
             output["text"] = (f"Generated the requested image successfully "
                               f"(size {figures.get('upscale_output_size') or str(job['width'])+'x'+str(job['height'])}, "
                               f"seed {job['seed']}, "

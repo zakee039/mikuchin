@@ -74,16 +74,17 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 
 let tab = "chat";
 function showTab(name) {
-  tab = ["chat", "images", "characters", "monitor", "settings", "about"].includes(name) ? name : "chat";
+  tab = ["chat", "images", "gallery", "characters", "monitor", "settings", "about"].includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "images", "characters", "monitor", "settings", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of ["chat", "images", "gallery", "characters", "monitor", "settings", "about"]) $(`view-${v}`).hidden = v !== tab;
   if (tab === "images") $("img-natural").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   // Opening Chat on a phone should not summon the software keyboard.
   if (tab === "chat" && !matchMedia("(max-width: 760px)").matches) $("input").focus();
   if (tab === "monitor") loadMcp();
-  if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.();}
+  if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.(); void window.MikuchinImageApi?.refresh();}
   if (tab === "images") void window.MikuchinImageStudio?.refresh();
+  if (tab === "gallery") void window.MikuchinGallery?.refresh();
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
   if (lastMetrics) render(lastMetrics);
 }

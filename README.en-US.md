@@ -6,9 +6,9 @@
 
 **Self-hosted Multimodal AI Companion & Image Studio**
 
-**Main app v0.2.8** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.8)
+**Main app v0.2.9** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.9)
 
-**Independent versions:** main app `0.2.8` · Windows launcher `0.2.8` · Android client `0.2.8` (versionCode 208). All three artifacts were rebuilt for this release. They remain independently versioned for future changes.
+**Independent versions:** main app `0.2.9` · Windows launcher `0.2.8` · Android client `0.2.8` (versionCode 208). Only the main application was updated this release; the launcher and Android client retain their existing binaries. They remain independently versioned for future changes.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -43,6 +43,7 @@ You manage models, conversations, character data, and generated images on your o
    - **Multi-Profile Architecture**: Switch seamlessly between **Qwen-Image 2.1 Turbo Official** (8-step generation, native `--ref-image` editing via Qwen3-VL, and allowlisted **Qwen LoRA** loading), **Qwen-Image 2.1 Turbo Uncensored**, **Animagine XL 4.0**, and **SDXL Base 1.0** (native `img2img`).
    - **Three-Tier Prompting & Parse with AI**: Combines a shared **Natural Language** input with per-model persistent **Positive / Negative Prompt** drafts, plus a one-click stateless **Parse with AI** action that rewrites natural descriptions into structured English prompts using the active LLM.
    - **Flexible Controls**: Independent width and height selectors (`384`, `512`, `768`, `1024`), step count, seed, upscaling, LoRA selector, and one-click clear that resets inputs without deleting generated gallery items.
+   - **External Image APIs & Gallery (v0.2.9)**: Configure OpenAI-compatible image services, optional proxy, model discovery and multi-reference uploads. Track generation status and choose local 4× upscaling. A unified gallery indexes images from chat and Image Studio, with NSFW blur, grouped original/4× versions, multi-select and permanent deletion.
 
 4. **Live Hardware & Inference Telemetry (Monitor)**
    - Real-time metrics for GPU VRAM usage, system RAM, Prefill and Decode throughput (`tok/s`), input/output token counters, SessionV1 KV cache hit rate, and per-request latency breakdowns.

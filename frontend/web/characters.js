@@ -14,13 +14,18 @@ function syncChatImageControls() {
   const max = Number(selected?.max_side || 2048);
   for (const dim of ["height","width"]) {
     const field = $("global-chat-image-" + dim);
-    for (const option of field.options) option.disabled = Number(option.value) > max;
-    if (Number(field.value) > max) {
+    const dims = selected?.family === "api" ?
+      selected.sizes === "square" ? [1024] : selected.sizes === "standard" ? [1024,1536] : [384,512,768,1024,1536] : [384,512,768,1024];
+    for (const option of field.options) option.disabled = Number(option.value) > max || !dims.includes(Number(option.value));
+    if (Number(field.value) > max || field.selectedOptions[0]?.disabled) {
       const supported = [...field.options].filter(option => !option.disabled);
       field.value = (supported.find(option => option.value === "768") || supported.at(-1))?.value || "768";
     }
     field.disabled = !chatImageModelsReady;
   }
+  if (selected?.family === "api" && selected.sizes === "standard" &&
+      $("global-chat-image-width").value === "1536" && $("global-chat-image-height").value === "1536")
+    $("global-chat-image-height").value = "1024";
   const lora = $("global-chat-image-lora");
   const old = lora.value || characterState.global.chat_image_settings?.lora_id || "none";
   lora.replaceChildren(new Option(ui("无"), "none"));
@@ -33,8 +38,8 @@ function syncChatImageControls() {
   }
   lora.value = supportsLora && chatImageLoras.some(x => x.id === old && x.available) ? old : "none";
   lora.disabled = !chatImageModelsReady || !supportsLora;
-  $("global-chat-image-upscale").disabled = !chatImageModelsReady;
-  $("global-chat-image-steps").disabled = !chatImageModelsReady;
+  $("global-chat-image-upscale").disabled = !chatImageModelsReady || selected?.family === "api";
+  $("global-chat-image-steps").disabled = !chatImageModelsReady || (selected?.family === "api" && !selected.supports_steps);
 }
 function loadChatImageControls() {
   const saved = {...CHAT_IMAGE_DEFAULTS, ...(characterState.global.chat_image_settings || {})};
@@ -860,6 +865,14 @@ $("global-chat-image-profile").addEventListener("change", () => {
   lastChatImageModel = $("global-chat-image-profile").value;
   syncChatImageControls();
 });
+for (const changed of ["width","height"]) {
+  $("global-chat-image-" + changed).addEventListener("change", () => {
+    const m = chatImageModel();
+    if (m?.family === "api" && m.sizes === "standard" &&
+        $("global-chat-image-width").value === "1536" && $("global-chat-image-height").value === "1536")
+      $("global-chat-image-" + (changed === "width" ? "height" : "width")).value = "1024";
+  }, true);
+}
 $("chat-character").onchange = async () => {
   if (busy || messages.length > 0) {
     toast("warn","已有对话不能切换角色，请新建会话");

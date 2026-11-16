@@ -199,7 +199,11 @@ class CharacterStore:
         max_side = int(config.get("max_side") or 2048) if config is not None else 2048
         for field in ("height", "width"):
             number = value[field]
-            if type(number) is not int or number not in (384, 512, 768, 1024) or number > max_side:
+            if type(number) is not int or number not in (
+                (1024, 1536) if config and config.get("family") == "api" and config.get("sizes") == "standard"
+                else (1024,) if config and config.get("family") == "api" and config.get("sizes") == "square"
+                else (384, 512, 768, 1024, 1536) if config and config.get("family") == "api"
+                else (384, 512, 768, 1024)) or number > max_side:
                 raise ValueError(f"invalid chat image {field}")
         steps = value["steps"]
         if steps is not None and (type(steps) is not int or not 1 <= steps <= 100):

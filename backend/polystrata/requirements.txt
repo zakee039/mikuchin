@@ -9,6 +9,7 @@ regex==2026.9.10
 pyyaml==6.0.3
 tqdm==4.70.1
 requests==2.34.2
+PySocks==1.7.1  # Mikuchin image API services: SOCKS5/SOCKS5H proxy
 cmake==4.4.3
 ninja==1.13.2
 pillow==12.3.0

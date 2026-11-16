@@ -14,7 +14,8 @@
   let chosenLora = store.get("image-lora", "none") || "none";
   let current = store.get("image-profile", "default");
   let sourceModel = null; // non-destructive adaptation suggestion when first switching
-  let reference = null; // File kept in this tab only; never uploaded merely by selecting it
+  let references = []; // Ordered, tab-local uploads. Never transmitted before Generate.
+  let reference = null; // First item for optional vision-to-prompt conversion.
   let working = false;
 
   const model = () => catalog.find(m => m.id === current) || catalog[0];
@@ -22,6 +23,7 @@
   function refreshLoras() {
     const select = get("img-lora");
     const supported = model()?.family === "qwen_turbo";
+    get("img-lora").closest(".img-lora-field").hidden = !supported;
     select.replaceChildren(new Option(tr("无", "None", "なし"), "none"));
     for (const item of loraCatalog) {
       if (item.family !== "qwen_turbo") continue;
@@ -54,21 +56,24 @@
     const values = existing ? cleanDraft(existing) : {
       positive: inherited.positive || "", negative: inherited.negative || "",
       height: inherited.height || "768", width: inherited.width || "768",
-      upscale: inherited.upscale || "auto",
+      upscale: selected?.family === "api" ? "off" : inherited.upscale || "auto",
       steps: String(defaultSteps(selected)), seed: inherited.seed || "",
     };
+    const dims = selected?.family === "api" ?
+      selected.sizes === "square" ? ["1024"] : selected.sizes === "standard" ? ["1024","1536"] : ["384","512","768","1024","1536"] : ["384","512","768","1024"];
     // Older drafts without independent dimensions (or an invalid selection)
     // should not leave either dimension blank and submit an invalid size.
     for (const dim of ["height","width"]) {
-      if (!["384","512","768","1024"].includes(values[dim])) values[dim] = "768";
+      if (!dims.includes(values[dim])) values[dim] = selected?.family === "api" ? "1024" : "768";
     }
     if (!["auto","off","4x"].includes(values.upscale)) values.upscale = "auto";
+    if (selected?.family === "api" && (values.upscale !== "4x" || selected.upscale_available === false)) values.upscale = "off";
     if (!values.steps) values.steps = String(defaultSteps(selected));
     for (const k of fields) get(ids[k]).value = values[k];
     for (const dim of ["height","width"]) {
       const select = get(ids[dim]);
-      for (const opt of select.options) opt.disabled = Number(opt.value) > Number(selected?.max_side || 2048);
-      if (select.selectedOptions[0]?.disabled) select.value = "768";
+      for (const opt of select.options) opt.disabled = !dims.includes(opt.value) || Number(opt.value) > Number(selected?.max_side || 2048);
+      if (select.selectedOptions[0]?.disabled) select.value = dims.includes("768") ? "768" : dims[0];
       select.dispatchEvent(new Event("change", {bubbles:true}));
     }
     get("img-upscale").dispatchEvent(new Event("change", {bubbles:true}));
@@ -84,7 +89,17 @@
       `Prompts retained from ${sourceModel}. You can generate as-is or adapt them to this model. The original draft is intact.`,
       `${sourceModel} のプロンプトを保持しています。そのまま生成するか、このモデル用に最適化できます。元の下書きは変更しません。`);
     if (!existing) saveDraft();
-    get("img-negative-hint").hidden = selected?.family === "sdxl";
+    get("img-negative-hint").hidden = selected?.family === "sdxl" || selected?.family === "api";
+    get("img-negative").disabled = selected?.family === "api" && !selected.negative;
+    const isApi = selected?.family === "api";
+    get("img-upscale").disabled = isApi;
+    get("img-upscale").closest(".img-upscale-local-field").hidden = isApi;
+    get("img-api-upscale").closest(".img-upscale-api-field").hidden = !isApi;
+    get("img-api-upscale").disabled = isApi && selected.upscale_available === false;
+    get("img-api-upscale").checked = isApi && values.upscale === "4x";
+    get("img-lora-hint").hidden = selected?.family === "api";
+    get("img-steps").closest(".img-steps-field").hidden = selected?.family === "api" && !selected.supports_steps;
+    get("img-seed").closest(".img-seed-field").hidden = selected?.family === "api" && !selected.seed;
     refreshLoras();
     refreshReferenceHint();
   }
@@ -120,39 +135,66 @@
       current = next.id;
       select.value = current;
       loadDraft(current);
-      if (!working) get("img-hint").textContent = "每次仅生成一张图片；生成图像与聊天请求会相互等待。";
+      if (!working) get("img-hint").textContent = model()?.family === "api" ? "API 服务已就绪" : "每次仅生成一张图片；生成图像与聊天请求会相互等待。";
     } catch (e) {
       console.warn("Image model list:", e);
       get("img-hint").textContent = "请填写 API 密钥后查看生图模型";
     }
   }
 
+  const referenceMode = () => model()?.reference_mode || "none";
+  const activeReferences = () => referenceMode() === "multi" ? references :
+    ["single", "img2img", "qwen_edit"].includes(referenceMode()) ? references.slice(0, 1) : [];
+  function renderReferences() {
+    const container = get("img-ref-preview");
+    container.replaceChildren();
+    container.hidden = references.length === 0;
+    get("img-ref-clear").hidden = references.length === 0;
+    const allowed = activeReferences().length;
+    references.forEach((item, index) => {
+      const tile = document.createElement("div");
+      tile.className = "img-ref-tile" + (index >= allowed ? " inactive" : "");
+      const image = document.createElement("img");
+      image.src = item.objectUrl; image.alt = item.name;
+      const badge = document.createElement("span");
+      badge.className = "img-ref-count"; badge.textContent = String(index + 1);
+      const name = document.createElement("span");
+      name.className = "img-ref-name"; name.textContent = item.name;
+      const buttons = document.createElement("div");
+      buttons.className = "img-ref-buttons";
+      const move = document.createElement("button");
+      move.type = "button"; move.textContent = index ? "置首" : "首图";
+      move.disabled = index === 0;
+      move.onclick = () => {
+        references.splice(index, 1); references.unshift(item);
+        reference = references[0]; refreshReferenceHint();
+      };
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.textContent = "移除";
+      remove.onclick = () => {
+        URL.revokeObjectURL(item.objectUrl);
+        references.splice(index, 1);
+        reference = references[0] || null;
+        refreshReferenceHint();
+      };
+      buttons.append(move, remove); tile.append(image, badge, name, buttons); container.append(tile);
+    });
+  }
   function refreshReferenceHint() {
     const hint = get("img-ref-hint"), btn = get("img-ref-convert");
-    if (!reference) {
-      hint.textContent = "上传参考图后，将按当前生图模型决定使用方式。";
-      btn.hidden = true;
-      return;
-    }
-    if (["img2img", "qwen_edit"].includes(model()?.reference_mode)) {
-      hint.textContent = model()?.reference_mode === "qwen_edit" ?
-        tr("当前 Qwen 模型支持参考图片：文字指令优先，图片仅作视觉参考。",
-           "Qwen supports a reference image. Text instructions take priority; the image guides appearance only.",
-           "Qwenは参照画像に対応しています。テキスト指示を優先し、画像は外観の補助にのみ使用します。") :
-        tr("此模型支持图生图：生成时直接引用当前图片，默认重绘强度 0.65。",
-           "This model supports image-to-image (denoise strength: 0.65).",
-           "このモデルはimg2imgに対応しています（ノイズ除去強度0.65）。");
-      btn.hidden = true;
-    } else {
-      hint.textContent = health.images ?
-        "该模型不支持直接图像参考，可由当前大模型识别图片并转换为 Prompt。" :
-        "该模型不支持图像参考；当前大模型没有视觉能力，无法自动转换。";
-      btn.hidden = !health.images;
-      btn.disabled = working;
-    }
+    const allowed = activeReferences().length;
+    hint.textContent = references.length ?
+      `已上传 ${references.length} 张 · 当前使用 ${allowed} 张` : "";
+    btn.hidden = !reference || allowed > 0 || !health.images;
+    btn.disabled = working;
+    renderReferences();
   }
 
   get("img-model").onchange = e => selectModel(e.target.value);
+  get("img-api-upscale").onchange = e => {
+    get("img-upscale").value = e.target.checked ? "4x" : "off";
+    saveDraft();
+  };
   get("img-lora").onchange = e => {
     chosenLora = e.target.value;
     store.set("image-lora", chosenLora);
@@ -161,38 +203,43 @@
     get(ids[k]).addEventListener("input", saveDraft);
     get(ids[k]).addEventListener("change", saveDraft);
   }
+  function adjustApiAspect(changed) {
+    const chosen = model();
+    if (chosen?.family === "api" && chosen.sizes === "standard" &&
+        get("img-width").value === "1536" && get("img-height").value === "1536") {
+      get(changed === "width" ? "img-height" : "img-width").value = "1024";
+      saveDraft();
+    }
+  }
+  get("img-width").addEventListener("change", () => adjustApiAspect("width"));
+  get("img-height").addEventListener("change", () => adjustApiAspect("height"));
   get("img-natural").value = store.get("image-natural", "");
   get("img-natural").addEventListener("input", () => store.set("image-natural", get("img-natural").value));
 
   get("img-ref-file").onchange = async e => {
-    const file = e.target.files?.[0];
+    const picked = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!file) return;
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 5 * 1024 * 1024 || file.size < 1) {
-      toast("warn", "不支持的参考图", "请上传小于 5 MB 的 PNG、JPEG 或 WebP。", 6000);
-      return;
+    for (const file of picked.slice(0, Math.max(0, 8 - references.length))) {
+      if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 5 * 1024 * 1024 || file.size < 1) {
+        toast("warn", "不支持的参考图", "仅支持小于 5 MB 的 PNG、JPEG 或 WebP。", 4800);
+        continue;
+      }
+      try {
+        const url = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(Error("无法读取图片"));
+          reader.readAsDataURL(file);
+        });
+        references.push({url, name: file.name, objectUrl: URL.createObjectURL(file)});
+      } catch(err) { toast("error", "图片读取失败", String(err.message || err)); }
     }
-    try {
-      const url = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("无法读取图片"));
-        reader.readAsDataURL(file);
-      });
-      if (reference?.objectUrl) URL.revokeObjectURL(reference.objectUrl);
-      reference = {url, name: file.name, objectUrl: URL.createObjectURL(file)};
-      get("img-ref-thumbnail").src = reference.objectUrl;
-      get("img-ref-name").textContent = reference.name;
-      get("img-ref-preview").hidden = get("img-ref-clear").hidden = false;
-      refreshReferenceHint();
-    } catch (err) {toast("error", "图片读取失败", String(err.message || err));}
+    reference = references[0] || null;
+    refreshReferenceHint();
   };
   get("img-ref-clear").onclick = () => {
-    if (reference?.objectUrl) URL.revokeObjectURL(reference.objectUrl);
-    reference = null;
-    get("img-ref-preview").hidden = get("img-ref-clear").hidden = true;
-    get("img-ref-thumbnail").removeAttribute("src");
-    refreshReferenceHint();
+    for (const item of references) URL.revokeObjectURL(item.objectUrl);
+    references = []; reference = null; refreshReferenceHint();
   };
 
   get("img-clear").onclick = () => {
@@ -296,6 +343,52 @@
     finally {get("img-ref-convert").disabled = false;}
   };
 
+  function newTaskId() {
+    const bytes = new Uint8Array(12);
+    if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+    else for (let i=0; i<bytes.length; i++) bytes[i] = Math.floor(Math.random()*256);
+    return "img-" + Array.from(bytes, x => x.toString(16).padStart(2, "0")).join("");
+  }
+  function formatDuration(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(seconds / 60), s = seconds % 60;
+    return (m >= 60 ? String(Math.floor(m / 60)).padStart(2, "0") + ":" : "") +
+      String(m % 60).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  }
+  function watchTask(id, start) {
+    let stopped = false, querying = false;
+    const clock = get("img-elapsed");
+    clock.hidden = false;
+    function tick() {clock.textContent = formatDuration(performance.now() - start);}
+    tick();
+    const ticker = setInterval(tick, 500);
+    const probe = async () => {
+      if (stopped || querying) return;
+      querying = true;
+      try {
+        const res = await fetch("v1/mikuchin/image-task-status?id=" + encodeURIComponent(id),
+          {headers: headers(), cache:"no-store"});
+        if (!res.ok) return;
+        const state = await res.json();
+        if (stopped || state.state === "unknown") return;
+        let label = state.phase || "正在生成";
+        if (state.state === "working" && Number.isInteger(state.step) && state.steps)
+          label += " · " + state.step + "/" + state.steps + " 步";
+        get("img-hint").textContent = label;
+      } catch (err) {
+        // Progress is best-effort. The generating request remains authoritative.
+      } finally {querying = false;}
+    };
+    const updater = setInterval(probe, 1000);
+    void probe();
+    return () => {
+      stopped = true;
+      clearInterval(ticker);
+      clearInterval(updater);
+      tick();
+    };
+  }
+
   get("img-form").onsubmit = async ev => {
     ev.preventDefault();
     if (working) return;
@@ -304,24 +397,29 @@
     const steps = Number(get("img-steps").value);
     if (!Number.isInteger(steps) || steps < 1 || steps > 100) {toast("warn", "步数错误", "步数应为 1–100 的整数。");return;}
     const selected = model();
-    if (reference && !["img2img", "qwen_edit"].includes(selected?.reference_mode)) {
-      if (!window.confirm("当前模型不支持直接引用图片。可先点击「立即转换」将图片转为 Prompt；继续只会使用文本 Prompt，确定生成吗？")) return;
-    }
+    const taskId = newTaskId();
     const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
       size: `${get("img-width").value}x${get("img-height").value}`, response_format: "b64_json",
-      strata_upscale: get("img-upscale").value, strata_image_profile: current};
+      strata_upscale: get("img-upscale").value, strata_image_profile: current,
+      strata_image_task_id: taskId};
     if (chosenLora !== "none" && selected?.family === "qwen_turbo")
       body.strata_lora_id = chosenLora;
     if (get("img-seed").value !== "") body.seed = Number(get("img-seed").value);
-    if (reference && ["img2img", "qwen_edit"].includes(selected?.reference_mode)) {
-      body.strata_reference_image = reference.url;
+    const usableReferences = activeReferences();
+    if (usableReferences.length && selected?.family === "api")
+      body.strata_reference_images = usableReferences.map(item => item.url);
+    else if (usableReferences.length) {
+      body.strata_reference_image = usableReferences[0].url;
       if (selected.reference_mode === "img2img") body.strata_denoise_strength = 0.65;
     }
     saveDraft();
     working = true;
     get("img-go").disabled = true;
     const start = performance.now();
-    get("img-hint").textContent = "正在生成…（显存较小时可能需要几分钟）";
+    get("img-task-error").textContent = "";
+    get("img-task-error").hidden = true;
+    get("img-hint").textContent = selected?.family === "api" ? "正在请求 API" : "等待本地生成任务";
+    const stopWatching = watchTask(taskId, start);
     try {
       const res = await fetch("v1/images/generations", {method:"POST",headers:headers(true),body:JSON.stringify(body)});
       const j = await res.json();
@@ -333,7 +431,10 @@
         pic.alt = prompt;
         const caption = document.createElement("figcaption");
         const loraName = loraCatalog.find(l => l.id === j.strata?.lora_id)?.name;
-        caption.textContent = `${j.model || selected?.name}, ${j.size}, ${steps} steps, ${ui("Seed")} ${d.seed}, ${((performance.now() - start)/1000).toFixed(0)} s` +
+        caption.textContent = `${j.model || selected?.name}, ${j.size}` +
+          (selected?.family === "api" && !selected.supports_steps ? "" : `, ${steps} steps`) +
+          (d.seed == null ? "" : `, ${ui("Seed")} ${d.seed}`) +
+          `, ${((performance.now() - start)/1000).toFixed(0)} s` +
           (loraName ? ` · LoRA: ${loraName}` : "") +
           (j.strata?.upscale_applied ? " · Anime 4×" : "") + `: ${prompt}`;
         const originalFile = (j.strata?.upscale_original_files || [])[0];
@@ -347,9 +448,25 @@
         fig.append(pic, caption);
         get("img-results").prepend(fig);
       }
-      get("img-hint").textContent = "生成完成，右键图片可以保存。";
-    } catch (e) {toast("error", "生成失败", String(e.message || e), 9000);get("img-hint").textContent = "生成失败，请检查模型参数和日志。";}
-    finally {working = false;get("img-go").disabled = !catalog.find(m => m.id === current)?.available;refreshReferenceHint();}
+      const upscaleError = j.strata?.upscale_error;
+      get("img-hint").textContent = upscaleError ? "生成成功 · 超分未完成（已保留原图）" : "生成完成";
+      if (upscaleError) {
+        get("img-task-error").textContent = String(upscaleError);
+        get("img-task-error").hidden = false;
+      }
+    } catch (e) {
+      const detail = String(e.message || e);
+      get("img-hint").textContent = "生成失败";
+      get("img-task-error").textContent = detail;
+      get("img-task-error").hidden = false;
+      toast("error", "生成失败", detail, 9000);
+    }
+    finally {
+      stopWatching();
+      working = false;
+      get("img-go").disabled = !catalog.find(m => m.id === current)?.available;
+      refreshReferenceHint();
+    }
   };
   window.MikuchinImageStudio = {refresh, parseJSON};
   if (location.hash === "#images") void refresh();
