@@ -56,24 +56,24 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
 - **精细参数控制与一键清空**：支持独立选择画面长宽（`384` / `512` / `768` / `1024`）、采样步数、随机种子（Seed）与高清放大（Upscale）；提供「一键清空」重置当前输入与参考图而不误删已生成的作品；与聊天请求智能共享 GPU 队列。
 - **OpenAI 兼容 API 生图（v0.2.9）**：在设置中集中管理服务、代理与 API Key，自动探测候选模型 ID；支持多参考图及按模型能力降级、生成阶段/耗时统计，并可手动启用本机 Real-ESRGAN 4× 超分。
 
-### 3.1. 统一画廊（Gallery）
+### 4. 统一画廊（Gallery）
 - **自动汇集、持久索引**：收录「生图」页面、本地模型/API 以及聊天内生成的图片。首次打开时补录历史作品，后续生成成功自动更新 `chat/gallery-index.sqlite3`，并为画廊建立缩略图缓存；不把个人图片上传到 GitHub。
 - **筛选与大图查看**：可按来源（全部 / 生图 / 聊天 / 本地 / API）筛选，按新旧排序。点击缩略图放大，电脑使用左右方向键切换、`Esc` 退出，手机支持左右滑动。
 - **原图与超分图合并**：同一作品的原图与 4× 超分结果只显示一张卡片，默认预览超分图，角标显示版本数（如 `2`）；详情中可以分别「删除原图」「删除4×」。
 - **NSFW 遮罩**：右上角 NSFW 显示开关**默认关闭**，已标记图片以模糊遮罩展示，可单张临时查看、手动标记/取消，或多选后批量「标记为NSFW」。模型名含 `uncensored` 只是初始启发式，**不等于图像内容检测或安全隔离**。
 - **多选与删除**：支持多选、全选已加载、取消选择和批量删除。普通删除和批量删除均按**整组**删除原图及超分图；删除前会确认，**永久删除不可恢复**，聊天历史若仍引用已删文件，其图片链接也会失效。
 
-### 4. 实时硬件与推理遥测监控（Live Monitor）
+### 5. 实时硬件与推理遥测监控（Live Monitor）
 - 实时可视化展示 GPU 显存占用（已用/总显存）、系统内存（RAM）、处理器与显卡型号。
 - 实时追踪模型运行状态（运行中 / Prefill / 生成中 / 空闲卸载）、**Prefill 吞吐率（tok/s）**、**Decode 生成速度（tok/s）**、输入/输出 Token 累计统计、**会话 KV 缓存命中率** 以及近期请求的详细耗时拆解。
 
-### 5. Windows 原生桌面管理器（Windows Native Manager）
+### 6. Windows 原生桌面管理器（Windows Native Manager）
 - 基于 **Tauri 2 + Rust** 构建的轻量级原生桌面管理器与系统托盘程序。
 - **模型与服务生命周期管理**：一键切换已注册的模型配置文件、手动加载/卸载模型（API 保持常驻）、进程崩溃看门狗自动守护、运行日志实时查看。
 - **空闲自动卸载（Idle Unload）**：支持设置 `0–1440` 分钟空闲超时自动释放显存，配置更新时自动备份并平滑重启后端。
 - **网络与远程接入管理**：一键开关局域网（LAN）访问、管理 API 密钥（基于 Windows DPAPI 加密保护），并集成 **Cloudflare Tunnel** 状态监控、HTTPS 延迟测试与隧道快速重启。
 
-### 6. Android 手机客户端（内置用户态 Tailscale）
+### 7. Android 手机客户端（内置用户态 Tailscale）
 - **亮色自适应弹性移动端壳层**：专为不同屏幕比例手机打造的紧凑扁平化界面（延续 `#39C5BB` 薄荷绿主题），未登录时仅展示极简连接卡片；连接成功后**自动直达最近一次聊天会话**，左上角常驻历史记录抽屉按钮，底部配备六项无外框功能栏（`生图`、`画廊`、`角色`、`设置`、`监控`、`关于`）。
 - **内置用户态 Tailscale（`tsnet`）网络模块**：
   - 基于官方 `tailscale.com/tsnet`（Go 编写并通过 `gomobile` 编译为原生 AAR）实现应用内独立组网。
@@ -82,7 +82,7 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
   - 支持 **「直接连接」** 与 **「Tailscale」** 双模式切换。在 Tailscale 模式下，先通过「Tailscale 网页授权登录」拉起浏览器完成 OAuth 授权并持久化节点状态，授权就绪后再展开 Mikuchin 接口与 Key 输入框。
   - API Key 采用 **Android Keystore (`AES/GCM/NoPadding`)** 硬件级加密存储；应用内部通过仅绑定 `127.0.0.1` 随机端口的 SOCKS5 与带一次性会话 Token 校验的本地 HTTP 反向代理统一承载原生校验、SSE 流式聊天与图片上传。
 
-### 7. 全局中日英三语实时国际化（Trilingual i18n）
+### 8. 全局中日英三语实时国际化（Trilingual i18n）
 - 内置完整的 **简体中文（`zh-CN`）**、**日本語（`ja-JP`）** 与 **English（`en-US`）** 语言包。
 - 在 Web 端顶部、设置页或 Windows 管理器中切换语言时，Web 界面、移动端壳层、Windows 管理器与系统托盘菜单同步实时更新；严格仅翻译 UI 控件，绝不翻译或改动用户的聊天内容、角色卡与提示词。
 
@@ -158,15 +158,31 @@ Windows 安装包与源码仓库不包含模型权重文件，请按需准备以
 
 前往 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 获取 Windows 安装包与 Android APK。**Windows 安装包不包含模型权重**；请在本机准备模型文件并通过启动器注册配置文件。
 
-Android 提供「直接连接」和「Tailscale」两种模式。Tailscale 需先完成浏览器授权、在 Tailnet ACL/Grants 中允许 APK 节点访问后端，且目标机器防火墙需允许 API 端口。**Android 客户端不负责在手机上执行本地模型推理**，它连接你的 Mikuchin 服务。
+## 9. 从其它设备访问（Remote Access）
 
-v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+Mikuchin 的模型推理、会话和生成图片保存在运行服务的主机上。其它设备只需连接该主机，无须重复部署模型。请确保服务在线，API Key 有效，并按连接方式配置监听地址、防火墙和访问权限。
 
-## 🍎 Apple 平台便携使用（iPhone / iPad / Mac）
+### 9.1 桌面设备访问（Windows / Linux）
+
+1. 在主机上启动 Mikuchin，并确认 API 端口（示例：`15239`）。
+2. 在可信局域网内，通过另一台电脑的浏览器打开 `http://<主机局域网 IP>:15239/`；需要主机开启 LAN 监听，且防火墙允许访问。
+3. 跨网络访问可通过已授权的 **Tailscale Tailnet** 或配置好访问控制的 **Cloudflare Tunnel HTTPS 域名**连接。输入 Mikuchin API Key 后即可使用聊天、生图和画廊。Mac 的浏览器访问方式也适用，见下方苹果设备小节。
+
+### 9.2 安卓设备访问（Android）
+
+1. 从 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) 下载并安装正式签名的 Mikuchin APK。**安卓客户端只连接远端推理服务，不在手机上运行大模型。**
+2. 启动客户端后，选择 **「直接连接」** 或 **「Tailscale」**：
+   - **直接连接**：输入可访问的服务地址（例如同一局域网地址，或自己的 HTTPS Cloudflare Tunnel 域名）和 Mikuchin API Key。
+   - **Tailscale**：先通过「Tailscale 网页授权登录」完成浏览器授权，再填写目标 Mikuchin 服务信息和 API Key；确保 Tailnet ACL/Grants、主机监听和防火墙允许手机访问 API 端口。
+3. 连接成功后即可使用聊天、生图和画廊。应用内置用户态 `tsnet`，不占用 Android 系统 VPN 槽位；实际连通性仍取决于代理和路由配置。
+
+**升级提醒：** v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+
+### 9.3 苹果设备访问（iPhone / iPad / Mac）
 
 **目前无需 Mac、Xcode、开发者签名或侧载 IPA。** Apple 设备直接使用 Mikuchin 的 Web 工作台：模型与会话仍运行/保存在你自己的 Mikuchin 主机上，iPhone/iPad/Mac 负责访问网页。**这是免安装的浏览器/主屏幕快捷方式，不是原生 iOS/macOS 客户端。**
 
-### iPhone / iPad：Stash + Tailscale + Safari（推荐已使用 Stash 的用户）
+#### iPhone / iPad：Stash + Tailscale + Safari
 
 1. **准备主机**：在 Windows 上启动 Mikuchin，确保服务持续运行；启用允许 Tailnet 地址访问的监听方式（例如 LAN 访问），让系统防火墙放行所用 API 端口（默认示例 `15239`）。在 Tailscale ACL/Grants 中允许 Apple 设备访问此主机和端口。无需向公网开放端口。
 2. **在 Stash 加入 Tailnet**：使用支持内置 Tailscale 的 Stash（iOS 3.4+；推荐 3.6+ 以使用 Tailnet 路由自动识别）。在现有 Stash 配置的 `proxies` 中**追加**如下节点，不要覆盖其他代理；然后进入该节点的 **Tailscale** 菜单完成浏览器交互授权。不要把 Tailscale 的认证密钥写入公开配置：
@@ -181,7 +197,7 @@ v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 A
 3. **Safari 打开 Mikuchin**：在 Stash 的 Tailnet 节点已连接后，打开 `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`（将占位符换成运行 Mikuchin 电脑的 Tailscale IPv4 和实际端口），或使用可解析的 MagicDNS 主机名；在网页按提示输入 **Mikuchin API Key**。若无法连接，先检查主机是否在线、监听地址、防火墙、Tailnet 授权和 Stash 的路由策略。
 4. **固定到主屏幕**：Safari 打开成功后，点击 **分享 → 添加到主屏幕**，如有 **「作为网页 App 打开 / Open as Web App」** 选项可开启，再点「添加」。此后可像启动应用一样从桌面图标进入。网页图标不会让模型在手机端离线运行，也不是可侧载的 `.ipa`。参考 [Apple 官方操作说明](https://support.apple.com/guide/iphone/iphea86e5236/ios)。
 
-### 其他 Apple 接入方式
+#### 其他 Apple 接入方式
 
 - **没有 Stash 的 iPhone/iPad**：可使用官方 [Tailscale iOS 客户端](https://tailscale.com/docs/install/ios) 加入同一 Tailnet，再用 Safari 打开上述地址；若需要同时使用另一款系统级代理 VPN，须考虑 iOS 的 VPN 配置互斥。
 - **不使用 Tailnet**：可使用自己配置并授权的 **HTTPS Cloudflare Tunnel 域名**，直接在 Safari 打开并完成 API Key 验证；不要把 [项目官网](https://mikuchin.zakee.fun) 误当作个人推理服务地址。

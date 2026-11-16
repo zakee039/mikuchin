@@ -44,22 +44,24 @@ You manage models, conversations, character data, and generated images on your o
    - **Three-Tier Prompting & Parse with AI**: Combines a shared **Natural Language** input with per-model persistent **Positive / Negative Prompt** drafts, plus a one-click stateless **Parse with AI** action that rewrites natural descriptions into structured English prompts using the active LLM.
    - **Flexible Controls**: Independent width and height selectors (`384`, `512`, `768`, `1024`), step count, seed, upscaling, LoRA selector, and one-click clear that resets inputs without deleting generated gallery items.
    - **OpenAI-Compatible Image APIs (v0.2.9)**: Configure providers, optional proxies and API keys in Settings; discover candidate model IDs and upload multiple reference images with capability-based fallback. View generation progress and elapsed time, and optionally apply local Real-ESRGAN 4× upscaling.
+
+4. **Unified Gallery (Gallery)**
    - **Unified Gallery — automatic indexing**: Collects generated pictures from Image Studio and conversations, whether produced locally or through an API. The first visit backfills existing pictures; successful generations update `chat/gallery-index.sqlite3` and create thumbnail caches. Private images are not uploaded to GitHub.
    - **Gallery navigation and variants**: Filter by source (All / Image Gen / Chat / Local / API), sort by date, open a full-size viewer, use ← / → and `Esc` on desktop or swipe on mobile. Original and 4× upscaled images are grouped under one thumbnail (with a shaded count badge); the detail view can delete either version separately.
    - **NSFW and bulk management**: The gallery's **Show NSFW** toggle defaults to off, blurring marked images. You can reveal an image temporarily, manually mark/unmark one, or batch-mark selected works as NSFW. A model name containing `uncensored` is only a heuristic, **not image-content classification or access protection**. Multi-select supports selecting loaded items, clearing selection and deleting several works; normal and bulk deletion remove **both versions of each work**, permanently. Chat references to deleted images will stop working.
 
-4. **Live Hardware & Inference Telemetry (Monitor)**
+5. **Live Hardware & Inference Telemetry (Monitor)**
    - Real-time metrics for GPU VRAM usage, system RAM, Prefill and Decode throughput (`tok/s`), input/output token counters, SessionV1 KV cache hit rate, and per-request latency breakdowns.
 
-5. **Native Windows Manager (Tauri 2)**
+6. **Native Windows Manager (Tauri 2)**
    - System tray integration, one-click model config switching, manual model load/unload while keeping the API resident, watchdog auto-restart, configurable **Idle Unload Timeout** (`0–1440` minutes), LAN access toggle, Windows DPAPI credential encryption, and integrated **Cloudflare Tunnel** monitoring, HTTPS latency probing, and restart controls.
 
-6. **Android Client with Built-in User-Space Tailscale (`tsnet`)**
+7. **Android Client with Built-in User-Space Tailscale (`tsnet`)**
    - **Adaptive Light-Theme Mobile Shell**: Opens with a minimal connection gate before authentication and jumps straight to the most recent chat session once connected, featuring a persistent top-left history drawer toggle and a borderless 6-button bottom navigation bar (`Image Gen`, `Gallery`, `Characters`, `Settings`, `Monitor`, `About`).
    - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration), without requiring root access or the official Tailscale app.
    - **Two-Step Web OAuth & Hardware-Backed Security**: Supports **Direct** and **Tailscale** connection modes. In Tailscale mode, users first complete interactive web OAuth device login before the endpoint and API key fields unfold. API keys are encrypted via **Android Keystore (`AES/GCM/NoPadding`)**, and all native checks, SSE streaming chats, and uploads traverse a localhost-only (`127.0.0.1`) reverse proxy guarded by per-session random tokens.
 
-7. **Global Trilingual UI (`zh-CN` / `ja-JP` / `en-US`)**
+8. **Global Trilingual UI (`zh-CN` / `ja-JP` / `en-US`)**
    - Instant synchronization across the Web UI, mobile shell, Windows Manager, and tray menu without ever altering or translating user conversations, character cards, or prompts.
 
 ## 📂 Repository layout
@@ -120,13 +122,31 @@ powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
 powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
-On Android, choose Direct or Tailscale connection. Tailscale mode requires browser authorization, Tailnet ACL/Grants permitting the APK node to reach your server, and an appropriate server firewall rule. The Android app **connects to your Mikuchin backend**; it does not run the model locally on the phone.
+## 9. Access from other devices (Remote Access)
 
-## 🍎 Portable Apple access (iPhone / iPad / Mac)
+Inference, conversations and generated images remain on your Mikuchin host. Other devices only connect to that service; they do not need to install the model. Make sure the host is online, API-key authentication is enabled, and the listening address, firewall and access controls are configured.
+
+### 9.1 Desktop access (Windows / Linux)
+
+1. Start Mikuchin on the host and check its API port (example: `15239`).
+2. On a trusted LAN, open `http://<HOST_LAN_IP>:15239/` from another computer's browser. The host must enable LAN access and permit that port through its firewall.
+3. For access across networks, use an authorized **Tailscale Tailnet** or your configured **Cloudflare Tunnel HTTPS hostname** with access controls. Enter the Mikuchin API key to use Chat, Image Gen and Gallery. For Mac browsers, also see the Apple device section below.
+
+### 9.2 Android device access
+
+1. Download the release-signed Mikuchin APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Android connects to your Mikuchin server; it does not run the model on the phone.**
+2. Choose **Direct** or **Tailscale** in the app:
+   - **Direct:** Enter a reachable host URL (such as the local LAN address or your own HTTPS Cloudflare Tunnel) and your Mikuchin API key.
+   - **Tailscale:** Complete the in-app browser OAuth authorization first, then enter the Mikuchin endpoint and API key. Tailnet ACL/Grants, host listening and firewall rules must allow the connection.
+3. Chat, Image Gen and Gallery are available once connected. The built-in user-space `tsnet` does not occupy Android's system VPN slot, although other proxy and routing settings may affect connectivity.
+
+**Upgrade note:** v0.2.9 is release-signed. An APK signed with the same certificate can generally update in place; Debug-signed builds might require uninstalling first. Back up app-local settings before doing so.
+
+### 9.3 Apple device access (iPhone / iPad / Mac)
 
 **Using Mikuchin on iPhone/iPad requires no Mac, Xcode, developer signing, IPA sideloading or native iOS app.** Open the existing web workspace in Safari. Your Mikuchin host still runs inference and stores conversations and generated images; the Apple device acts as a remote browser client. **A Home Screen shortcut is not a native app or offline model runtime.**
 
-### iPhone / iPad: Stash + built-in Tailscale + Safari
+#### iPhone / iPad: Stash + built-in Tailscale + Safari
 
 1. **Prepare the host.** Keep the Windows Mikuchin service running, enable listening on an address reachable over Tailscale (for example, LAN access), and allow its API port through the host firewall (example port: `15239`). Tailnet ACL/Grants must permit the iPhone/iPad node to reach this host and port. No public port forwarding is necessary.
 2. **Join the same Tailnet from Stash.** Stash for iOS 3.4+ supports a built-in `type: tailscale` node; 3.6+ is recommended for automatic Tailnet routes and MagicDNS. **Append** this entry to the `proxies` section of your existing profile rather than replacing your other proxy settings. Open the node's **Tailscale** menu in Stash and complete interactive browser login. Never publish an authentication key.
@@ -141,7 +161,7 @@ On Android, choose Direct or Tailscale connection. Tailscale mode requires brows
 3. **Open Mikuchin in Safari.** After the Stash Tailnet node is connected, visit `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`, substituting your PC's Tailscale IPv4 address and real API port, or use a working MagicDNS hostname. Enter your **Mikuchin API key** when prompted. If it fails, check service availability, listen address, firewall, Tailnet permissions and Stash routing.
 4. **Add it to your Home Screen.** In Safari, use **Share → Add to Home Screen** and optionally select **Open as Web App** where available, then tap **Add**. You can now launch the website from its icon. See [Apple's official instructions](https://support.apple.com/guide/iphone/iphea86e5236/ios).
 
-### Other Apple connection options
+#### Other Apple connection options
 
 - **Without Stash (iPhone/iPad):** Connect to your Tailnet using the official [Tailscale iOS app](https://tailscale.com/docs/install/ios), then open the Mikuchin address in Safari. Note that separate system VPN apps can compete for the single iOS VPN slot.
 - **Without Tailscale:** Use your own configured and authorized **HTTPS Cloudflare Tunnel hostname** in Safari, with Mikuchin API-key authentication. The [project website](https://mikuchin.zakee.fun) is **not** your personal inference endpoint.
@@ -151,4 +171,4 @@ On Android, choose Direct or Tailscale connection. Tailscale mode requires brows
 
 ## 🔒 Security and compatibility
 
-Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. The v0.2.9 APK is release-signed. Older APKs signed with an Android Debug certificate may need to be uninstalled before installing this build; back up any app-local settings first. See the bundled engine's license and third-party notices for attribution.
+Do not publish API keys, Tailnet state, model files, or private conversation data. Coexistence with a system VPN depends on routing and should be verified on your device. See the bundled engine's license and third-party notices for attribution.
