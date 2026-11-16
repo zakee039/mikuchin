@@ -43,7 +43,10 @@ You manage models, conversations, character data, and generated images on your o
    - **Multi-Profile Architecture**: Switch seamlessly between **Qwen-Image 2.1 Turbo Official** (8-step generation, native `--ref-image` editing via Qwen3-VL, and allowlisted **Qwen LoRA** loading), **Qwen-Image 2.1 Turbo Uncensored**, **Animagine XL 4.0**, and **SDXL Base 1.0** (native `img2img`).
    - **Three-Tier Prompting & Parse with AI**: Combines a shared **Natural Language** input with per-model persistent **Positive / Negative Prompt** drafts, plus a one-click stateless **Parse with AI** action that rewrites natural descriptions into structured English prompts using the active LLM.
    - **Flexible Controls**: Independent width and height selectors (`384`, `512`, `768`, `1024`), step count, seed, upscaling, LoRA selector, and one-click clear that resets inputs without deleting generated gallery items.
-   - **External Image APIs & Gallery (v0.2.9)**: Configure OpenAI-compatible image services, optional proxy, model discovery and multi-reference uploads. Track generation status and choose local 4× upscaling. A unified gallery indexes images from chat and Image Studio, with NSFW blur, grouped original/4× versions, multi-select and permanent deletion.
+   - **OpenAI-Compatible Image APIs (v0.2.9)**: Configure providers, optional proxies and API keys in Settings; discover candidate model IDs and upload multiple reference images with capability-based fallback. View generation progress and elapsed time, and optionally apply local Real-ESRGAN 4× upscaling.
+   - **Unified Gallery — automatic indexing**: Collects generated pictures from Image Studio and conversations, whether produced locally or through an API. The first visit backfills existing pictures; successful generations update `chat/gallery-index.sqlite3` and create thumbnail caches. Private images are not uploaded to GitHub.
+   - **Gallery navigation and variants**: Filter by source (All / Image Gen / Chat / Local / API), sort by date, open a full-size viewer, use ← / → and `Esc` on desktop or swipe on mobile. Original and 4× upscaled images are grouped under one thumbnail (with a shaded count badge); the detail view can delete either version separately.
+   - **NSFW and bulk management**: The gallery's **Show NSFW** toggle defaults to off, blurring marked images. You can reveal an image temporarily, manually mark/unmark one, or batch-mark selected works as NSFW. A model name containing `uncensored` is only a heuristic, **not image-content classification or access protection**. Multi-select supports selecting loaded items, clearing selection and deleting several works; normal and bulk deletion remove **both versions of each work**, permanently. Chat references to deleted images will stop working.
 
 4. **Live Hardware & Inference Telemetry (Monitor)**
    - Real-time metrics for GPU VRAM usage, system RAM, Prefill and Decode throughput (`tok/s`), input/output token counters, SessionV1 KV cache hit rate, and per-request latency breakdowns.
@@ -118,6 +121,33 @@ powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
 On Android, choose Direct or Tailscale connection. Tailscale mode requires browser authorization, Tailnet ACL/Grants permitting the APK node to reach your server, and an appropriate server firewall rule. The Android app **connects to your Mikuchin backend**; it does not run the model locally on the phone.
+
+## 🍎 Portable Apple access (iPhone / iPad / Mac)
+
+**Using Mikuchin on iPhone/iPad requires no Mac, Xcode, developer signing, IPA sideloading or native iOS app.** Open the existing web workspace in Safari. Your Mikuchin host still runs inference and stores conversations and generated images; the Apple device acts as a remote browser client. **A Home Screen shortcut is not a native app or offline model runtime.**
+
+### iPhone / iPad: Stash + built-in Tailscale + Safari
+
+1. **Prepare the host.** Keep the Windows Mikuchin service running, enable listening on an address reachable over Tailscale (for example, LAN access), and allow its API port through the host firewall (example port: `15239`). Tailnet ACL/Grants must permit the iPhone/iPad node to reach this host and port. No public port forwarding is necessary.
+2. **Join the same Tailnet from Stash.** Stash for iOS 3.4+ supports a built-in `type: tailscale` node; 3.6+ is recommended for automatic Tailnet routes and MagicDNS. **Append** this entry to the `proxies` section of your existing profile rather than replacing your other proxy settings. Open the node's **Tailscale** menu in Stash and complete interactive browser login. Never publish an authentication key.
+
+   ```yaml
+   proxies:
+     - name: mikuchin-tailnet
+       type: tailscale
+   ```
+
+   Integrated Tailscale shares Stash's VPN tunnel, so you generally do not need to run the separate Tailscale VPN concurrently. Actual routing depends on the Stash version and local rules. See the [Stash Tailscale reference](https://stash.wiki/en/proxy-protocols/proxy-types) and [Stash NAT traversal guide](https://stash.wiki/features/nat-traversal).
+3. **Open Mikuchin in Safari.** After the Stash Tailnet node is connected, visit `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`, substituting your PC's Tailscale IPv4 address and real API port, or use a working MagicDNS hostname. Enter your **Mikuchin API key** when prompted. If it fails, check service availability, listen address, firewall, Tailnet permissions and Stash routing.
+4. **Add it to your Home Screen.** In Safari, use **Share → Add to Home Screen** and optionally select **Open as Web App** where available, then tap **Add**. You can now launch the website from its icon. See [Apple's official instructions](https://support.apple.com/guide/iphone/iphea86e5236/ios).
+
+### Other Apple connection options
+
+- **Without Stash (iPhone/iPad):** Connect to your Tailnet using the official [Tailscale iOS app](https://tailscale.com/docs/install/ios), then open the Mikuchin address in Safari. Note that separate system VPN apps can compete for the single iOS VPN slot.
+- **Without Tailscale:** Use your own configured and authorized **HTTPS Cloudflare Tunnel hostname** in Safari, with Mikuchin API-key authentication. The [project website](https://mikuchin.zakee.fun) is **not** your personal inference endpoint.
+- **Mac:** Open Mikuchin in Safari or another browser over the Tailnet or an authorized HTTPS endpoint. No dedicated macOS app build is required for browser access.
+
+**Security:** `http://` traffic carried **inside a correctly connected Tailscale tunnel** benefits from the tunnel's encryption, but HTTP does not itself provide browser-level HTTPS/TLS security or a secure origin. Use a valid HTTPS endpoint if browser secure-context features are needed. Keep API-key authentication and Tailnet ACLs enabled; never expose plaintext HTTP directly to the public internet. The Home Screen icon cannot reach a sleeping or disconnected host.
 
 ## 🔒 Security and compatibility
 

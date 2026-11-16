@@ -43,7 +43,10 @@
    - **複数モデルプロファイル対応**：**Qwen-Image 2.1 Turbo Official**（8ステップ高速生成、`--ref-image` ネイティブ参照編集、Qwen LoRA 対応）、**Qwen-Image 2.1 Turbo Uncensored**、**Animagine XL 4.0**、**SDXL Base 1.0**（`img2img` 対応）を自由に切り替え可能。
    - **3層プロンプト＆AI ワンクリック解析**：モデル間で共有される「自然言語入力」と、モデルごとに保存される「Positive / Negative Prompt」下書きを備え、現在の LLM を使って自然言語から英語プロンプトへの自動変換が可能。
    - 縦横サイズの個別指定（`384` / `512` / `768` / `1024`）、ステップ数、シード値、アップスケール、LoRA 選択、ワンクリッククリアに対応。
-   - **外部画像 API とギャラリー（v0.2.9）**：OpenAI 互換サービス、プロキシ、モデル ID 検出、複数参照画像に対応。生成状態・時間とローカル 4× 超解像を表示。チャットと画像生成の作品を一元管理し、NSFW ぼかし、元画像と 4× 画像のグループ化、複数選択・完全削除をサポート。
+   - **OpenAI 互換の画像 API（v0.2.9）**：設定画面でサービス、プロキシ、API キーを管理し、候補となるモデル ID を検出。複数の参照画像はモデルの対応状況に応じて段階的に制限され、生成状況・経過時間の表示と、任意でのローカル Real-ESRGAN 4× 超解像に対応。
+   - **統合ギャラリー・自動索引**：画像生成ページとチャット、ローカルモデルと外部 API の生成画像を一覧化。初回表示時に既存画像を読み込み、その後は生成成功時に `chat/gallery-index.sqlite3` を更新し、サムネイルをキャッシュします。プライベート画像を GitHub にアップロードしません。
+   - **一覧と画像ビューア**：画像生成 / チャット / ローカル / API などで絞り込み、日付順に並べ替え。画像を拡大し、PC では左右キーと `Esc`、スマートフォンではスワイプで操作できます。元画像と 4× 超解像画像は一組のカードとして表示され、影付きバッジに枚数（例：`2`）を表示。詳細画面では片方だけを削除することも可能です。
+   - **NSFW・複数選択管理**：NSFW 表示スイッチは**初期状態でオフ**、マークされた画像にはぼかしを適用。画像ごとの一時表示、手動の設定/解除、複数作品の一括 NSFW 設定に対応。モデル名の `uncensored` は初期判定の目安にすぎず、**画像内容の自動判定やアクセス制御ではありません**。複数選択と一括削除ができ、通常削除・一括削除は元画像と 4× 画像を**まとめて完全削除**します。削除済み画像へのチャット履歴内リンクは無効になります。
 
 4. **リアルタイムハードウェア＆推論モニター（Monitor）**
    - GPU VRAM 使用量、システム RAM、Prefill / Decode 速度（tok/s）、入出力トークン統計、KV キャッシュヒット率、直近リクエストのレイテンシをリアルタイム表示。
@@ -118,6 +121,33 @@ powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
 Android では「直接接続」または「Tailscale」を選択します。Tailscale モードではブラウザ認証のほか、Tailnet ACL/Grants と接続先のファイアウォールで API ポートへのアクセスを許可する必要があります。Android アプリ自体でモデルを推論するのではなく、Mikuchin サーバーへ接続します。
+
+## 🍎 Apple デバイスで手軽に利用（iPhone / iPad / Mac）
+
+**iPhone/iPad での利用に Mac・Xcode・開発者署名・IPA のサイドロードは不要です。** 既存の Mikuchin Web ワークスペースを Safari から利用します。推論・会話履歴・生成画像の保存先はあくまでご自身の Mikuchin サーバーであり、Apple デバイスはリモートのブラウザとして動作します。**ホーム画面のアイコンはネイティブアプリやオフライン推論機能ではありません。**
+
+### iPhone / iPad：Stash 内蔵 Tailscale + Safari
+
+1. **サーバーを用意**：Windows 側で Mikuchin を起動し、Tailscale 経由で到達できるアドレスへの待ち受け（例：LAN アクセス）を有効にします。API ポート（例：`15239`）を PC のファイアウォールで許可し、Tailnet の ACL/Grants でも iPhone/iPad からのアクセスを許可します。公開ポートの開放は不要です。
+2. **Stash から同じ Tailnet に参加**：iOS 版 Stash 3.4+ は `type: tailscale` をサポートします。Tailnet の自動ルーティングと MagicDNS には 3.6+ を推奨します。既存設定の `proxies` に以下のノードを**追加**し、他のプロキシ設定は上書きしないでください。Stash のノードメニューから **Tailscale** を開き、ブラウザで認証します。認証キーは公開設定に書き込まないでください。
+
+   ```yaml
+   proxies:
+     - name: mikuchin-tailnet
+       type: tailscale
+   ```
+
+   Stash 内蔵 Tailscale は Stash の VPN トンネルを共有するため、通常は公式 Tailscale VPN を同時起動する必要がありません。実際のルーティングは Stash のバージョンとルールに左右されます。詳しくは [Stash の Tailscale 解説](https://stash.wiki/en/proxy-protocols/proxy-types) と [内網接続ガイド](https://stash.wiki/features/nat-traversal) を参照してください。
+3. **Safari で接続**：Stash の Tailnet 接続後、`http://<MIKUCHIN_HOST_TAILNET_IP>:15239/` を開きます（`<...>` は PC の Tailscale IPv4 アドレスと実際のポートに置換）。利用可能なら MagicDNS のホスト名も使えます。画面の案内に従って **Mikuchin API Key** を入力します。接続できない場合は、サーバー起動・待ち受け・ファイアウォール・Tailnet の許可・Stash ルールを確認します。
+4. **ホーム画面に追加**：Safari の **共有 → ホーム画面に追加** を選び、表示される場合は **Web アプリとして開く（Open as Web App）** を有効にして追加します。以降はホーム画面のアイコンからアクセスできます。詳しくは [Apple 公式ガイド](https://support.apple.com/guide/iphone/iphea86e5236/ios) を参照してください。
+
+### その他の Apple 接続方法
+
+- **Stash を使わない iPhone/iPad**：公式 [Tailscale iOS クライアント](https://tailscale.com/docs/install/ios) で Tailnet に参加してから Safari を開きます。iOS の VPN スロットを他の VPN と取り合う場合があります。
+- **Tailnet を使わない場合**：ご自身で構成した、適切なアクセス制御のある **HTTPS Cloudflare Tunnel のホスト名**から Safari でアクセスし、Mikuchin API Key で認証します。[プロジェクト公式サイト](https://mikuchin.zakee.fun) は個人の推論サーバーの URL ではありません。
+- **Mac**：Safari などのブラウザから Tailnet アドレス、または認証済みの HTTPS エンドポイントを開くだけです。ブラウザ利用のために専用 macOS アプリをビルドする必要はありません。
+
+**セキュリティ**：正常に接続された Tailscale トンネル内の `http://` 通信はトンネル層で暗号化されますが、HTTP 自体がブラウザ向けの HTTPS/TLS やセキュアオリジンを提供するわけではありません。ブラウザのセキュアコンテキスト機能が必要な場合は、正規証明書の HTTPS 経由で接続してください。API Key 認証と Tailnet ACL を維持し、平文 HTTP をインターネットへ直接公開しないでください。サーバーがスリープ中またはオフラインのとき、ホーム画面のアイコンだけでモデルに接続することはできません。
 
 ## 🔒 セキュリティと注意事項
 

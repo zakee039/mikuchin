@@ -54,7 +54,14 @@ Mikuchin 使用 **PolyStrata** 作为本地推理引擎，提供浏览器工作�
   - 点击 **「一键解析（Parse with AI）」** 可调用当前活跃的大语言模型（以无状态单轮模式）将自然语言构思转化为专业英文正反提示词。
 - **双轨参考图工作流**：支持 SDXL 原生 `img2img` 重绘、Qwen Official 原生参考图引导，或调用多模态视觉 LLM 将参考图解析为英文画面描述并追加至 Positive Prompt。
 - **精细参数控制与一键清空**：支持独立选择画面长宽（`384` / `512` / `768` / `1024`）、采样步数、随机种子（Seed）与高清放大（Upscale）；提供「一键清空」重置当前输入与参考图而不误删已生成的作品；与聊天请求智能共享 GPU 队列。
-- **OpenAI 兼容 API 生图与画廊（v0.2.9）**：在设置中管理可选代理与 API 密钥、探测模型 ID、上传多张参考图；支持生成阶段/耗时与本机 4× 超分。全局画廊索引聊天与独立生图，支持 NSFW 模糊、多选及原图/超分图分组管理（删除不可撤销）。
+- **OpenAI 兼容 API 生图（v0.2.9）**：在设置中集中管理服务、代理与 API Key，自动探测候选模型 ID；支持多参考图及按模型能力降级、生成阶段/耗时统计，并可手动启用本机 Real-ESRGAN 4× 超分。
+
+### 3.1. 统一画廊（Gallery）
+- **自动汇集、持久索引**：收录「生图」页面、本地模型/API 以及聊天内生成的图片。首次打开时补录历史作品，后续生成成功自动更新 `chat/gallery-index.sqlite3`，并为画廊建立缩略图缓存；不把个人图片上传到 GitHub。
+- **筛选与大图查看**：可按来源（全部 / 生图 / 聊天 / 本地 / API）筛选，按新旧排序。点击缩略图放大，电脑使用左右方向键切换、`Esc` 退出，手机支持左右滑动。
+- **原图与超分图合并**：同一作品的原图与 4× 超分结果只显示一张卡片，默认预览超分图，角标显示版本数（如 `2`）；详情中可以分别「删除原图」「删除4×」。
+- **NSFW 遮罩**：右上角 NSFW 显示开关**默认关闭**，已标记图片以模糊遮罩展示，可单张临时查看、手动标记/取消，或多选后批量「标记为NSFW」。模型名含 `uncensored` 只是初始启发式，**不等于图像内容检测或安全隔离**。
+- **多选与删除**：支持多选、全选已加载、取消选择和批量删除。普通删除和批量删除均按**整组**删除原图及超分图；删除前会确认，**永久删除不可恢复**，聊天历史若仍引用已删文件，其图片链接也会失效。
 
 ### 4. 实时硬件与推理遥测监控（Live Monitor）
 - 实时可视化展示 GPU 显存占用（已用/总显存）、系统内存（RAM）、处理器与显卡型号。
@@ -97,7 +104,7 @@ mikuchin/
 │   ├── android/            # Android 原生客户端工程 (Kotlin + WebView + Go tsnetbridge)
 │   ├── launcher/           # Windows 原生桌面管理器与安装包工程 (Tauri 2 + TypeScript + Rust)
 │   ├── locales/            # 权威三语词典 (zh-CN.json, ja-JP.json, en-US.json)
-│   └── web/                # 共享 Web 前端 (Chat / Images / Characters / Monitor / Settings / About)
+│   └── web/                # 共享 Web 前端 (Chat / 生图 / 画廊 / Characters / Monitor / Settings / About)
 └── scripts/                # 多语言构建、桌面启动器打包与运维脚本
 ```
 
@@ -154,6 +161,33 @@ Windows 安装包与源码仓库不包含模型权重文件，请按需准备以
 Android 提供「直接连接」和「Tailscale」两种模式。Tailscale 需先完成浏览器授权、在 Tailnet ACL/Grants 中允许 APK 节点访问后端，且目标机器防火墙需允许 API 端口。**Android 客户端不负责在手机上执行本地模型推理**，它连接你的 Mikuchin 服务。
 
 v0.2.9 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+
+## 🍎 Apple 平台便携使用（iPhone / iPad / Mac）
+
+**目前无需 Mac、Xcode、开发者签名或侧载 IPA。** Apple 设备直接使用 Mikuchin 的 Web 工作台：模型与会话仍运行/保存在你自己的 Mikuchin 主机上，iPhone/iPad/Mac 负责访问网页。**这是免安装的浏览器/主屏幕快捷方式，不是原生 iOS/macOS 客户端。**
+
+### iPhone / iPad：Stash + Tailscale + Safari（推荐已使用 Stash 的用户）
+
+1. **准备主机**：在 Windows 上启动 Mikuchin，确保服务持续运行；启用允许 Tailnet 地址访问的监听方式（例如 LAN 访问），让系统防火墙放行所用 API 端口（默认示例 `15239`）。在 Tailscale ACL/Grants 中允许 Apple 设备访问此主机和端口。无需向公网开放端口。
+2. **在 Stash 加入 Tailnet**：使用支持内置 Tailscale 的 Stash（iOS 3.4+；推荐 3.6+ 以使用 Tailnet 路由自动识别）。在现有 Stash 配置的 `proxies` 中**追加**如下节点，不要覆盖其他代理；然后进入该节点的 **Tailscale** 菜单完成浏览器交互授权。不要把 Tailscale 的认证密钥写入公开配置：
+
+   ```yaml
+   proxies:
+     - name: mikuchin-tailnet
+       type: tailscale
+   ```
+
+   Stash 3.6+ 可自动处理 Tailnet 地址路由和 MagicDNS；**不必再同时开启官方 Tailscale VPN**，从而避免 iOS 单 VPN 槽位冲突。不同 Stash 版本或分流规则可能仍需按实际网络调整。参考 [Stash 内置 Tailscale](https://stash.wiki/proxy-protocols/proxy-types#tailscale) 与 [Stash 内网穿透](https://stash.wiki/features/nat-traversal)。
+3. **Safari 打开 Mikuchin**：在 Stash 的 Tailnet 节点已连接后，打开 `http://<MIKUCHIN_HOST_TAILNET_IP>:15239/`（将占位符换成运行 Mikuchin 电脑的 Tailscale IPv4 和实际端口），或使用可解析的 MagicDNS 主机名；在网页按提示输入 **Mikuchin API Key**。若无法连接，先检查主机是否在线、监听地址、防火墙、Tailnet 授权和 Stash 的路由策略。
+4. **固定到主屏幕**：Safari 打开成功后，点击 **分享 → 添加到主屏幕**，如有 **「作为网页 App 打开 / Open as Web App」** 选项可开启，再点「添加」。此后可像启动应用一样从桌面图标进入。网页图标不会让模型在手机端离线运行，也不是可侧载的 `.ipa`。参考 [Apple 官方操作说明](https://support.apple.com/guide/iphone/iphea86e5236/ios)。
+
+### 其他 Apple 接入方式
+
+- **没有 Stash 的 iPhone/iPad**：可使用官方 [Tailscale iOS 客户端](https://tailscale.com/docs/install/ios) 加入同一 Tailnet，再用 Safari 打开上述地址；若需要同时使用另一款系统级代理 VPN，须考虑 iOS 的 VPN 配置互斥。
+- **不使用 Tailnet**：可使用自己配置并授权的 **HTTPS Cloudflare Tunnel 域名**，直接在 Safari 打开并完成 API Key 验证；不要把 [项目官网](https://mikuchin.zakee.fun) 误当作个人推理服务地址。
+- **Mac**：用 Safari/其他浏览器通过 Tailnet 地址或已配置的 HTTPS 域名直接打开 Web 工作台即可；无需编译专用 Mac 程序。
+
+**安全说明：** `http://` 地址在**正确建立的 Tailscale 加密隧道内部**传输时受到隧道层加密，但 HTTP 本身没有 HTTPS 的浏览器端 TLS/安全上下文属性；对浏览器安全上下文有要求时请使用有效证书的 HTTPS 入口。务必保留 API Key 验证和 Tailnet ACL，不要通过明文公网 HTTP 暴露服务。网络断开、主机休眠或重启期间，主屏幕图标也无法独立连接模型。
 
 ## 🔒 安全及项目说明
 
