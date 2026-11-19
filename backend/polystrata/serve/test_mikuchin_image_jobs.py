@@ -144,12 +144,44 @@ class DesktopJobsTest(unittest.TestCase):
                 "client_started_at":clicked})
             done = self._wait(retried["id"])
         self.assertNotEqual(done["id"], failed_id)
+        self.assertEqual(retried["deleted_original_id"], failed_id)
         self.assertAlmostEqual(done["started_at"], clicked, delta=.2)
         self.assertIsNotNone(done["finished_at"])
-        still_failed = image_jobs.snapshot(self.svc, failed_id)
-        self.assertEqual(still_failed["state"], "failed")
-        self.assertEqual(still_failed["finished_at"], failed["finished_at"])
-        self.assertEqual(still_failed["started_at"], failed["started_at"])
+        self.assertEqual(image_jobs.snapshot(self.svc, failed_id)["state"], "unknown")
+        self.assertNotIn(failed_id, [job["id"] for job in
+                          image_jobs.snapshot(self.svc,kind="generate")["jobs"]])
+        with self.assertRaises(ValueError):
+            image_jobs.submit(self.svc, {"action":"retry", "id":failed_id})
+
+    def test_failed_retry_is_atomic_and_preserves_reference_assets(self):
+        """Never destroy the source on invalid retry; keep all referenced bytes."""
+        photo = base64.b64encode(png((12, 8))).decode("ascii")
+        original = {"prompt":"image with a reference", "size":"768x768",
+                    "strata_reference_assets":[{"data_url":"data:image/png;base64,"+photo,
+                                               "name":"attached.png"}]}
+        with mock.patch.object(image_jobs, "_generate", side_effect=RuntimeError("provider down")):
+            failed_id = image_jobs.submit(self.svc,{"kind":"generate","request":original})["id"]
+            failed = self._wait(failed_id)
+        self.assertEqual(failed["state"], "failed")
+        refs = failed["request"]["strata_reference_assets"]
+        self.assertEqual(len(refs), 1)
+        ref_id = refs[0]["id"]
+        old_bytes = image_jobs.reference_bytes(self.svc,ref_id)[0]
+
+        # Validation failure cannot delete the original or lose its references.
+        with mock.patch.object(image_jobs, "_prepare_request", side_effect=ValueError("invalid")):
+            with self.assertRaises(ValueError):
+                image_jobs.submit(self.svc,{"action":"retry", "id":failed_id})
+        self.assertEqual(image_jobs.snapshot(self.svc,failed_id)["state"], "failed")
+        self.assertEqual(image_jobs.reference_bytes(self.svc,ref_id)[0],old_bytes)
+
+        with mock.patch.object(image_jobs,"_generate",return_value={"image_ids":[self.original_id]}):
+            retried = image_jobs.submit(self.svc,{"action":"retry","id":failed_id})
+            self.assertEqual(retried["deleted_original_id"],failed_id)
+            self.assertEqual(image_jobs.snapshot(self.svc,failed_id)["state"], "unknown")
+            self.assertEqual(image_jobs.reference_bytes(self.svc,ref_id)[0],old_bytes)
+            self.assertEqual(self._wait(retried["id"])["state"], "success")
+        self.assertEqual(image_jobs.snapshot(self.svc,retried["id"])["request"]["strata_reference_assets"],refs)
 
     def test_old_job_does_not_fabricate_a_click_timestamp(self):
         image_jobs._initialize(self.svc)
@@ -344,6 +376,7 @@ class DesktopJobsTest(unittest.TestCase):
         with mock.patch.object(image_jobs,"_generate",return_value={"image_ids":[self.original_id]}):
             retried = image_jobs.submit(self.svc,{"action":"retry","id":completed["id"]})
             self.assertEqual(retried["state"],"running")
+            self.assertNotIn("deleted_original_id",retried)
             self.assertNotIn(retried["id"],(copy["id"],completed["id"]))
             self.assertEqual(self._wait(retried["id"])["state"],"success")
         self.assertEqual(image_jobs.snapshot(self.svc,completed["id"])["request"],completed["request"])

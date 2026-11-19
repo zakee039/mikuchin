@@ -717,10 +717,24 @@ def submit(svc, req):
             if not (request.get("prompt") or "").strip():
                 raise ValueError("image prompt is required")
             with _db(svc) as db:
-                _trim_studio(svc,db,protected_ids=(original_id,))
+                # Replace failed tasks in one database transaction. Never erase
+                # the failed request before validating and creating the retry;
+                # success records still remain as independent history entries.
+                source = db.execute("SELECT state FROM jobs WHERE id=? AND kind='generate'",
+                                    (original_id,)).fetchone()
+                if not source or source["state"] not in ("success", "failed"):
+                    raise ValueError("source task is no longer retryable")
+                failed_source = source["state"] == "failed"
+                if not failed_source:
+                    _trim_studio(svc,db,protected_ids=(original_id,))
                 ident = _insert_studio(db, request, "running",
                                        started_at=_submission_timestamp(req.get("client_started_at")))
+                if failed_source:
+                    db.execute("DELETE FROM jobs WHERE id=? AND kind='generate' AND state='failed'",
+                               (original_id,))
                 response = _public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
+                if failed_source:
+                    response["deleted_original_id"] = original_id
             _enqueue(svc,ident,"generate",request)
             _gc_references(svc)
             return response

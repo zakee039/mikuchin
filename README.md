@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.3.0** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.3.0)
+**主程序 v0.3.1** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.3.1)
 
-**独立版本：**主程序 `0.3.0` · Windows 启动器 `0.3.0` · Android 客户端 `0.3.0`（versionCode 300）。本次三个组件均重新构建，详见 GitHub Release 资产清单。后续仍允许独立升级，所有版本号统一记录在 versions.json。
+**独立版本：**主程序 `0.3.1` · Windows 启动器 `0.3.0` · Android 客户端 `0.3.0`（versionCode 300）。本次仅更新主程序；启动器与安卓端继续使用原版二进制。后续仍允许独立升级，所有版本号统一记录在 versions.json。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 

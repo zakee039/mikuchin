@@ -24,7 +24,9 @@ function harness() {
     flushDraftSave:async()=>{calls.push(["flush"]);},
     jobCommand:async body=>{
       calls.push(["api",body]);
-      return {id:"new-task", state:body.action==="retry"?"running":"draft", request:{prompt:"hello"}};
+      return {id:"new-task", state:body.action==="retry"?"running":"draft",
+        ...(body.action==="retry" && context.taskRecords.get(body.id)?.state==="failed" ?
+          {deleted_original_id:body.id} : {}), request:{prompt:"hello"}};
     },
     loadTaskForm:async data=>{calls.push(["load-form",data.id]);},
     renderTaskRows:()=>calls.push(["render"]),
@@ -71,9 +73,34 @@ test("editing a draft touches the same ID; other states copy to a new ID",async(
 
 test("retry makes a new running task without loading the editing form",async()=>{
   const ctx=harness();
+  ctx.taskRecords.set("source", {id:"source",state:"success"});
   await ctx.retryTask({id:"source",state:"success"});
   assert.equal(ctx.calls.find(record=>record[0]==="api")?.[1].action,"retry");
   assert.equal(ctx.calls.find(record=>record[0]==="api")?.[1].id,"source");
   assert.equal(ctx.calls.some(record=>record[0]==="load-form"),false);
   assert.equal(ctx.taskRecords.get("new-task")?.state,"running");
+  assert.equal(ctx.taskRecords.get("source")?.state,"success");
+});
+
+test("retrying a failed job destroys the failed row only after submission succeeds",async()=>{
+  const ctx=harness();
+  const failed={id:"source",state:"failed",error:"timeout"};
+  ctx.taskRecords.set("source", failed);
+  ctx.taskRows=new Map([["source",{node:true}]]);
+  await ctx.retryTask(failed);
+  assert.equal(ctx.taskRecords.has("source"),false);
+  assert.equal(ctx.taskRows.has("source"),false);
+  assert.equal(ctx.taskRecords.get("new-task")?.state,"running");
+  assert.ok(ctx.calls.some(entry=>entry[0]==="toast"&&entry.join(" ").includes("原失败任务记录已删除")));
+});
+
+test("failed submission does not delete a failed source or show success",async()=>{
+  const ctx=harness();
+  const failed={id:"source",state:"failed"};
+  ctx.taskRecords.set("source", failed);
+  ctx.jobCommand=async()=>{throw new Error("queue full")};
+  await ctx.retryTask(failed);
+  assert.equal(ctx.taskRecords.get("source"),failed);
+  assert.equal(ctx.taskRecords.has("new-task"),false);
+  assert.ok(ctx.calls.some(entry=>entry[0]==="toast"&&entry[1]==="error"));
 });

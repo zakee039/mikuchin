@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "release": "v0.3.0",
-  "previous_release": "v0.2.10",
+  "release": "v0.3.1",
+  "previous_release": "v0.3.0",
   "components": {
-    "main": { "version": "0.3.0", "previous_version": "0.2.10" },
+    "main": { "version": "0.3.1", "previous_version": "0.3.0" },
     "launcher": { "version": "0.3.0", "previous_version": "0.2.10" },
     "android": { "version": "0.3.0", "versionCode": 300, "previous_version": "0.2.10", "previous_versionCode": 210 }
   }
