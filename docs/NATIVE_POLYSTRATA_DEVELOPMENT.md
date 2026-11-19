@@ -11,7 +11,7 @@
 ### Shared image-resolution UI (ported from main)
 
 The `frontend/web` Image Studio and global chat settings share `image-resolution.js`:
-standard 8 exact `WIDTHxHEIGHT` presets, local recommended 384/512/768/1024,
+standard 9 exact `WIDTHxHEIGHT` presets (including 1536x1536 square), local recommended 384/512/768/1024,
 and separate custom width/height snapped to 16-pixel steps (256–4096).
 The server-side validation contract for the *future* Gateway Image Worker is
 `backend/gateway/image_resolution.py`; it intentionally lives **outside the

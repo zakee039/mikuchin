@@ -9,7 +9,7 @@ except ImportError:
 class NativeImageResolutionTest(unittest.TestCase):
     def test_exact_standard_sizes_and_landscape_portrait(self):
         self.assertEqual(STANDARD_SIZES, (
-            (1024,1024),(2048,2048),(1536,1024),(1024,1536),
+            (1024,1024),(1536,1536),(2048,2048),(1536,1024),(1024,1536),
             (1536,864),(2560,1440),(3840,2160),(2160,3840)))
         self.assertTrue(all(allowed("standard",w,h) for w,h in STANDARD_SIZES))
         self.assertFalse(allowed("standard",3840,3840))

@@ -8,8 +8,8 @@ const resolution = require("../image-resolution.js");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const studio = readFileSync(new URL("../image-studio.js", import.meta.url), "utf8");
 
-test("all eight standards are distinct WIDTH x HEIGHT, with correct orientation", () => {
-  const expected = ["1024x1024","2048x2048","1536x1024","1024x1536",
+test("all nine standards are distinct WIDTH x HEIGHT, with correct orientation", () => {
+  const expected = ["1024x1024","1536x1536","2048x2048","1536x1024","1024x1536",
     "1536x864","2560x1440","3840x2160","2160x3840"];
   assert.deepEqual(resolution.standard.map(item => item.size), expected);
   for (const size of expected) {

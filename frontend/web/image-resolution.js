@@ -3,6 +3,7 @@
 (() => {
   const standard = Object.freeze([
     {size:"1024x1024",ratio:"1:1",note:"标准方形"},
+    {size:"1536x1536",ratio:"1:1",note:"高清方形"},
     {size:"2048x2048",ratio:"1:1",note:"2K 方形"},
     {size:"1536x1024",ratio:"3:2",note:"官方推荐横图"},
     {size:"1024x1536",ratio:"2:3",note:"官方推荐竖图"},
