@@ -41,6 +41,7 @@ $rng.Dispose()
 
 $officialProcess = $null
 $gatewayProcess = $null
+$workerProcess = $null
 $previous = @{}
 foreach ($name in @('STRATA_API_KEY','MIKUCHIN_GATEWAY_API_KEY','MIKUCHIN_UPSTREAM_API_KEY','MIKUCHIN_NATIVE_DATA_DIR','PYTHONDONTWRITEBYTECODE')) {
   $previous[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
@@ -76,6 +77,10 @@ try {
   Set-Env 'MIKUCHIN_GATEWAY_API_KEY' $gatewayKey
   Set-Env 'MIKUCHIN_UPSTREAM_API_KEY' $upstreamKey
   Set-Env 'MIKUCHIN_NATIVE_DATA_DIR' $smokeData
+  $workerProcess = Start-Process -FilePath $Python -WorkingDirectory $root -ArgumentList @(
+    '-B','-m','backend.gateway.worker','--data-dir',$smokeData) `
+    -RedirectStandardOutput (Join-Path $logs 'worker.out.log') `
+    -RedirectStandardError (Join-Path $logs 'worker.err.log') -PassThru -WindowStyle Hidden
   $gatewayProcess = Start-Process -FilePath $Python -WorkingDirectory $root -ArgumentList @(
     '-B','-m','backend.gateway.app','--host','127.0.0.1',
     '--port',"$GatewayPort",'--upstream-port',"$UpstreamPort") `
@@ -85,6 +90,13 @@ try {
   $headers = @{ Authorization = 'Bearer ' + $gatewayKey }
   $status = Check-Ready 'Mikuchin Gateway' "http://127.0.0.1:$GatewayPort/health" $headers
   if (-not $status.official_polystrata_reachable) { throw 'Gateway cannot reach official engine' }
+  $until = [DateTime]::UtcNow.AddSeconds(9)
+  while (-not $status.image_worker_ready -and [DateTime]::UtcNow -lt $until) {
+    Start-Sleep -Milliseconds 200
+    $status = Invoke-RestMethod -Uri "http://127.0.0.1:$GatewayPort/health" -Headers $headers -TimeoutSec 3
+  }
+  if (-not $status.image_worker_ready) {throw 'Independent Image Worker is not healthy'}
+  Write-Output 'GATEWAY_SEPARATE_IMAGE_WORKER_OK'
   $models = Invoke-RestMethod -Uri "http://127.0.0.1:$GatewayPort/v1/models" -Headers $headers -TimeoutSec 5
   if (-not $models.data) { throw 'Official /v1/models returned no data' }
   Write-Output ('GATEWAY_MODELS_OK count=' + @($models.data).Count)
@@ -193,7 +205,7 @@ try {
   Write-Output 'UNPORTED_SEMANTICS_BLOCKED_OK'
   Write-Output 'NATIVE_OFFICIAL_TRANSPORT_SMOKE_PASS'
 } finally {
-  foreach ($p in @($gatewayProcess,$officialProcess)) {
+  foreach ($p in @($workerProcess,$gatewayProcess,$officialProcess)) {
     if ($null -ne $p) {
       try {
         $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue

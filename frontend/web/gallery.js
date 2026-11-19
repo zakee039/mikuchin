@@ -3,6 +3,7 @@
 (() => {
   const $g = id => document.getElementById(id);
   const api = "v1/mikuchin/gallery";
+  const secure = window.MikuchinSecureImages;
   const translate = value => window.MikuchinI18n?.translate(value) || value;
   const limit = 60;
   let items = [], total = 0, loading = false, multi = false;
@@ -43,11 +44,8 @@
       }
       for (const url of urls) {
         if (neighborPreloads.has(url)) continue;
-        const img = new Image();
-        img.decoding = "async";
-        img.fetchPriority = "low";
-        img.src = url;
-        neighborPreloads.set(url, img);
+        neighborPreloads.set(url, true);
+        void secure.prefetch(url).catch(() => neighborPreloads.delete(url));
       }
       // Warm the next metadata page before the user reaches its boundary.
       if (items.length < total && lightbox >= items.length - 3 && !loading) {
@@ -91,6 +89,7 @@
   }
   function render() {
     const grid = $g("gallery-grid");
+    secure.clearWithin(grid);
     grid.replaceChildren();
     $g("gallery-count").textContent = total + " 张";
     $g("gallery-empty").hidden = Boolean(items.length || loading);
@@ -104,7 +103,9 @@
       card.setAttribute("aria-pressed", String(multi && active));
       const frame = make("div","gallery-card-media");
       const img = make("img",masked(item)?"gallery-blurred":"");
-      img.src = api + "/thumb/" + item.id;
+      void secure.load(img,api + "/thumb/" + item.id).catch(() => {
+        img.alt = "缩略图需要鉴权，无法加载";
+      });
       img.loading = index < 12 ? "eager" : "lazy";
       img.decoding = "async";
       img.alt = item.model || "生成图片";
@@ -210,9 +211,9 @@
     resetZoom();
     if (document.fullscreenElement===$g("gallery-viewer"))
       void document.exitFullscreen().catch(() => {});
-    $g("gallery-full").removeAttribute("src");
+    secure.release($g("gallery-full"));
     $g("gallery-preview").hidden=true;
-    $g("gallery-preview").removeAttribute("src");
+    secure.release($g("gallery-preview"));
     $g("gallery-image-loading").hidden=true;
     render();
     const from=$g("gallery-grid").querySelector('[data-gallery-id="'+id+'"]');
@@ -227,9 +228,9 @@
       // place immediately; network metadata and pixels arrive independently.
       expectedFullSrc="";
       $g("gallery-full").classList.add("gallery-full-loading");
-      $g("gallery-full").removeAttribute("src");
+      secure.release($g("gallery-full"));
       $g("gallery-preview").hidden=true;
-      $g("gallery-preview").removeAttribute("src");
+      secure.release($g("gallery-preview"));
       $g("gallery-image-loading").textContent="正在获取下一张…";
       $g("gallery-image-loading").hidden=false;
       $g("gallery-viewer-spoiler").hidden=true;
@@ -245,15 +246,21 @@
     if (!pair) variant="original";
     const nextSrc=fullSrc(item,variant);
     const full=$g("gallery-full"),preview=$g("gallery-preview");
-    if (full.getAttribute("src")!==nextSrc) {
+    if (secure.path(full)!==nextSrc) {
       resetZoom();
       full.classList.add("gallery-full-loading");
       preview.hidden=false;
-      preview.src=api+"/thumb/"+item.id;
+      void secure.load(preview,api+"/thumb/"+item.id).catch(() => {});
       expectedFullSrc=nextSrc;
       // Assign the requested full image *after* displaying its lightweight
       // preview, never wait for the file before updating the viewer state.
-      full.src=nextSrc;
+      void secure.load(full,nextSrc).then(accepted => {
+        if (accepted && expectedFullSrc===nextSrc && full.complete && full.naturalWidth)
+          finishFullImage();
+      }).catch(() => {
+        if (expectedFullSrc===nextSrc)
+          $g("gallery-image-loading").textContent="图片加载失败，请检查鉴权";
+      });
     }
     const hide=masked(item) && !revealed;
     $g("gallery-full").classList.toggle("gallery-blurred",hide);
@@ -274,8 +281,9 @@
     const job=upscaleJobs.get(item.id);
     const pending=job && ["queued","working"].includes(job.state);
     const action=$g("gallery-create-upscale");
-    action.disabled=Boolean(pending);
-    action.textContent=translate(pending ? "4x 处理中…" : "生成4x图");
+    action.disabled=true;
+    action.hidden=true; // Native local upscaler has not been ported yet.
+    action.textContent=translate("4x 需本地 Image Worker 支持");
     $g("gallery-delete-original").hidden=!pair;
     $g("gallery-delete-upscaled").hidden=!pair;
     $g("gallery-details").textContent=[
@@ -288,7 +296,7 @@
   }
   function finishFullImage() {
     const full=$g("gallery-full");
-    if (lightbox<0 || full.getAttribute("src")!==expectedFullSrc || !full.naturalWidth) return;
+    if (lightbox<0 || secure.path(full)!==expectedFullSrc || !full.naturalWidth) return;
     full.classList.remove("gallery-full-loading");
     $g("gallery-preview").hidden=true;
     $g("gallery-image-loading").hidden=true;
@@ -461,6 +469,7 @@
       }
       if (failed) toast("warn","部分图片未删除","已删除 "+removed+" 个文件，失败 "+failed+" 个",5000);
       else toast("success","删除完成","已删除 "+groups+" 组作品，共 "+removed+" 个文件");
+      secure.clearCache(); // A deleted image must not remain in the private byte cache.
       if (lightbox!==-1) close();
       selected.clear();
       await load(true);

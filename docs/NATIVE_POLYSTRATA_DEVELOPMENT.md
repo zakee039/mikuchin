@@ -66,17 +66,42 @@ Markdown reference path.
 - `GET /v1/strata/characters/reference/{card-id}`: authenticated, private/no-store PNG reference image, normalized with Pillow and kept beside the card in the new Native character folder; image path and credentials are never echoed into HTTP logs.
 - Workflow initialization is frozen per session and commits only after a successful first response; a modified Markdown source does not rewrite the active session's pinned workflow **text** (this is not KV/PIN caching).
 - `DELETE /v1/strata/sessions/{id}` also clears the independent character assignment and frozen workflow metadata. A list **pin to top** remains a UI action unrelated to the engine.
-- Global chat-image preferences currently permit only the placeholder `default` profile with valid local sizes and **no LoRA**; user-facing image-model catalog and Image Worker are not implemented. The Gateway deliberately rejects unavailable model names rather than falsely advertising image generation.
+- Global chat-image preferences currently permit only the placeholder `default` profile with valid local sizes and **no LoRA**; locally running Qwen-Image and LoRA providers are not yet implemented. The separate online Image Worker is described below.
 - `characters.js` already composes character identity, worldbook snippets and workflow instructions into the **full system prompt sent to official PolyStrata**. This does not turn external `/v1/chat/completions` calls into a server-side role injector; separate non-browser callers must still construct their own context.
 - Character module unit tests were carried forward and adapted as native Gateway tests; HTTP tests now cover locked-after-first-message role assignment, Markdown lookup, workflow first-turn initialization/version freeze and protected reference images. The one-command official-process smoke test also verifies a character + Markdown + workflow through the Gateway.
 
 ## Online image API + task history + indexed gallery (first implementation)
 
-Mikuchin owns `backend/gateway/image_providers.py`, `image_jobs.py` and
-`gallery.py`. These modules are **outside** the official engine's Git submodule.
-They currently run in the Gateway's **background worker thread**, not yet a
-separately supervised Image Worker process. The model/GPU resource arbiter and
-local Qwen-Image/LoRA/4x worker are not implemented.
+Mikuchin owns `backend/gateway/image_providers.py`, `image_jobs.py`,
+`worker.py`, and `gallery.py`. These modules are **outside** the official
+engine's Git submodule. **The Gateway is now enqueue-only**: billable online
+image calls execute in a distinct `python -m backend.gateway.worker` process.
+The model/GPU resource arbiter and local Qwen-Image/LoRA/4× worker remain
+unimplemented. The worker can currently be launched manually, but the native
+desktop launcher **does not supervise/restart it yet**.
+
+Start separate processes in distinct terminals (do not run the stable desktop
+launcher during experimental model tests):
+
+```powershell
+# The official PolyStrata service binds 127.0.0.1:15240 separately.
+.\scripts\start-native-image-worker.ps1
+$env:MIKUCHIN_GATEWAY_API_KEY = '<private-gateway-key>'
+$env:MIKUCHIN_UPSTREAM_API_KEY = '<private-official-key>'
+.\scripts\start-native-gateway.ps1 -Port 15249 -OfficialPort 15240
+```
+
+Both Gateway and Worker use the same *new* `MIKUCHIN_NATIVE_DATA_DIR` when
+overridden. Only the Worker executes requests: an absent/unhealthy heartbeat
+causes an explicit rejection of paid submissions. `native-worker.lock` is held
+by the operating system so a second worker cannot reset live jobs; SQLite
+`worker_status` publishes a heartbeat while provider requests block. The worker
+recovers uncertain previous tasks as failed, **never replays** them, and uses
+transactional single-job claims. In unit tests only, an explicit
+`embedded_worker=True` flag supplies an in-process fake provider; production
+Gateway never enables that flag. Keep a worker *running* before accepting any
+billable image submissions; the independent Worker lifecycle should eventually
+be owned by the native launcher.
 
 - `GET/POST /v1/mikuchin/image-api-services` saves/list/deletes online OpenAI Images-compatible services and probes model catalogs on explicit request. Service credentials live in the isolated Native data root under `images/config/image-api-services.json`; returned public service metadata contains `has_key`, never the API key. SOCKS proxy selection needs PySocks from `backend/gateway/requirements.txt`.
 - `GET /v1/mikuchin/image-models` lists configured **online API** image models only. It deliberately does not advertise missing local engines/LoRA models. Nine fixed standards (including 1536×1536), local preset sizes and custom 16-aligned sizes are enforced according to provider configuration.
@@ -85,7 +110,8 @@ local Qwen-Image/LoRA/4x worker are not implemented.
 - Up to 8 reference PNG/JPEG/WebP images are stored using SHA-256 content-addressed files outside SQLite. Credentials and raw image bytes are never added to job rows. Existing reference IDs work across draft edits and retries. Generated PNGs are independent files under `images/generated-images` and do not disappear when users delete history records.
 - `GET/POST /v1/mikuchin/gallery`, `GET /v1/mikuchin/gallery/item`, and authenticated image/thumbnail GETs use a private SQLite gallery index; NSFW flags, multiple selection/delete and existing variant operations are separate from task records. Neither old gallery databases nor old session folders are imported.
 - **Not ported**: Qwen-Image local/uncensored paths, LoRA, image-to-image local workers, GPU sharing, 4× upscaling, chat-triggered image tool, generating-image-to-LLM vision feedback, and client runtime packaging. `strata_upscale=4x` is rejected instead of silently claiming success. Full browser UI still requires all its non-image settings endpoints.
-- **UI authentication gap**: Gateway's image/file endpoints currently require Bearer authorization, but raw browser `<img src="...">` requests cannot attach a Bearer header. They are verified with authenticated HTTP clients only. Before enabling the full browser/gallery UI, update its image loader to use authenticated `fetch` and local Blob URLs (or design a bounded, audited capability mechanism); **do not relax Gateway authentication merely to show thumbnails**.
+- **UI image authentication now implemented**: `frontend/web/auth-images.js` fetches gallery thumbnails and full images with Bearer headers, creates only ephemeral Blob URLs, cleans up on page/re-render/image switch, caps the binary cache, and flushes it on authorization identity changes. Gallery and Image Studio now use it instead of raw `<img src>` for protected endpoints. Authorization remains mandatory on the server. A full end-to-end interactive browser run is still required before declaring the native UI complete.
+- An image provider request that succeeds but fails at **gallery indexing** is recorded as a successful generation with a recoverable `gallery_warning`, not as an unsuccessful paid request requiring another chargeable retry.
 - Local tests use a **localhost fake OpenAI Images server** to exercise actual HTTP, base64 response decoding, PNG writing, gallery registration and task/gallery deletion separately. The smoke script only creates a disposable service and an **offline draft**; it never activates a paid request. Real third-party image APIs have not been contacted.
 
 ## One-time setup in a new worktree
@@ -109,7 +135,23 @@ An isolated Python **3.12** environment with the official pinned Python requirem
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-native-transport.ps1
 ```
 
-This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240` and the standalone Gateway on `127.0.0.1:15249`, using two freshly generated API keys inherited as environment variables. It verifies `/health`, `/v1/models`, Chat Completions, SSE streaming, fresh session CRUD, role assignment and immutability, character Markdown retrieval, one-time workflow initialization, online image service registry, **offline draft** and empty gallery, and HTTP 501 for unported answer-budget semantics. Both children are stopped and disposable conversation data deleted when the script exits. The original stable port **15239 is neither opened nor restarted**. A successful mock test does not demonstrate GPU throughput or KV cache speed.
+This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240`, the standalone Gateway on `127.0.0.1:15249`, and the **separate Native Image Worker subprocess**, using freshly generated API keys and a disposable data directory. It verifies `/health`, worker heartbeat, `/v1/models`, Chat Completions, SSE streaming, fresh sessions, roles/Markdown/workflow, online image service registry, **offline draft** and empty gallery, and HTTP 501 for unported answer-budget semantics. All three children are stopped and disposable data deleted when the script exits. Pass alternate ports like `-UpstreamPort 15440 -GatewayPort 15449` if a real model is already running on 15240/15249. A successful Mock test does not demonstrate GPU/KV throughput.
+
+### Real official CUDA model and automatic KV reuse: verified
+
+On the Windows 10 RTX 3070 Ti / CUDA 13.2 machine, we compiled the **unmodified
+official tag v0.1.45-poly.10** for `CMAKE_CUDA_ARCHITECTURES=86` and used the
+resulting 74.8 MB `strata-poly.exe` from the sibling runtime directory. It
+successfully loaded the existing **Gemma 4 26B-A4B Q4_K_M GGUF (16.1 GiB)**
+with `--conversation-cache-mib auto --conversation-cache-slots 4 --kv int8`
+and an 8192-token context. The model and old tokenizer were read only; the
+expert profile was copied into the new runtime directory, so no old service
+data was mutated. Real Chat Completions were exercised both directly and
+through the standalone Gateway. A 6755-token synthetic prompt received 0
+cached tokens on the first request and **6754 cached tokens** on immediate
+repeat; after several other requests, resubmitting it through Gateway still
+reported 6754 cached tokens. See
+[`docs/NATIVE_OFFICIAL_CUDA_VALIDATION_2026-11-20.md`](NATIVE_OFFICIAL_CUDA_VALIDATION_2026-11-20.md).
 
 For an isolated Gateway smoke test after official engine setup:
 
@@ -143,7 +185,7 @@ Run the engine model/KV/tool/SSE compatibility suite **before** committing the n
 
 ## Planned work (not yet implemented)
 
-1. Native PolyStrata bootstrapping + real model smoke test (chat, visuals, automatic checkpoints and parked-conversation cache; optional Warm Start and official PIN in isolation).
+1. **Text-only CUDA smoke complete** for Gemma 4, including actual automatic KV reuse; continue with mixed prompts, short/long context, multi-session cache eviction, restart and vision. Official Warm Start/PIN remain optional and are not needed for the initial native architecture.
 2. Extend the **newly implemented** session/character/worldbook/workflow APIs to all remaining UI state, then serve the full new Web UI only when all required endpoints, image hooks and access-control checks exist. Old chat/KV history need not migrate and no manual KV lock feature returns.
 3. Chat tool orchestration, answer token budget, `strata_mcp` events, image-worker scheduling and GPU mutual exclusion.
 4. Desktop launcher to supervise *both* Gateway and official PolyStrata, mobile/gallery parity, authentication and upgrade rollbacks.

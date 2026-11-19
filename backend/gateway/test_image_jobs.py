@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import json
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,7 +28,7 @@ class ImageTaskTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.jobs = ImageJobStore(self.root)
+        self.jobs = ImageJobStore(self.root, embedded_worker=True)
         self.service = image_providers.save_service(self.jobs, {
             "name": "Offline test profile", "base_url": "http://127.0.0.1:19999/v1",
             "model": "fake-image", "api_key": "LOCAL_TEST_SECRET", "sizes": "standard",
@@ -121,10 +122,21 @@ class ImageTaskTest(unittest.TestCase):
         with self.jobs._db() as db:
             db.execute("UPDATE jobs SET state='running' WHERE id=?",(draft["id"],))
         reopened=ImageJobStore(self.root)
+        reopened.fail_uncertain_on_worker_restart()
         self.assertEqual(reopened.listing(draft["id"])["state"],"failed")
-        self.assertIn("可能已经扣费",reopened.listing(draft["id"])["error"])
+        self.assertIn("可能已经计费",reopened.listing(draft["id"])["error"])
         self.assertEqual(self.calls,[])
-        self.assertEqual(reopened.queue.qsize(),0)
+        self.assertIsNone(reopened.queue)
+
+    def test_gallery_index_error_does_not_mislabel_a_paid_success_as_failed(self):
+        with mock.patch.object(gallery,"register",side_effect=OSError("gallery unavailable")):
+            task=self.jobs.submit({"request":self.request})
+            self.jobs.queue.join()
+        record=self.jobs.listing(task["id"])
+        self.assertEqual(record["state"],"success")
+        self.assertIn("gallery_warning",record["result"])
+        self.assertEqual(record["result"]["gallery_error_type"],"OSError")
+        self.assertTrue((self.root/"generated-images"/("a"*32+".png")).is_file())
 
     def test_validation_and_credential_privacy(self):
         self.assertNotIn("LOCAL_TEST_SECRET",str(image_providers.list_services(self.jobs)))

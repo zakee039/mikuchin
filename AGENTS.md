@@ -8,7 +8,9 @@
 - 新业务代码全部写入 `backend/gateway` 等 Mikuchin 自有目录；官方服务只允许绑定内部 loopback，预定内部端口 `15240`。当前 Gateway 开发端口 `15249`；在完成验收前**不得占用正式生产的 15239**。
 - 旧版 `scripts/package-main-release.py` 不支持 `.gitmodules`，因此本分支暂时**不得使用旧版主程序发布流程或以 v0.3.0 名义发布新架构**。`versions.json` 的 0.3.0 是开发起点，不是新架构完成版本。
 - 必做检查：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-polystrata.ps1 verify`、`python -m unittest discover -s backend/gateway -v`、`git submodule status`、`git status`。未来真实模型/显存/KV 测试须独立执行。
-- 如改动 Gateway 协议，可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native-transport.ps1`，它将官方 Mock Engine 和 Gateway 临时运行在 15240/15249，结束时自动退出；使用临时随机密钥和新会话测试目录，不会影响 15239。不要把 Mock 测试误报为真实 GPU/KV 推理验证。
+- 如改动 Gateway 协议，可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native-transport.ps1`，它将官方 Mock Engine、Gateway 以及独立 Image Worker 临时运行在 15240/15249（或指定替代端口），结束时自动退出；使用临时随机密钥和新会话测试目录，不会影响 15239。不要把 Mock 测试误报为真实 GPU/KV 推理验证。
+- 独立在线生图 Worker：`scripts/start-native-image-worker.ps1`；Gateway 只写任务/草稿，不得自动在 HTTP 进程执行收费请求。独立 Worker 必须持有单例锁，持续心跳；任务进程重启后绝不能自动重复付费请求。受保护图片使用 `frontend/web/auth-images.js` 通过 Bearer `fetch`+Blob URL，绝不将 API Key 加到图片 URL。
+- 官方 SM86 CUDA 编译产物和测试 GGUF 配置放在 `E:\LLM\deploy\mikuchin-native-runtime`，绝不提交模型、密钥、缓存或编译产物。真实模型验证记录见 `docs/NATIVE_OFFICIAL_CUDA_VALIDATION_2026-11-20.md`；测试结束时关闭 15240/15249 的开发服务，不能误杀或更改正式 15239。
 - 迁移文档 `docs/NATIVE_POLYSTRATA_DEVELOPMENT.md`，总体计划 `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`。
 
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。

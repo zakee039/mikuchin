@@ -1,8 +1,9 @@
-"""Mikuchin Native's detached *online* image task queue.
+"""Mikuchin Native's persistent *online* image task queue.
 
 Offline drafts never call providers. Only an explicit activate/retry submits a
 chargeable request. Worker execution is independent of browser connections.
-Unfinished jobs are marked failed (never replayed) on service restart.
+The Gateway never runs provider jobs. Only the separate supervised Image
+Worker claims and executes jobs; uncertain jobs are never replayed on reboot.
 Local GPU/4x and gallery mutation are deliberately separate future adapters.
 """
 from __future__ import annotations
@@ -17,7 +18,6 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from queue import Queue
 
 from PIL import Image
 
@@ -38,13 +38,17 @@ FIELDS = frozenset(("prompt", "positive_prompt", "natural_prompt", "negative_pro
 
 
 class ImageJobStore:
-    def __init__(self, root):
+    def __init__(self, root, *, embedded_worker=False):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "native-image-jobs.sqlite3"
         self.lock = threading.RLock()
-        self.queue = Queue()
+        self.embedded_worker = embedded_worker  # unit-test-only adapter
+        self.queue = None
         self.thread = None
+        if embedded_worker:
+            from queue import Queue
+            self.queue = Queue()
         self._provider = providers.generate
         with self._db() as db:
             db.executescript("""
@@ -57,11 +61,50 @@ class ImageJobStore:
                 started_at REAL,finished_at REAL,source_id TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created DESC);
+            CREATE TABLE IF NOT EXISTS worker_status(
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                pid INTEGER NOT NULL, updated REAL NOT NULL
+            );
             """)
-            db.execute("""UPDATE jobs SET state='failed',phase='服务已重启，未自动重试',
-                          error='进程重启前任务未完成；上游可能已经扣费，请核对用量后手动重试',
+            db.execute("PRAGMA journal_mode=WAL")
+
+    def worker_healthy(self):
+        with self._db() as db:
+            row = db.execute("SELECT updated FROM worker_status WHERE singleton=1").fetchone()
+        return bool(row and time.time() - row["updated"] < 4)
+
+    def heartbeat(self):
+        import os
+        with self._db() as db:
+            db.execute("""INSERT INTO worker_status(singleton,pid,updated)
+                VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET
+                pid=excluded.pid,updated=excluded.updated""",(os.getpid(),time.time()))
+
+    def worker_offline(self):
+        with self._db() as db:
+            db.execute("DELETE FROM worker_status WHERE singleton=1")
+
+    def fail_uncertain_on_worker_restart(self):
+        """Never auto-reissue possibly billed provider requests after a crash."""
+        with self._db() as db:
+            db.execute("""UPDATE jobs SET state='failed',phase='独立 Worker 已重启，未自动重试',
+                          error='上次 Worker 退出时任务未完成；提供商可能已经计费，请核对后手动重试',
                           finished_at=?,updated=? WHERE state IN ('running','queued','working')""",
                        (time.time(),time.time()))
+
+    def take_pending(self):
+        """Transactional single-consumer claim, safe even if a second worker starts."""
+        with self._db() as db:
+            row = db.execute("""SELECT id,request_json FROM jobs WHERE state='running'
+                    AND phase='排队等待执行' ORDER BY created ASC LIMIT 1""").fetchone()
+            if row is None:
+                return None
+            cursor = db.execute("""UPDATE jobs SET phase='准备请求提供商',updated=?
+                WHERE id=? AND state='running' AND phase='排队等待执行'""",
+                                (time.time(),row["id"]))
+            if cursor.rowcount != 1:
+                return None
+            return row["id"], json.loads(row["request_json"])
 
     def _db(self):
         class Context:
@@ -250,6 +293,8 @@ class ImageJobStore:
                     return self._insert(db,prepared,"draft")
             if action in ("activate","retry",None):
                 with self._db() as db:
+                    if not self.embedded_worker and not self.worker_healthy():
+                        raise ValueError("独立 Image Worker 尚未就绪，无法提交收费任务")
                     count=db.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0]
                     if count >= MAX_PENDING: raise ValueError("image request queue is full")
                     original_id=None
@@ -278,8 +323,9 @@ class ImageJobStore:
                         if action == "retry" and row["state"] == "failed":
                             db.execute("DELETE FROM jobs WHERE id=? AND state='failed'",(original_id,))
                             created["deleted_original_id"]=original_id
-                self.queue.put((created["id"],prepared))
-                self._start_worker()
+                if self.embedded_worker:
+                    self.queue.put((created["id"],prepared))
+                    self._start_worker()
                 return created
             raise ValueError("unsupported native image task action")
 
@@ -298,6 +344,8 @@ class ImageJobStore:
             return {"deleted":cur.rowcount}
 
     def _start_worker(self):
+        if not self.embedded_worker:
+            raise RuntimeError("Gateway must not execute image provider calls")
         if self.thread is None or not self.thread.is_alive():
             self.thread=threading.Thread(target=self._work,daemon=True,name="mikuchin-native-image-worker")
             self.thread.start()
@@ -305,6 +353,12 @@ class ImageJobStore:
     def _work(self):
         while True:
             ident,request=self.queue.get()
+            try:
+                self.execute_claimed(ident,request)
+            finally:
+                self.queue.task_done()
+
+    def execute_claimed(self, ident, request):
             try:
                 refs=[]
                 for item in request.get("strata_reference_assets",[]):
@@ -321,22 +375,31 @@ class ImageJobStore:
                 name=extra.get("image_file")
                 if not isinstance(name,str) or not re.fullmatch(r"[a-f0-9]{32}\.png",name):
                     raise ValueError("provider image was not saved in native storage")
-                gallery.register(self,name,source="studio",provider="api",
-                                 model=response.get("model", ""),prompt=request.get("prompt", ""))
                 result={"image_ids":[name.removesuffix(".png")],"image_file":name,
                         "model":response.get("model"),"size":response.get("size"),
                         "seconds":extra.get("seconds"),"provider":"api"}
+                try:
+                    gallery.register(self,name,source="studio",provider="api",
+                                     model=response.get("model", ""),prompt=request.get("prompt", ""))
+                except Exception as exc:
+                    # The provider has already returned and the PNG exists.
+                    # Never label this as a failed generation and invite a
+                    # potentially billable retry just because indexing failed.
+                    result["gallery_warning"] = "画廊索引暂不可用，请使用画廊刷新恢复"
+                    result["gallery_error_type"] = type(exc).__name__
                 with self.lock,self._db() as db:
                     db.execute("""UPDATE jobs SET state='success',phase='生成完成',result_json=?,
                                   updated=?,finished_at=? WHERE id=?""",
                                (json.dumps(result),time.time(),time.time(),ident))
             except Exception as exc:
-                # Exception type and bounded error text only; prompts, keys,
-                # endpoints, images and reference bytes are never logged here.
-                message=(type(exc).__name__+": "+str(exc))[:350]
+                # Provider exception details may contain URLs with API keys in
+                # their query strings. Keep only a bounded, redacted diagnostic.
+                detail = re.sub(r"(?:https?://|socks5h?://)[^\s'\")]+",
+                                "[private endpoint]", str(exc))
+                detail = re.sub(r"(?i)(?:Bearer\s+|api[_-]?key[=:]\s*)\S+",
+                                "[private key]", detail)
+                message=(type(exc).__name__+": "+detail)[:350]
                 with self.lock,self._db() as db:
                     db.execute("""UPDATE jobs SET state='failed',phase='任务失败',error=?,
                                   updated=?,finished_at=? WHERE id=?""",
                                (message,time.time(),time.time(),ident))
-            finally:
-                self.queue.task_done()

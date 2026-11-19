@@ -58,6 +58,16 @@ function harness() {
     load() {changes.push(["request-next-page"]);return new Promise(() => {});},
     changes, nodes,
   };
+  ctx.secure = {
+    path(img) {return img.authPath || "";},
+    load(img,url) {
+      changes.push([img.name,"auth-fetch",url]);
+      img.authPath=url;
+      img.src="blob:private-"+url;
+      return Promise.resolve(true);
+    },
+    release(img) {img.authPath="";img.removeAttribute("src");},
+  };
   vm.createContext(ctx);
   vm.runInContext(viewerCode, ctx, {filename:"gallery.js viewer"});
   return ctx;
@@ -80,7 +90,8 @@ test("swiping past the loaded page paints target immediately, without awaiting f
   ctx.shift(-1);
   ctx.shift(-1);
   assert.equal(ctx.lightbox, 1, "swiping backwards works before the fetch finishes");
-  assert.equal(ctx.$g("gallery-full").getAttribute("src"), "v1/images/files/b.png");
+  assert.equal(ctx.secure.path(ctx.$g("gallery-full")), "v1/images/files/b.png");
+  assert.ok(ctx.$g("gallery-full").src.startsWith("blob:"));
 });
 
 test("viewer displays the requested thumbnail before initiating full-image load", () => {
@@ -92,13 +103,14 @@ test("viewer displays the requested thumbnail before initiating full-image load"
   const preview = ctx.$g("gallery-preview");
   const full = ctx.$g("gallery-full");
   assert.equal(preview.hidden, false);
-  assert.equal(preview.src, "v1/mikuchin/gallery/thumb/b");
-  assert.equal(full.src, "v1/images/files/b.png");
+  assert.equal(ctx.secure.path(preview), "v1/mikuchin/gallery/thumb/b");
+  assert.equal(ctx.secure.path(full), "v1/images/files/b.png");
+  assert.ok(full.src.startsWith("blob:"));
   assert.equal(ctx.$g("gallery-image-loading").hidden, false);
   assert.equal(ctx.$g("gallery-viewer-spoiler").hidden, false);
   assert.equal(preview.classList.contains("gallery-blurred"), true, "NSFW preview stays blurred");
-  const thumbnailAssigned = ctx.changes.findIndex(x => x[0] === "gallery-preview" && x[1] === "src");
-  const fullAssigned = ctx.changes.findIndex(x => x[0] === "gallery-full" && x[1] === "src");
+  const thumbnailAssigned = ctx.changes.findIndex(x => x[0] === "gallery-preview" && x[1] === "auth-fetch");
+  const fullAssigned = ctx.changes.findIndex(x => x[0] === "gallery-full" && x[1] === "auth-fetch");
   assert.ok(thumbnailAssigned >= 0 && fullAssigned > thumbnailAssigned);
   full.complete = true;
   full.naturalWidth = 1024;
@@ -116,7 +128,7 @@ test("preload keeps only the previous and next full images", () => {
     total: 4, loading: false, preloadTimer:null,
     neighborPreloads: new Map(),
     fullSrc(item) {return `/files/${item.id}.png`;},
-    Image: class {set src(v) {events.push(v);}},
+    secure: {prefetch(url) {events.push(url);return Promise.resolve();}},
     setTimeout(callback) {tasks.push(callback);return tasks.length;},
     clearTimeout() {}, load() {throw Error("unwanted page load");},
   };
@@ -166,5 +178,5 @@ test("a fetched metadata page fills the pending slot without rebuilding gallery 
   assert.equal(ctx.loading, false);
   assert.equal(ctx.items[2].id, "c");
   assert.deepEqual(painted, ["pending slot filled"]);
-  assert.equal(ctx.$g("gallery-full").src, "v1/images/files/c.png");
+  assert.equal(ctx.secure.path(ctx.$g("gallery-full")), "v1/images/files/c.png");
 });

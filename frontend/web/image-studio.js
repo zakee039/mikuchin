@@ -649,7 +649,8 @@
     openedTaskImage = imageId;
     openedTaskRevealed = false;
     const img = get("img-job-viewer-image");
-    img.src = "v1/images/files/" + imageId + ".png";
+    void window.MikuchinSecureImages.load(img,"v1/images/files/" + imageId + ".png")
+      .catch(() => toast("error","图片加载失败","请检查客户端鉴权和服务状态",5000));
     const unmasked = taskNsfw.has(imageId) &&
       (!taskNsfw.get(imageId) || get("gallery-show-nsfw").checked);
     img.classList.toggle("img-job-nsfw", !unmasked);
@@ -660,7 +661,7 @@
   }
   function closeTaskImage() {
     get("img-job-viewer").hidden = true;
-    get("img-job-viewer-image").removeAttribute("src");
+    window.MikuchinSecureImages.release(get("img-job-viewer-image"));
     openedTaskImage = "";
     openedTaskRevealed = false;
   }
@@ -832,17 +833,20 @@
         button.type = "button";
         button.setAttribute("aria-label", "查看当前任务生成图片");
         const thumbnail = document.createElement("img");
-        thumbnail.src = "v1/mikuchin/gallery/thumb/" + imageId;
+        void window.MikuchinSecureImages.load(thumbnail,"v1/mikuchin/gallery/thumb/" + imageId)
+          .catch(() => {thumbnail.alt="缩略图加载失败";});
         thumbnail.className = "img-job-nsfw";
         thumbnail.alt = "生成图片缩略图";
         thumbnail.loading = "lazy";
         button.append(thumbnail);
         button.onclick = () => showTaskImage(imageId);
+        window.MikuchinSecureImages.clearWithin(output);
         output.replaceChildren(button);
         if (ids.length > 1) output.append(part("span", "img-job-output-count", "+"+(ids.length-1)));
         inspectNsfw(imageId);
       } else if (!imageId && output.dataset.imageId) {
         delete output.dataset.imageId;
+        window.MikuchinSecureImages.clearWithin(output);
         output.textContent = "尚无图片";
       } else if (!imageId) {
         output.textContent = job.state === "draft" ? "草稿" : activeJob(job) ? "生成中…" : "无产图";

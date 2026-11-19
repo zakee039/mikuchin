@@ -200,6 +200,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._json(200 if reachable else 503, {
                 "status": "ok" if reachable else "degraded",
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
+                "image_worker_ready": bool(self.server.image_jobs and
+                                           self.server.image_jobs.worker_healthy()),
             })
             return
         if path not in INFERENCE_GETS and not IMAGE_PATH.fullmatch(path):
