@@ -14,6 +14,47 @@
   let pinch = null, dragStart = null, lastTap = null, chromeVisible = true;
   const appliedUpscales = new Set();
   let pollingUpscales = false, tapTimer = null;
+  let expectedFullSrc = "", preloadTimer = null;
+  const neighborPreloads = new Map();
+
+  function fullSrc(item, selectedVariant = "upscaled") {
+    if (!item) return "";
+    const pair = Boolean(item.variants?.original && item.variants?.upscaled);
+    const imageId = pair && selectedVariant === "original" ? item.variants.original : item.id;
+    return "v1/images/files/" + imageId + ".png";
+  }
+
+  // Only the two immediate neighbors receive full-resolution preloads. Never
+  // compete with the foreground image fetch, and bound decoded-image memory.
+  function prefetchNeighbors() {
+    if (preloadTimer != null) clearTimeout(preloadTimer);
+    preloadTimer = setTimeout(() => {
+      preloadTimer = null;
+      if (lightbox < 0 || lightbox >= items.length) return;
+      const urls = new Set();
+      for (const offset of [-1, 1]) {
+        const index = (lightbox + offset + items.length) % items.length;
+        if (index === lightbox) continue;
+        const url = fullSrc(items[index]);
+        if (url) urls.add(url);
+      }
+      for (const [url] of neighborPreloads) {
+        if (!urls.has(url)) neighborPreloads.delete(url);
+      }
+      for (const url of urls) {
+        if (neighborPreloads.has(url)) continue;
+        const img = new Image();
+        img.decoding = "async";
+        img.fetchPriority = "low";
+        img.src = url;
+        neighborPreloads.set(url, img);
+      }
+      // Warm the next metadata page before the user reaches its boundary.
+      if (items.length < total && lightbox >= items.length - 3 && !loading) {
+        void load(false);
+      }
+    }, 160);
+  }
 
   const sourceLabel = value => ({
     studio:"生图",chat:"聊天",local:"本地",api:"API"
@@ -101,6 +142,7 @@
       items=[];total=0;selected.clear();
       if (lightbox !== -1) close();
     }
+    const previousLength = items.length;
     $g("gallery-empty").hidden=true;
     $g("gallery-more").disabled=true;
     try {
@@ -114,17 +156,37 @@
       const answer = await response.json().catch(() => ({}));
       if (!response.ok) throw Error(answer.error?.message || "HTTP "+response.status);
       if (fetchVersion !== version) return;
+      const wasWaitingForPage = lightbox >= items.length && lightbox !== -1;
       total=answer.total || 0;
       items.push(...(Array.isArray(answer.items)?answer.items:[]));
-      render();
+      // A newly requested page belongs behind the overlay. Avoid rebuilding
+      // the entire thumbnail grid on the critical swipe-to-paint path.
+      if (lightbox === -1) render();
+      else {
+        $g("gallery-count").textContent = total + " 张";
+        $g("gallery-more").hidden = items.length >= total;
+      }
+      if (wasWaitingForPage && lightbox < items.length) showViewer();
+      else if (!wasWaitingForPage && lightbox >= 0 && items.length > previousLength) prefetchNeighbors();
+      else if (wasWaitingForPage && items.length === previousLength) {
+        $g("gallery-image-loading").textContent="暂时无法加载下一页，请向左滑返回";
+      }
     } catch(e) {
       toast("error","画廊加载失败",String(e.message||e),6000);
       if (!items.length) $g("gallery-empty").textContent = "画廊加载失败，请检查服务连接";
       $g("gallery-empty").hidden=Boolean(items.length);
+      if (lightbox >= items.length && lightbox !== -1) {
+        $g("gallery-image-loading").textContent="加载失败，请返回上一张重试";
+      }
     } finally {
       loading=false;
       $g("gallery-more").disabled=false;
       $g("gallery-more").hidden = items.length >= total;
+      // Rapid gestures may have queued an index beyond one page. Keep
+      // fetching in the background rather than blocking those gestures.
+      if (lightbox >= items.length && lightbox < total && items.length > previousLength) {
+        setTimeout(() => {if (lightbox >= items.length && !loading) void load(false);},0);
+      }
     }
   }
   function open(index) {
@@ -134,36 +196,74 @@
     $g("gallery-viewer").hidden=false;
     showViewer();
     void checkUpscaleJobs();
-    // Android supports fullscreen/orientation lock; iOS falls back to the fixed viewer.
-    if (matchMedia("(max-width: 760px)").matches) void requestLandscape();
+    // Viewing follows the phone's current orientation; no automatic rotation.
     $g("gallery-close").focus();
   }
   function close() {
     if (lightbox === -1) return;
     const id=items[lightbox]?.id;
     lightbox=-1;revealed=false;
+    expectedFullSrc="";
+    if (preloadTimer != null) {clearTimeout(preloadTimer);preloadTimer=null;}
+    neighborPreloads.clear();
     $g("gallery-viewer").hidden=true;
     resetZoom();
     if (document.fullscreenElement===$g("gallery-viewer"))
       void document.exitFullscreen().catch(() => {});
-    try { screen.orientation?.unlock?.(); } catch (_error) {}
     $g("gallery-full").removeAttribute("src");
+    $g("gallery-preview").hidden=true;
+    $g("gallery-preview").removeAttribute("src");
+    $g("gallery-image-loading").hidden=true;
+    render();
     const from=$g("gallery-grid").querySelector('[data-gallery-id="'+id+'"]');
     from?.focus({preventScroll:true});
   }
   function showViewer() {
     if (lightbox === -1) return;
     const item=items[lightbox];
-    if (!item) {close();return;}
     $g("gallery-position").textContent=(lightbox+1)+" / "+total;
+    if (!item) {
+      // The user has already navigated to a not-yet-fetched page. Paint its
+      // place immediately; network metadata and pixels arrive independently.
+      expectedFullSrc="";
+      $g("gallery-full").classList.add("gallery-full-loading");
+      $g("gallery-full").removeAttribute("src");
+      $g("gallery-preview").hidden=true;
+      $g("gallery-preview").removeAttribute("src");
+      $g("gallery-image-loading").textContent="正在获取下一张…";
+      $g("gallery-image-loading").hidden=false;
+      $g("gallery-viewer-spoiler").hidden=true;
+      $g("gallery-variant-picker").hidden=true;
+      $g("gallery-create-upscale").hidden=true;
+      $g("gallery-delete-original").hidden=true;
+      $g("gallery-delete-upscaled").hidden=true;
+      $g("gallery-details").textContent="正在加载图片信息…";
+      $g("gallery-prompt").textContent="";
+      return;
+    }
     const pair=Boolean(item.variants?.original && item.variants?.upscaled);
     if (!pair) variant="original";
-    const imageId=pair && variant==="original" ? item.variants.original : item.id;
-    const nextSrc="v1/images/files/"+imageId+".png";
-    if ($g("gallery-full").getAttribute("src")!==nextSrc){resetZoom();$g("gallery-full").src=nextSrc;}
+    const nextSrc=fullSrc(item,variant);
+    const full=$g("gallery-full"),preview=$g("gallery-preview");
+    if (full.getAttribute("src")!==nextSrc) {
+      resetZoom();
+      full.classList.add("gallery-full-loading");
+      preview.hidden=false;
+      preview.src=api+"/thumb/"+item.id;
+      expectedFullSrc=nextSrc;
+      // Assign the requested full image *after* displaying its lightweight
+      // preview, never wait for the file before updating the viewer state.
+      full.src=nextSrc;
+    }
     const hide=masked(item) && !revealed;
     $g("gallery-full").classList.toggle("gallery-blurred",hide);
+    preview.classList.toggle("gallery-blurred",hide);
     $g("gallery-viewer-spoiler").hidden=!hide;
+    if (full.complete && full.naturalWidth>0) finishFullImage();
+    else {
+      $g("gallery-image-loading").textContent="高清图片加载中…";
+      $g("gallery-image-loading").hidden=false;
+    }
     $g("gallery-mark-nsfw").textContent=item.nsfw?"取消 NSFW 标记":"标记为 NSFW";
     $g("gallery-variant-picker").hidden=!pair;
     $g("gallery-create-upscale").hidden=pair;
@@ -186,16 +286,26 @@
     ].filter(Boolean).join(" · ");
     $g("gallery-prompt").textContent=item.prompt || "";
   }
-  async function shift(delta) {
+  function finishFullImage() {
+    const full=$g("gallery-full");
+    if (lightbox<0 || full.getAttribute("src")!==expectedFullSrc || !full.naturalWidth) return;
+    full.classList.remove("gallery-full-loading");
+    $g("gallery-preview").hidden=true;
+    $g("gallery-image-loading").hidden=true;
+    clampPan();applyZoom();
+    prefetchNeighbors();
+  }
+  function shift(delta) {
     if (lightbox === -1 || !items.length) return;
-    if (delta>0 && lightbox === items.length-1 && items.length<total) {
-      await load(false);
-      if (lightbox === -1) return;
-    }
-    lightbox=(lightbox+delta+items.length)%items.length;
+    const next=lightbox+delta;
+    if (next>=total) lightbox=0;
+    else if (next<0) lightbox=items.length-1;
+    else lightbox=next;
     revealed=false;variant="upscaled";resetZoom();
     showViewer();
-    void checkUpscaleJobs();
+    if (lightbox>=items.length) {
+      if (!loading) void load(false);
+    }
   }
   function setChrome(visible) {
     chromeVisible=visible;
@@ -229,15 +339,12 @@
     if (zoom<=1.01) {zoom=1;panX=0;panY=0;}
     clampPan();applyZoom();
   }
-  async function requestLandscape() {
+  async function requestFullscreen() {
     const viewer=$g("gallery-viewer");
     try {
       if (!document.fullscreenElement && viewer.requestFullscreen) await viewer.requestFullscreen();
-      if (document.fullscreenElement===viewer && screen.orientation?.lock)
-        await screen.orientation.lock("landscape");
     } catch (_error) {
-      // Safari/iOS has no cross-browser orientation-lock API for ordinary web pages.
-      // The fixed 100dvh viewer still works when the user rotates the device.
+      // Unsupported browsers keep using the fixed viewer in the current orientation.
     }
   }
   async function updateUpscaledItem(sourceId) {
@@ -388,7 +495,7 @@
   $g("gallery-create-upscale").addEventListener("click",()=>void createUpscale());
   $g("gallery-show-original").addEventListener("click",()=>{variant="original";showViewer();});
   $g("gallery-show-upscaled").addEventListener("click",()=>{variant="upscaled";showViewer();});
-  $g("gallery-landscape").addEventListener("click",()=>void requestLandscape());
+  $g("gallery-fullscreen").addEventListener("click",()=>void requestFullscreen());
   $g("gallery-prev").addEventListener("click",()=>shift(-1));
   $g("gallery-next").addEventListener("click",()=>shift(1));
   $g("gallery-mark-nsfw").addEventListener("click",mutateNsfw);
@@ -413,8 +520,10 @@
   const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
   const middle=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
   wrap.addEventListener("pointerdown",e=>{
-    if (e.target.closest("button") || $g("gallery-viewer-spoiler").contains(e.target) &&
-        !$g("gallery-viewer-spoiler").hidden) return;
+    // The NSFW cover is a visual shield, not a gesture blocker. Only its
+    // explicit Reveal button should consume taps; swiping the covered image
+    // must navigate without revealing the current or neighboring artworks.
+    if (e.target.closest("button")) return;
     e.preventDefault();
     wrap.setPointerCapture(e.pointerId);
     fingers.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -479,7 +588,12 @@
     e.preventDefault();
     setZoom(zoom*(e.deltaY<0?1.2:1/1.2),e.clientX,e.clientY);
   },{passive:false});
-  $g("gallery-full").addEventListener("load",()=>{clampPan();applyZoom();});
+  $g("gallery-full").addEventListener("load",finishFullImage);
+  $g("gallery-full").addEventListener("error",()=>{
+    if (lightbox===-1 || $g("gallery-full").getAttribute("src")!==expectedFullSrc) return;
+    $g("gallery-image-loading").textContent="高清图加载失败，显示预览图";
+    $g("gallery-image-loading").hidden=false;
+  });
   window.addEventListener("resize",()=>{if(lightbox!==-1){clampPan();applyZoom();}});
   setInterval(()=>{if(lightbox!==-1)void checkUpscaleJobs();},2300);
   window.MikuchinGallery={refresh:()=>load(true)};

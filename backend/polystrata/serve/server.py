@@ -6335,11 +6335,29 @@ def make_handler(svc: Service):
             if path == "/v1/mikuchin/image-jobs" and MIKUCHIN_LANGUAGE_FILE:
                 if not self._authorized(): return
                 try:
-                    job_id = parse_qs(urlsplit(self.path).query).get("id", [None])[0]
-                    chat_id = parse_qs(urlsplit(self.path).query).get("session_id", [None])[0]
-                    self._json(200, image_jobs.snapshot(svc, job_id, session_id=chat_id))
+                    query = parse_qs(urlsplit(self.path).query)
+                    job_id = query.get("id", [None])[0]
+                    chat_id = query.get("session_id", [None])[0]
+                    kind = query.get("kind", [None])[0]
+                    self._json(200, image_jobs.snapshot(svc, job_id, session_id=chat_id, kind=kind))
                 except (ValueError, OSError) as exc:
                     self._json(400, {"error": {"message": str(exc)}})
+                return
+            if path.startswith("/v1/mikuchin/image-job-reference/") and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                try:
+                    asset_id = path.rsplit("/", 1)[-1]
+                    raw, mime = image_jobs.reference_bytes(svc, asset_id)
+                except (ValueError, OSError):
+                    self._json(404, {"error": {"message": "reference image not found"}})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Cache-Control", "private, no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
                 return
             if path == "/v1/mikuchin/gallery/item" and MIKUCHIN_LANGUAGE_FILE:
                 if not self._authorized(): return
@@ -6633,7 +6651,11 @@ def make_handler(svc: Service):
                     return
                 try:
                     req = json.loads(self._body() or b"{}")
-                    self._json(202, image_jobs.submit(svc, req))
+                    if isinstance(req, dict) and req.get("action") in ("delete", "clear_completed"):
+                        self._json(200, image_jobs.delete_records(svc,
+                            job_id=req.get("id"), clear_completed=req["action"] == "clear_completed"))
+                    else:
+                        self._json(202, image_jobs.submit(svc, req))
                 except (ValueError, OSError) as exc:
                     self._json(400, {"error": {"message": str(exc)}})
                 return

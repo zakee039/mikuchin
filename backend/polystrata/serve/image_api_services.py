@@ -26,7 +26,9 @@ _IDENT = re.compile(r"^api-[a-z0-9-]{6,64}$")
 _ALLOWED_PROXY = {"http", "https", "socks5", "socks5h"}
 _MAX_IMAGE = 12 * 1024 * 1024
 _MAX_OUTPUT = 20 * 1024 * 1024
+_MAX_API_JSON = 40 * 1024 * 1024  # 20 MB image encoded as base64 plus JSON overhead
 _MAX_REFERENCES = 8
+_CONNECT_TIMEOUT = 15
 
 
 class ImageServiceError(ValueError):
@@ -91,8 +93,12 @@ def _write(svc, values):
 def public(entry):
     return {k: entry[k] for k in (
         "id", "name", "base_url", "model", "proxy", "proxy_url",
-        "reference_mode", "negative", "seed", "steps", "sizes",
-    ) if k in entry} | {"has_key": bool(entry.get("api_key"))}
+        "reference_mode", "negative", "seed", "steps", "sizes", "concurrency",
+        "timeout_seconds", "connect_timeout_seconds",
+    ) if k in entry} | {"has_key": bool(entry.get("api_key")),
+                       "concurrency": entry.get("concurrency", 1),
+                       "timeout_seconds": entry.get("timeout_seconds", 240),
+                       "connect_timeout_seconds": entry.get("connect_timeout_seconds", _CONNECT_TIMEOUT)}
 
 
 def list_services(svc):
@@ -128,6 +134,15 @@ def save_service(svc, payload):
         sizes = payload.get("sizes", "standard")
         if sizes not in ("standard", "all", "square"):
             raise ImageServiceError("invalid size preset")
+        concurrency = payload.get("concurrency", 1)
+        if type(concurrency) is not int or not 1 <= concurrency <= 20:
+            raise ImageServiceError("API concurrency must be between 1 and 20")
+        timeout_seconds = payload.get("timeout_seconds", 240)
+        if type(timeout_seconds) is not int or not 30 <= timeout_seconds <= 1200:
+            raise ImageServiceError("API timeout must be between 30 and 1200 seconds")
+        connect_timeout = payload.get("connect_timeout_seconds", _CONNECT_TIMEOUT)
+        if type(connect_timeout) is not int or not 5 <= connect_timeout <= 60:
+            raise ImageServiceError("API connection timeout must be between 5 and 60 seconds")
         proxy = payload.get("proxy", False)
         if not isinstance(proxy, bool):
             raise ImageServiceError("proxy must be a boolean")
@@ -149,6 +164,9 @@ def save_service(svc, payload):
             "negative": payload.get("negative") is True,
             "seed": payload.get("seed") is True,
             "steps": payload.get("steps") is True, "sizes": sizes,
+            "concurrency": concurrency,
+            "timeout_seconds": timeout_seconds,
+            "connect_timeout_seconds": connect_timeout,
         }
         entries = [s for s in entries if s.get("id") != ident]
         entries.append(entry)
@@ -353,16 +371,56 @@ def _session(service):
     return session
 
 
-def _provider_error(response):
+def _provider_error(response, payload=None):
     try:
-        obj = response.json()
+        obj = payload if payload is not None else response.json()
         message = obj.get("error", {}).get("message") if isinstance(obj.get("error"), dict) else obj.get("message")
     except (ValueError, AttributeError):
         message = None
     return f"image API HTTP {response.status_code}: {str(message or response.reason)[:320]}"
 
 
-def generate(svc, req, *, ident=None, on_status=None):
+def _read_json_response(response, *, on_bytes=None):
+    """Read and bound a streamed API response; never silently accept partial JSON.
+
+    A mock response without iter_content keeps compatibility with the existing
+    in-memory API tests. Real requests always use stream=True and this path.
+    """
+    if not callable(getattr(response, "iter_content", None)):
+        return response.json()
+    chunks, total = [], 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if on_bytes is not None:
+            on_bytes(total)
+        if total > _MAX_API_JSON:
+            raise ImageProviderError("image API JSON response exceeds 40 MB")
+        chunks.append(chunk)
+    try:
+        return json.loads(b"".join(chunks))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ImageProviderError(
+            f"image API returned incomplete/invalid JSON ({total} bytes received)") from exc
+
+
+def _network_trace(job_id, route, phase, elapsed, *, status=None, received=None, error=None):
+    """Per-task metadata only: never log prompts, images, proxy URLs or tokens."""
+    if not isinstance(job_id, str) or not re.fullmatch(r"img-[0-9a-f]{24}", job_id):
+        return
+    parts = [f"job={job_id}", f"route={route}", f"phase={phase}",
+             f"elapsed={elapsed:.2f}s"]
+    if status is not None:
+        parts.append(f"http={status}")
+    if received is not None:
+        parts.append(f"received={received}")
+    if error:
+        parts.append(f"error={error}")
+    print("[mikuchin:image-api] " + " ".join(parts), flush=True)
+
+
+def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
     """Call standard /images/generations or /images/edits; return Mikuchin's PNG response shape."""
     ident = ident or req.get("strata_image_profile")
     service = get(svc, ident)
@@ -370,6 +428,8 @@ def generate(svc, req, *, ident=None, on_status=None):
         raise ImageServiceError("image API service not found")
     if not service.get("api_key"):
         raise ImageServiceError("image API key not configured")
+    timeout_seconds = service.get("timeout_seconds", 240)
+    connect_timeout = service.get("connect_timeout_seconds", _CONNECT_TIMEOUT)
     prompt = req.get("prompt")
     if not isinstance(prompt, str) or not 0 < len(prompt.strip()) <= 16000:
         raise ImageServiceError("prompt must be 1–16000 characters")
@@ -395,22 +455,47 @@ def generate(svc, req, *, ident=None, on_status=None):
             on_status(value)
 
     start = time.monotonic()
-    stage("正在请求 API")
+    route = "proxy" if service["proxy"] else "direct"
+    phase, received, http_status = "request_headers", 0, None
+    def trace(event, *, error=None):
+        _network_trace(diagnostic_id, route, event, time.monotonic()-start,
+                       status=http_status, received=received, error=error)
+
+    stage("连接 API / 等待响应头")
+    trace("request_start")
     url = service["base_url"] + ("/images/edits" if refs else "/images/generations")
     try:
         with _session(service) as session:
             if refs:
                 files = [("image" if len(refs) == 1 else "image[]",
                           (f"ref-{i}.png", raw, "image/png")) for i, raw in enumerate(refs)]
-                response = session.post(url, headers=auth, data=params, files=files, timeout=(15,240))
+                response = session.post(url, headers=auth, data=params, files=files,
+                                        timeout=(connect_timeout, timeout_seconds), stream=True)
             else:
                 response = session.post(url, headers={**auth, "Content-Type":"application/json"},
-                                        json=params, timeout=(15,240))
-            if not response.ok:
-                raise ImageProviderError(_provider_error(response))
-            stage("正在接收 API 结果")
+                                        json=params, timeout=(connect_timeout, timeout_seconds),
+                                        stream=True)
+            http_status = getattr(response, "status_code", None)
+            trace("response_headers")
+            phase = "response_body"
+            stage("正在接收 API 响应体")
             try:
-                obj = response.json()
+                def count_response_bytes(value):
+                    nonlocal received
+                    received = value
+                obj = _read_json_response(response, on_bytes=count_response_bytes)
+            except ImageProviderError as exc:
+                if not response.ok:
+                    raise ImageProviderError(
+                        f"image API HTTP {response.status_code}: incomplete/invalid response body") from exc
+                raise
+            finally:
+                if callable(getattr(response, "close", None)):
+                    response.close()
+            trace("response_body_complete")
+            if not response.ok:
+                raise ImageProviderError(_provider_error(response, obj))
+            try:
                 data = obj["data"]
                 item = data[0]
                 if not isinstance(item, dict):
@@ -427,20 +512,64 @@ def generate(svc, req, *, ident=None, on_status=None):
                 uri = item["url"]
                 if not _is_public_address(uri, service["proxy"]):
                     raise ImageProviderError("provider returned an unsafe image URL; use base64 response")
-                result = session.get(uri, timeout=(15,90), allow_redirects=False, stream=True)
-                if not result.ok or 300 <= result.status_code < 400:
-                    raise ImageProviderError("could not download provider image")
-                chunks, total = [], 0
-                for chunk in result.iter_content(65536):
-                    total += len(chunk)
-                    if total > _MAX_OUTPUT:
-                        raise ImageProviderError("provider image exceeds 20 MB")
-                    chunks.append(chunk)
-                image = b"".join(chunks)
+                phase, received, http_status = "download_headers", 0, None
+                trace("download_start")
+                result = session.get(uri, timeout=(connect_timeout,timeout_seconds),
+                                     allow_redirects=False, stream=True)
+                http_status = getattr(result, "status_code", None)
+                trace("download_headers")
+                phase = "download_body"
+                try:
+                    if not result.ok or 300 <= result.status_code < 400:
+                        raise ImageProviderError("could not download provider image")
+                    chunks, total = [], 0
+                    for chunk in result.iter_content(65536):
+                        total += len(chunk)
+                        received = total
+                        if total > _MAX_OUTPUT:
+                            raise ImageProviderError("provider image exceeds 20 MB")
+                        chunks.append(chunk)
+                    image = b"".join(chunks)
+                finally:
+                    result.close()
+                trace("download_complete")
             else:
                 raise ImageProviderError("provider returned no b64_json or image URL")
+    except requests.ConnectTimeout as exc:
+        trace("network_error", error="ConnectTimeout")
+        raise ImageProviderError(
+            f"API 连接建立超时：实际 {time.monotonic()-start:.1f}s，"
+            f"连接上限 {connect_timeout}s，路线 {route}，阶段 {phase}。"
+            "请求是否到达上游未知，请先核对用量再重试。") from exc
+    except requests.ReadTimeout as exc:
+        elapsed = time.monotonic() - start
+        trace("network_error", error="ReadTimeout")
+        if phase in ("request_headers", "download_headers"):
+            detail = ("尚未收到响应头；可能在 DNS/TCP/TLS 或等待首次响应。"
+                      "不能仅凭 requests.ReadTimeout 判定已等待完整的读取超时。")
+        else:
+            detail = f"响应体接收中断（已收到 {received} 字节）。"
+        raise ImageProviderError(
+            f"API 网络超时：实际 {elapsed:.1f}s，阶段 {phase}，路线 {route}；"
+            f"连接上限 {connect_timeout}s，读取上限 {timeout_seconds}s。{detail}"
+            "上游可能仍在处理，勿盲目重试。") from exc
     except requests.RequestException as exc:
-        raise ImageProviderError("image API connection failed: " + str(exc)[:240]) from exc
+        elapsed = time.monotonic() - start
+        trace("network_error", error=type(exc).__name__)
+        reason = str(exc)
+        if "IncompleteRead" in reason or "Connection broken" in reason:
+            explanation = "响应体不完整，连接被提前关闭"
+        elif "write operation timed out" in reason.lower():
+            explanation = "发送请求过程中发生写入超时"
+        else:
+            explanation = "网络连接异常"
+        raise ImageProviderError(
+            f"API {explanation}：实际 {elapsed:.1f}s，阶段 {phase}，路线 {route}，"
+            f"已接收 {received} 字节；{type(exc).__name__}。"
+            "请求是否在上游完成未知，请先核对用量。") from exc
+    except ImageProviderError:
+        trace("provider_error", error="ImageProviderError")
+        raise
     stage("正在处理生成图片")
     png = _png(image)
     up = {"upscale_applied": False}

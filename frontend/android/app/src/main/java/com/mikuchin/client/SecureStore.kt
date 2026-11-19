@@ -109,5 +109,10 @@ class SecureStore(context: Context) {
     var latestSessionId: String
         get() = prefs.getString("latest_session_id", "") ?: ""
         set(value) = prefs.edit().putString("latest_session_id", value).apply()
+
+    // Connection profiles may have different API keys. Keep them encrypted
+    // through the same Android Keystore, never in plaintext preference JSON.
+    internal fun encryptProfileKey(value: String): String = encrypt(value)
+    internal fun decryptProfileKey(value: String): String = decrypt(value)
 }
 

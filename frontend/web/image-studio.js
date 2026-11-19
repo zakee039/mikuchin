@@ -14,12 +14,22 @@
   let chosenLora = store.get("image-lora", "none") || "none";
   let current = store.get("image-profile", "default");
   let sourceModel = null; // non-destructive adaptation suggestion when first switching
-  let references = []; // Ordered, tab-local uploads. Never transmitted before Generate.
+  let references = []; // Ordered uploads and server-backed reference assets.
   let reference = null; // First item for optional vision-to-prompt conversion.
   let working = false;
-  const imageJobWatchers = new Map();
-  const renderedImageJobs = new Set();
+  const taskRecords = new Map();
+  const taskRows = new Map();
+  const taskNsfw = new Map();
+  const taskNsfwPending = new Set();
+  let jobListLoading = false;
+  let openedTaskImage = "";
+  let openedTaskRevealed = false;
   let restoredImageJobs = false;
+  let draftReady = false, suspendDraft = false, initialDraftRestored = false;
+  let currentDraftId = null, draftTimer = null;
+  let provisionalDraftId = null, formRevision = 0;
+  let draftWrites = Promise.resolve();
+  const activeDraftKey = "mikuchin-image-active-draft-v1";
 
   const model = () => catalog.find(m => m.id === current) || catalog[0];
   const defaultSteps = (m) => Number(m?.steps || (m?.family === "sdxl" ? 28 : 8));
@@ -51,6 +61,11 @@
     drafts[current] = pickFields();
     store.set(draftKey, drafts);
     store.set("image-profile", current);
+    if (draftReady && !suspendDraft) {
+      initialDraftRestored = true;
+      formRevision++;
+      scheduleDraftSave();
+    }
   }
   function loadDraft(id, origin = null, originName = null) {
     const selected = catalog.find(x => x.id === id);
@@ -110,19 +125,26 @@
     if (id === current) return;
     const old = pickFields();
     const oldName = model()?.name || "前一个模型";
+    suspendDraft = true;
     saveDraft();
     current = id;
     store.set("image-profile", id);
     loadDraft(id, old, oldName);
+    suspendDraft = false;
+    saveDraft();
   }
   async function refresh() {
     const select = get("img-model");
+    if (!restoredImageJobs) {
+      restoredImageJobs = true;
+      void refreshImageJobs();
+    }
     try {
       const r = await fetch("v1/mikuchin/image-models", {headers: headers(), cache: "no-store"});
       if (!r.ok) throw Error(`HTTP ${r.status}`);
       const data = await r.json();
       if (!Array.isArray(data.models) || !data.models.length) throw Error("No image models configured");
-      if (catalog.length) saveDraft();
+      if (catalog.length) { suspendDraft = true;saveDraft();suspendDraft = false; }
       catalog = data.models;
       loraCatalog = Array.isArray(data.loras) ? data.loras : [];
       select.replaceChildren();
@@ -137,9 +159,12 @@
       if (!next) {get("img-hint").textContent = "未发现可用生图模型";return;}
       current = next.id;
       select.value = current;
+      suspendDraft = true;
       loadDraft(current);
+      suspendDraft = false;
+      draftReady = true;
+      void tryRestoreDraft();
       if (!working) get("img-hint").textContent = model()?.family === "api" ? "API 服务已就绪" : "每次仅生成一张图片；生成图像与聊天请求会相互等待。";
-      if (!restoredImageJobs) {restoredImageJobs = true; void restoreImageJobs();}
     } catch (e) {
       console.warn("Image model list:", e);
       get("img-hint").textContent = "请填写 API 密钥后查看生图模型";
@@ -171,7 +196,7 @@
       move.disabled = index === 0;
       move.onclick = () => {
         references.splice(index, 1); references.unshift(item);
-        reference = references[0]; refreshReferenceHint();
+        reference = references[0]; refreshReferenceHint(); saveDraft();
       };
       const remove = document.createElement("button");
       remove.type = "button"; remove.textContent = "移除";
@@ -179,7 +204,7 @@
         URL.revokeObjectURL(item.objectUrl);
         references.splice(index, 1);
         reference = references[0] || null;
-        refreshReferenceHint();
+        refreshReferenceHint(); saveDraft();
       };
       buttons.append(move, remove); tile.append(image, badge, name, buttons); container.append(tile);
     });
@@ -202,6 +227,7 @@
   get("img-lora").onchange = e => {
     chosenLora = e.target.value;
     store.set("image-lora", chosenLora);
+    saveDraft();
   };
   for (const k of fields) {
     get(ids[k]).addEventListener("input", saveDraft);
@@ -218,7 +244,9 @@
   get("img-width").addEventListener("change", () => adjustApiAspect("width"));
   get("img-height").addEventListener("change", () => adjustApiAspect("height"));
   get("img-natural").value = store.get("image-natural", "");
-  get("img-natural").addEventListener("input", () => store.set("image-natural", get("img-natural").value));
+  get("img-natural").addEventListener("input", () => {
+    store.set("image-natural", get("img-natural").value); saveDraft();
+  });
 
   get("img-ref-file").onchange = async e => {
     const picked = Array.from(e.target.files || []);
@@ -239,11 +267,11 @@
       } catch(err) { toast("error", "图片读取失败", String(err.message || err)); }
     }
     reference = references[0] || null;
-    refreshReferenceHint();
+    refreshReferenceHint(); saveDraft();
   };
   get("img-ref-clear").onclick = () => {
     for (const item of references) URL.revokeObjectURL(item.objectUrl);
-    references = []; reference = null; refreshReferenceHint();
+    references = []; reference = null; refreshReferenceHint(); saveDraft();
   };
 
   get("img-clear").onclick = () => {
@@ -353,122 +381,544 @@
     return (m >= 60 ? String(Math.floor(m / 60)).padStart(2, "0") + ":" : "") +
       String(m % 60).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
-  function addImageJobResult(job) {
-    if (renderedImageJobs.has(job.id)) return;
-    const ids = job.result?.image_ids || [];
-    if (!ids.length) return;
-    renderedImageJobs.add(job.id);
-    for (const id of ids) {
-      if (!/^[a-f0-9]{32}$/.test(id)) continue;
-      const fig = document.createElement("figure");
-      const pic = document.createElement("img");
-      pic.src = "v1/images/files/" + id + ".png";
-      pic.alt = job.result.model || "生成图片";
-      const caption = document.createElement("figcaption");
-      caption.textContent = [job.result.model, job.result.size,
-        job.result.upscale_applied ? "Anime 4×" : "", "桌面端任务已完成"].filter(Boolean).join(" · ");
-      fig.append(pic, caption);
-      get("img-results").prepend(fig);
+  function taskElapsed(job, now = Date.now()) {
+    if (!Number.isFinite(job.started_at) || job.state === "draft") return "";
+    // The draft may have existed for hours; only activation / retry establishes
+    // started_at. Completion freezes finished_at, never updated or created.
+    const end = activeJob(job) ? now :
+      Number.isFinite(job.finished_at) ? job.finished_at * 1000 : now;
+    const duration = formatDuration(end - job.started_at * 1000);
+    return duration.split(":").length === 2 ? "00:" + duration : duration;
+  }
+  function tickTaskTimers(now = Date.now()) {
+    // This clock runs independently of polling/network response latency.
+    // Update ONLY timer text; leave thumbnails, inputs and focus untouched.
+    for (const [id, row] of taskRows) {
+      if (!row.isConnected) continue;
+      const job = taskRecords.get(id);
+      if (!job || !activeJob(job)) continue;
+      const clock = row.querySelector(".img-job-timer");
+      if (clock && Number.isFinite(job.started_at))
+        clock.textContent = "已运行 " + taskElapsed(job, now);
     }
   }
-  function watchTask(id, created) {
-    if (imageJobWatchers.has(id)) return;
-    let stopped = false, querying = false;
-    const clock = get("img-elapsed");
-    clock.hidden = false;
-    const tick = () => {clock.textContent = formatDuration(Math.max(0, Date.now() - created * 1000));};
-    tick();
-    const ticker = setInterval(tick, 1000);
-    const finish = () => {stopped = true;clearInterval(ticker);clearInterval(updater);
-      imageJobWatchers.delete(id);};
-    const probe = async () => {
-      if (stopped || querying) return;
-      querying = true;
-      try {
-        const res = await fetch("v1/mikuchin/image-jobs?id=" + encodeURIComponent(id),
-          {headers: headers(),cache:"no-store"});
-        if (!res.ok) return;
-        const job = await res.json();
-        if (stopped) return;
-        const label = (job.phase || "等待桌面端生成") +
-          (Number.isInteger(job.step) && job.steps ? " · " + job.step + "/" + job.steps + " 步" : "");
-        get("img-hint").textContent = label;
-        if (job.state === "done") {
-          addImageJobResult(job);
-          if (job.result?.upscale_error) {
-            get("img-task-error").textContent = String(job.result.upscale_error);
-            get("img-task-error").hidden = false;
-          }
-          finish();
-        } else if (["error","interrupted"].includes(job.state)) {
-          get("img-task-error").textContent = job.error || "桌面端生成任务失败";
-          get("img-task-error").hidden = false;
-          get("img-hint").textContent = "生成失败";
-          finish();
-        }
-      } catch (_error) { /* Browser connectivity is not the worker's lifetime. */ }
-      finally {querying = false;}
+  // One server-side task equals one compact row; images appear only at right.
+  // Task records remain in SQLite even after this tab or device disconnects.
+  const activeJob = job => ["running", "submitting"].includes(job.state);
+  const validImageId = id => /^[a-f0-9]{32}$/.test(id || "");
+
+  function formRequest() {
+    const positive = get("img-positive").value;
+    const natural = get("img-natural").value;
+    const selected = model();
+    const request = {
+      prompt: positive.trim() || natural.trim(),
+      positive_prompt: positive,
+      natural_prompt: natural,
+      negative_prompt: get("img-negative").value,
+      size: `${get("img-width").value}x${get("img-height").value}`,
+      steps: Number(get("img-steps").value) || defaultSteps(selected),
+      strata_upscale: get("img-upscale").value,
+      strata_image_profile: current,
+      strata_reference_mode: referenceMode(),
+      response_format:"url",
+      strata_reference_assets: references.map(item => item.assetId ?
+        {id:item.assetId,name:item.name} : {data_url:item.url,name:item.name}),
     };
-    const updater = setInterval(probe, 1800);
-    imageJobWatchers.set(id, finish);
-    void probe();
+    if (chosenLora !== "none" && selected?.family === "qwen_turbo")
+      request.strata_lora_id = chosenLora;
+    if (get("img-seed").value !== "") request.seed = Number(get("img-seed").value);
+    if (referenceMode() === "img2img") request.strata_denoise_strength = 0.65;
+    return request;
   }
-  async function restoreImageJobs() {
-    try {
-      const r = await fetch("v1/mikuchin/image-jobs", {headers:headers(), cache:"no-store"});
-      if (!r.ok) return;
-      const data = await r.json();
-      for (const job of (data.jobs || []).filter(j => j.kind === "generate").reverse()) {
-        if (job.state === "done") addImageJobResult(job);
-        else if (["queued","working"].includes(job.state)) watchTask(job.id, job.created);
+
+  async function jobCommand(body) {
+    const response = await fetch("v1/mikuchin/image-jobs", {
+      method:"POST", headers:headers(true), body:JSON.stringify(body), cache:"no-store"});
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error?.message || `HTTP ${response.status}`);
+    return data;
+  }
+
+  function scheduleDraftSave() {
+    // Show a new draft immediately, before its debounced disk write finishes.
+    if (!currentDraftId && !provisionalDraftId) {
+      provisionalDraftId = "pending-draft-" + Date.now();
+      const now = Date.now()/1000;
+      taskRecords.set(provisionalDraftId, {id:provisionalDraftId,kind:"generate",
+        state:"draft",phase:"正在保存草稿…",created:now,updated:now,
+        prompt_summary:(get("img-positive").value || get("img-natural").value).slice(0,180),
+        profile_id:current,requested_size:`${get("img-width").value}x${get("img-height").value}`});
+      renderTaskRows();
+    }
+    if (draftTimer !== null) clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      draftTimer = null;
+      void flushDraftSave().catch(() => {});
+    }, 280);
+  }
+
+  async function flushDraftSave() {
+    if (draftTimer !== null) {clearTimeout(draftTimer);draftTimer=null;}
+    if (!draftReady || suspendDraft) return draftWrites;
+    const snapshot = formRequest();
+    const capturedRefs = references.slice();
+    draftWrites = draftWrites.catch(() => {}).then(async () => {
+      const ident = currentDraftId;
+      const saved = await jobCommand(ident ?
+        {action:"save_draft",id:ident,request:snapshot} : {action:"draft",request:snapshot});
+      if (currentDraftId === ident) {
+        currentDraftId = saved.id;
+        store.set(activeDraftKey, saved.id);
       }
-    } catch (_error) { /* The UI can reconnect and query the server later. */ }
+      if (provisionalDraftId) {
+        taskRecords.delete(provisionalDraftId);
+        taskRows.delete(provisionalDraftId);
+        provisionalDraftId=null;
+      }
+      const ids = saved.request?.strata_reference_assets || [];
+      for (let i=0;i<capturedRefs.length;i++) {
+        if (references.includes(capturedRefs[i]) && ids[i]?.id)
+          capturedRefs[i].assetId = ids[i].id;
+      }
+      taskRecords.set(saved.id,saved);
+      renderTaskRows();
+      return saved;
+    });
+    try {return await draftWrites;}
+    catch (err) {
+      get("img-hint").textContent = "草稿保存失败：" + String(err.message || err);
+      toast("error","草稿未保存到桌面",String(err.message || err));
+      throw err;
+    }
   }
+
+  function resetReferenceObjects() {
+    for (const item of references) if (item.objectUrl) URL.revokeObjectURL(item.objectUrl);
+    references = [];
+    reference = null;
+  }
+
+  async function referenceFromAsset(asset) {
+    const response = await fetch("v1/mikuchin/image-job-reference/" +
+      encodeURIComponent(asset.id), {headers:headers(),cache:"no-store"});
+    if (!response.ok) throw Error("参考图不可用：" + asset.name);
+    const blob = await response.blob();
+    const url = await new Promise((resolve,reject) => {
+      const reader = new FileReader();
+      reader.onload=()=>resolve(String(reader.result));
+      reader.onerror=()=>reject(Error("参考图读取失败"));
+      reader.readAsDataURL(blob);
+    });
+    return {assetId:asset.id,name:asset.name,url,objectUrl:URL.createObjectURL(blob)};
+  }
+
+  async function loadTaskForm(job, restoreFromServer=true) {
+    const req = job.request || {};
+    const revisionAtStart = formRevision;
+    // Fetch every reference before replacing the current form. A failed asset
+    // must not silently produce a partial draft that can be submitted.
+    const fetched = await Promise.allSettled((req.strata_reference_assets || []).map(referenceFromAsset));
+    const loaded = fetched.filter(item => item.status === "fulfilled").map(item => item.value);
+    const failure = fetched.find(item => item.status === "rejected");
+    if (failure) {
+      for (const item of loaded) URL.revokeObjectURL(item.objectUrl);
+      throw failure.reason;
+    }
+    if (formRevision !== revisionAtStart) {
+      for (const item of loaded) URL.revokeObjectURL(item.objectUrl);
+      if (restoreFromServer) throw Error("恢复任务期间表单内容发生变化，请重新点击编辑");
+      return;
+    }
+    suspendDraft=true;
+    try {
+      const target = catalog.find(x => x.id === req.strata_image_profile);
+      if (!target) throw Error("原生图服务已不在当前配置中，无法完整恢复该任务");
+      current=target.id;
+      get("img-model").value=current;
+      const match = /^(\d+)x(\d+)$/.exec(req.size || "");
+      drafts[current] = {
+        positive:req.positive_prompt ?? req.prompt ?? "", negative:req.negative_prompt || "",
+        width:match?.[1] || "768", height:match?.[2] || "768",
+        upscale:req.strata_upscale || "off",steps:String(req.steps ?? defaultSteps(model())),
+        seed:req.seed == null ? "" : String(req.seed),
+      };
+      chosenLora=req.strata_lora_id || "none";
+      loadDraft(current);
+      get("img-natural").value=req.natural_prompt || "";
+      store.set("image-natural",get("img-natural").value);
+      resetReferenceObjects();
+      references=loaded;
+      reference=references[0] || null;
+      refreshReferenceHint();
+      store.set(draftKey,drafts);
+      store.set("image-profile",current);
+      store.set("image-lora",chosenLora);
+      currentDraftId=job.id;
+      provisionalDraftId=null;
+      store.set(activeDraftKey,job.id);
+      initialDraftRestored=true;
+    } catch (error) {
+      for (const item of loaded) URL.revokeObjectURL(item.objectUrl);
+      throw error;
+    } finally {suspendDraft=false;}
+    if (restoreFromServer) {
+      get("img-form").scrollIntoView({behavior:"smooth",block:"start"});
+      get("img-positive").focus();
+    }
+  }
+
+  async function tryRestoreDraft() {
+    if (initialDraftRestored || !draftReady || !restoredImageJobs || !taskRecords.size) return;
+    initialDraftRestored=true;
+    const savedId=store.get(activeDraftKey, "");
+    const draftsOnly=[...taskRecords.values()].filter(t => t.kind==="generate" && t.state==="draft");
+    draftsOnly.sort((a,b)=>(b.updated||0)-(a.updated||0));
+    const latest=draftsOnly.find(t=>t.id===savedId) || draftsOnly[0];
+    if (!latest) return;
+    try {await loadTaskForm(latest,false);}
+    catch (error) {get("img-hint").textContent = "恢复草稿失败："+String(error.message||error);}
+  }
+
+  function part(tag, cls, value = "") {
+    const node = document.createElement(tag);
+    node.className = cls;
+    node.textContent = value;
+    return node;
+  }
+  function rowFor(job) {
+    if (taskRows.has(job.id)) return taskRows.get(job.id);
+    const row = part("article", "img-job-item");
+    row.dataset.jobId = job.id;
+    const info = part("div", "img-job-info");
+    const top = part("div", "img-job-top");
+    top.append(part("span", "img-job-state"), part("span", "img-job-meta"),
+      part("span", "img-job-timer"));
+    info.append(top, part("div", "img-job-prompt"), part("div", "img-job-phase"),
+      part("div", "img-job-ops"));
+    row.append(info, part("div", "img-job-output", "尚无图片"));
+    taskRows.set(job.id, row);
+    return row;
+  }
+  function inspectNsfw(imageId) {
+    if (taskNsfw.has(imageId) || taskNsfwPending.has(imageId)) return;
+    taskNsfwPending.add(imageId);
+    fetch("v1/mikuchin/gallery/item?id=" + encodeURIComponent(imageId),
+      {headers: headers(), cache:"no-store"}).then(async response => {
+      if (!response.ok) throw Error("gallery metadata unavailable");
+      const item = await response.json();
+      taskNsfw.set(imageId, Boolean(item.nsfw));
+      if (!get("img-job-viewer").hidden && openedTaskImage === imageId) {
+        const hide = Boolean(item.nsfw) && !get("gallery-show-nsfw").checked && !openedTaskRevealed;
+        get("img-job-viewer-image").classList.toggle("img-job-nsfw", hide);
+        get("img-job-viewer-spoiler").hidden = !hide;
+      }
+      renderTaskRows();
+    }).catch(() => { /* Unknown NSFW status: cover until metadata is available. */ })
+      .finally(() => taskNsfwPending.delete(imageId));
+  }
+  function showTaskImage(imageId) {
+    if (!validImageId(imageId)) return;
+    openedTaskImage = imageId;
+    openedTaskRevealed = false;
+    const img = get("img-job-viewer-image");
+    img.src = "v1/images/files/" + imageId + ".png";
+    const unmasked = taskNsfw.has(imageId) &&
+      (!taskNsfw.get(imageId) || get("gallery-show-nsfw").checked);
+    img.classList.toggle("img-job-nsfw", !unmasked);
+    get("img-job-viewer-spoiler").hidden = unmasked;
+    get("img-job-viewer").hidden = false;
+    get("img-job-viewer-close").focus();
+    inspectNsfw(imageId);
+  }
+  function closeTaskImage() {
+    get("img-job-viewer").hidden = true;
+    get("img-job-viewer-image").removeAttribute("src");
+    openedTaskImage = "";
+    openedTaskRevealed = false;
+  }
+  get("img-job-viewer-close").addEventListener("click", closeTaskImage);
+  get("img-job-viewer").addEventListener("click", event => {
+    if (event.target.id === "img-job-viewer") closeTaskImage();
+  });
+  get("img-job-viewer-reveal").addEventListener("click", () => {
+    openedTaskRevealed = true;
+    get("img-job-viewer-spoiler").hidden = true;
+    get("img-job-viewer-image").classList.remove("img-job-nsfw");
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && !get("img-job-viewer").hidden) {
+      event.preventDefault(); closeTaskImage();
+    }
+  });
+
+  function taskAction(label, handler) {
+    const button = part("button", "img-job-action", label);
+    button.type = "button";
+    button.addEventListener("click", handler);
+    return button;
+  }
+
+  async function editTask(job) {
+    // Draft keeps its ID and moves to top; all other statuses create a new draft.
+    try {
+      if (draftTimer !== null) await flushDraftSave();
+      else await draftWrites;
+      const copy = await jobCommand(job.state === "draft" ?
+        {action:"draft",id:job.id} : {action:"draft",copy_id:job.id});
+      await loadTaskForm(copy);
+      taskRecords.set(copy.id,copy);
+      renderTaskRows();
+      if (copy.legacy_incomplete)
+        toast("warn","历史任务参数不完整","此旧任务没有完整参数与参考图，仅复制了可恢复的信息。",7500);
+    } catch (error) {toast("error","编辑任务失败",String(error.message||error),7500);}
+  }
+
+  async function retryTask(job) {
+    // A new running task; the source task and the current form stay untouched.
+    try {
+      const clickedAt = Date.now() / 1000;
+      const created = await jobCommand({action:"retry",id:job.id,client_started_at:clickedAt});
+      taskRecords.set(created.id,created);
+      renderTaskRows();
+      toast("success","新任务已提交","原任务保持不变。",4200);
+      void refreshImageJobs();
+    } catch (error) {toast("error","重试未提交",String(error.message||error),8500);}
+  }
+
+  async function copyTaskError(message) {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(message);
+      else {
+        const input = document.createElement("textarea");
+        input.value = message;
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.append(input);
+        input.select();
+        const copied = document.execCommand("copy");
+        input.remove();
+        if (!copied) throw Error("copy unavailable");
+      }
+      toast("success", "已复制错误信息");
+    } catch { toast("warn", "复制失败", "请长按任务错误文字手动复制。"); }
+  }
+
+  async function changeTaskRecords(action, id = null) {
+    const payload = action === "delete" ? {action,id} : {action};
+    const res = await fetch("v1/mikuchin/image-jobs", {
+      method:"POST",headers:headers(true),body:JSON.stringify(payload)});
+    const data = await res.json();
+    if (!res.ok) throw Error(data.error?.message || `HTTP ${res.status}`);
+    if (action === "delete" && id) {
+      taskRecords.delete(id);
+      taskRows.delete(id);
+    } else if (action === "clear_completed") {
+      for (const [jobId, job] of taskRecords) {
+        if (job.kind === "generate" && ["success","failed"].includes(job.state)) {
+          taskRecords.delete(jobId);
+          taskRows.delete(jobId);
+        }
+      }
+    }
+    renderTaskRows();
+    await refreshImageJobs();
+    return data.deleted || 0;
+  }
+
+  function updateTaskActions(row, job) {
+    const actions = row.querySelector(".img-job-ops");
+    if (actions.dataset.state === job.state) return;
+    actions.dataset.state = job.state;
+    actions.replaceChildren();
+    // Edit is always shown. Draft edits touch the same task; other edits copy.
+    actions.append(taskAction("编辑", () => void editTask(job)));
+    if (["success", "failed"].includes(job.state))
+      actions.append(taskAction("重试", () => void retryTask(job)));
+    if (job.state === "failed" && job.error)
+      actions.append(taskAction("复制错误", () => void copyTaskError(job.error)));
+    if (activeJob(job)) return;
+    actions.append(taskAction("删除记录", async () => {
+      if (!confirm("仅删除这条任务记录，生成图片仍保留在画廊。继续吗？")) return;
+      try {
+        await changeTaskRecords("delete", job.id);
+        if (currentDraftId === job.id) { currentDraftId=null;store.set(activeDraftKey,""); }
+        toast("success", "任务记录已删除");
+      } catch (error) {toast("error", "删除任务失败", String(error.message || error));}
+    }));
+  }
+
+  function renderTaskRows() {
+    const container = get("img-job-list");
+    const allEntries = [...taskRecords.values()]
+      .filter(job => job.kind === "generate")
+      .sort((a,b) => (b.updated || 0) - (a.updated || 0));
+    // No queued/working job may vanish merely because newer requests completed.
+    const entries = allEntries.slice(0,100);
+    const activeCount = entries.filter(activeJob).length;
+    get("img-job-count").textContent = `${entries.length}/100 条 · ${activeCount} 项进行中`;
+    const visible = get("img-job-active-only").checked ? entries.filter(activeJob) : entries;
+    if (!visible.length) {
+      container.replaceChildren(part("p", "muted small",
+        entries.length ? "没有进行中的图像任务" : "暂无任务，点击上方「生成」开始"));
+      return;
+    }
+    const rows = [];
+    const stateLabel = {draft:"草稿",running:"进行中",success:"成功",
+      failed:"失败",submitting:"进行中"};
+    for (const job of visible) {
+      const row = rowFor(job);
+      row.dataset.state = job.state;
+      const [state, meta, timer] = row.querySelector(".img-job-top").children;
+      state.textContent = stateLabel[job.state] || job.state;
+      const created = job.created ? new Date(job.created*1000).toLocaleString(language(),
+        {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
+      meta.textContent = [created, job.result?.model ||
+        catalog.find(m => m.id === job.profile_id)?.name || job.profile_id || "生图任务",
+      job.result?.size || job.requested_size].filter(Boolean).join(" · ");
+      timer.hidden = job.state === "draft" || job.state === "submitting";
+      timer.classList.toggle("img-job-timer-legacy", !Number.isFinite(job.started_at));
+      timer.textContent = Number.isFinite(job.started_at) ?
+        (activeJob(job) ? "已运行 " : "耗时 ") + taskElapsed(job) :
+        "旧记录 · 起点未记录";
+      const prompt = row.querySelector(".img-job-prompt");
+      prompt.textContent = job.prompt_summary || "历史图像任务";
+      const phase = row.querySelector(".img-job-phase");
+      const step = Number.isInteger(job.step) && job.steps ?
+        ` · ${job.step}/${job.steps} 步` : "";
+      const message = [job.error || job.phase || "等待桌面端处理", step,
+        job.result?.upscale_error ? " · 超分提示：" + job.result.upscale_error : ""].join("");
+      phase.textContent = message;
+      phase.title = message;
+      updateTaskActions(row, job);
+      const output = row.querySelector(".img-job-output");
+      const ids = (job.result?.image_ids || []).filter(validImageId);
+      const imageId = ids[0];
+      if (imageId && output.dataset.imageId !== imageId) {
+        output.dataset.imageId = imageId;
+        const button = part("button", "", "");
+        button.type = "button";
+        button.setAttribute("aria-label", "查看当前任务生成图片");
+        const thumbnail = document.createElement("img");
+        thumbnail.src = "v1/mikuchin/gallery/thumb/" + imageId;
+        thumbnail.className = "img-job-nsfw";
+        thumbnail.alt = "生成图片缩略图";
+        thumbnail.loading = "lazy";
+        button.append(thumbnail);
+        button.onclick = () => showTaskImage(imageId);
+        output.replaceChildren(button);
+        if (ids.length > 1) output.append(part("span", "img-job-output-count", "+"+(ids.length-1)));
+        inspectNsfw(imageId);
+      } else if (!imageId && output.dataset.imageId) {
+        delete output.dataset.imageId;
+        output.textContent = "尚无图片";
+      } else if (!imageId) {
+        output.textContent = job.state === "draft" ? "草稿" : activeJob(job) ? "生成中…" : "无产图";
+      }
+      if (imageId) {
+        // Fail closed until metadata arrives; never expose an NSFW thumbnail
+        // because a job completed before the gallery metadata was fetched.
+        const isSafe = taskNsfw.has(imageId) &&
+          (!taskNsfw.get(imageId) || get("gallery-show-nsfw").checked);
+        output.querySelector("img")?.classList.toggle("img-job-nsfw", !isSafe);
+      }
+      rows.push(row);
+    }
+    // Preserve the exact row nodes during polling: reattaching image nodes
+    // on every tick can restart downloads or interrupt a thumbnail tap.
+    if (container.children.length !== rows.length ||
+        rows.some((row,index) => container.children[index] !== row)) {
+      container.replaceChildren(...rows);
+    }
+  }
+
+  async function refreshImageJobs() {
+    if (jobListLoading) return;
+    jobListLoading = true;
+    try {
+      const res = await fetch("v1/mikuchin/image-jobs?kind=generate", {headers:headers(),cache:"no-store"});
+      if (!res.ok) throw Error("HTTP " + res.status);
+      const data = await res.json();
+      const serverIds = new Set();
+      for (const job of data.jobs || []) {
+        if (job.kind !== "generate") continue;
+        serverIds.add(job.id);
+        taskRecords.set(job.id, job);
+      }
+      for (const id of taskRecords.keys()) {
+        if (!id.startsWith("pending-") && !serverIds.has(id)) {
+          taskRecords.delete(id);
+          taskRows.delete(id);
+        }
+      }
+      renderTaskRows();
+      void tryRestoreDraft();
+    } catch (_error) {
+      if (!taskRecords.size) get("img-job-list").textContent =
+        "无法读取任务列表；服务恢复后会自动重试";
+    } finally {jobListLoading = false;}
+  }
+  get("img-job-refresh").addEventListener("click", () => void refreshImageJobs());
+  get("img-job-active-only").addEventListener("change", renderTaskRows);
+  get("img-job-clear").addEventListener("click", async () => {
+    const ended = [...taskRecords.values()].filter(j => j.kind === "generate" &&
+      ["success","failed"].includes(j.state));
+    if (!ended.length) {toast("info", "没有已结束的任务记录");return;}
+    if (!confirm("清空所有已完成、失败和中断的生图任务记录？画廊和原始图片不会删除。")) return;
+    const button = get("img-job-clear");
+    button.disabled = true;
+    try {
+      const count = await changeTaskRecords("clear_completed");
+      toast("success", "记录已清理", `清理了 ${count} 条记录，图片仍在画廊中。`);
+    } catch (error) {toast("error", "清理任务失败", String(error.message || error));}
+    finally {button.disabled = false;}
+  });
+  setInterval(() => {
+    if (location.hash === "#images") void refreshImageJobs();
+  }, 1800);
+  // Foreground display clock: never couple elapsed time to API status polling.
+  setInterval(tickTaskTimers, 1000);
 
   get("img-form").onsubmit = async ev => {
     ev.preventDefault();
     if (working) return;
+    const clickedAt = Date.now() / 1000;
     const prompt = get("img-positive").value.trim() || get("img-natural").value.trim();
-    if (!prompt) {toast("warn", "没有生图描述", "请输入 Positive Prompt，或先使用一键解析。");return;}
-    const steps = Number(get("img-steps").value);
-    if (!Number.isInteger(steps) || steps < 1 || steps > 100) {toast("warn", "步数错误", "步数应为 1–100 的整数。");return;}
-    const selected = model();
-    const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
-      size: `${get("img-width").value}x${get("img-height").value}`, response_format: "url",
-      strata_upscale: get("img-upscale").value, strata_image_profile: current};
-    if (chosenLora !== "none" && selected?.family === "qwen_turbo")
-      body.strata_lora_id = chosenLora;
-    if (get("img-seed").value !== "") body.seed = Number(get("img-seed").value);
-    const usableReferences = activeReferences();
-    if (usableReferences.length && selected?.family === "api")
-      body.strata_reference_images = usableReferences.map(item => item.url);
-    else if (usableReferences.length) {
-      body.strata_reference_image = usableReferences[0].url;
-      if (selected.reference_mode === "img2img") body.strata_denoise_strength = 0.65;
+    if (!prompt) {
+      toast("warn", "没有生图描述", "请先填写 Positive Prompt 或自然语言描述。");
+      return;
     }
-    saveDraft();
+    const steps = Number(get("img-steps").value);
+    if (!Number.isInteger(steps) || steps < 1 || steps > 100) {
+      toast("warn", "步数错误", "步数必须在 1～100 之间。");
+      return;
+    }
     working = true;
     get("img-go").disabled = true;
-    get("img-task-error").textContent = "";
     get("img-task-error").hidden = true;
-    get("img-hint").textContent = selected?.family === "api" ? "正在请求 API" : "等待本地生成任务";
+    get("img-hint").textContent = "正在保存完整参数与参考图…";
     try {
-      const res = await fetch("v1/mikuchin/image-jobs", {method:"POST",headers:headers(true),
-        body:JSON.stringify({kind:"generate",request:body})});
-      const j = await res.json();
-      if (!res.ok) throw Error(j.error?.message || `HTTP ${res.status}`);
-      get("img-hint").textContent = "已提交桌面端后台任务；关闭浏览器不会取消生成";
-      watchTask(j.id, j.created);
-    } catch (e) {
-      const detail = String(e.message || e);
-      get("img-hint").textContent = "生成失败";
-      get("img-task-error").textContent = detail;
+      // Convert the current form into its server-owned draft snapshot first.
+      // Activation preserves the very same ID, preventing an extra record.
+      await flushDraftSave();
+      if (!currentDraftId) throw Error("草稿尚未保存到桌面");
+      const created = await jobCommand({action:"activate",id:currentDraftId,
+        client_started_at:clickedAt});
+      taskRecords.set(created.id,created);
+      currentDraftId=null;
+      store.set(activeDraftKey,"");
+      renderTaskRows();
+      get("img-hint").textContent = "任务已提交到桌面后台；关闭浏览器不影响执行";
+      void refreshImageJobs();
+    } catch(error) {
+      const message=String(error.message || error);
+      get("img-hint").textContent = "任务提交失败，草稿仍保留";
+      get("img-task-error").textContent = message;
       get("img-task-error").hidden = false;
-      toast("error", "生成失败", detail, 9000);
-    }
-    finally {
+      toast("error", "提交失败", message, 8500);
+    } finally {
       working = false;
-      get("img-go").disabled = !catalog.find(m => m.id === current)?.available;
+      get("img-go").disabled = !catalog.find(item=>item.id===current)?.available;
       refreshReferenceHint();
     }
   };

@@ -229,6 +229,7 @@
         actions.className = "mk-android-conn-actions";
         actions.innerHTML =
           '<button type="button" class="st-btn st-btn--primary" id="mk-android-reconnect" data-i18n-ignore>保存并重连</button>' +
+          '<button type="button" class="st-btn st-btn--secondary" id="mk-android-choose-entry" data-i18n-ignore>切换入口</button>' +
           '<button type="button" class="st-btn st-btn--secondary" id="mk-android-disconnect" data-i18n-ignore>断开连接</button>';
         keyField.insertAdjacentElement("afterend", actions);
 
@@ -239,6 +240,9 @@
         };
         document.getElementById("mk-android-disconnect").onclick = () => {
           if (window.MikuchinAndroid) window.MikuchinAndroid.disconnect();
+        };
+        document.getElementById("mk-android-choose-entry").onclick = () => {
+          if (window.MikuchinAndroid?.showConnectionChooser) window.MikuchinAndroid.showConnectionChooser();
         };
 
         // Tailscale management section

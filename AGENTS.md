@@ -19,3 +19,10 @@ gh release list --repo zakee039/mikuchin --limit 5
 - PolyStrata 是 vendored 后端源代码（`backend/polystrata`），它自带的旧 `manager` 示例版本 0.1.12 **不是 Mikuchin Launcher 产品版本**，勿全局替换它。
 - 提交/打 Tag/上传 Release 之后核验版本、远程 Tag 指向、所有上传资产名称及 SHA256。若任何构建缺失不得宣称所有端均更新完毕。
 - 历史实验：`docs/UPSTREAM_PORTS_2026-11-13.md`、`docs/NATIVE_AB_VALIDATION_2026-11-13.md`、`docs/LIVE_CPU14_ROLLOUT_2026-11-13.md`。
+
+## 修复后的本机生效约定
+
+- 用户明确要求：以后每次完成并验证 Mikuchin 修复，**默认在本机直接重启需要重启的服务，并核实新代码已生效**，不要只留下未加载的源代码让用户自行重启。纯网页资源修改可通过缓存版本更新直接生效，不要无故中断后端。
+- 重启前先检查任务数据库中没有 `queued` / `working` / `running` 任务，并检查 `/health`、模型加载状态；正在生成或存在活跃会话、状态不明时**不要强杀**，应说明阻碍。避免中断付费 API、生图、用户 KV 会话。
+- Windows 托盘启动器在 `frontend/launcher/portable/Mikuchin.exe`，由它管理 `15239` 后端服务。安全空闲时可借助独立启动流程重启启动器和子服务，之后核验新进程 PID、`/health`、已鉴权 API 是否暴露新字段，以及网页资源。临时重启任务完成后必须清理。
+- 源码生效、启动器重启、版本号更新、GitHub 提交和 Release 是不同的事；如实汇报，不擅自发布。

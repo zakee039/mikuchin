@@ -211,12 +211,85 @@
   .submit:disabled {
     opacity: 0.55;
   }
+  [hidden] { display: none !important; }
+  .card { width: min(100%, 430px); padding: 19px; box-shadow: none; gap: 18px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-icon { display: grid; place-items: center; width: 42px; height: 42px;
+    flex: none; background: var(--accent-soft); border-radius: 13px; color: #189e97;
+    font-size: 25px; font-weight: 800; }
+  .brand strong { font-size: 18px; letter-spacing: -.3px; }
+  .brand p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  .entry-chooser, .entry-editor { display: flex; flex-direction: column; gap: 13px; }
+  .network-summary { display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px;
+    background: var(--surface-2); font-size: 12px; color: var(--muted); }
+  .network-summary strong { color: var(--ink); font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+  .auto-row { display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; font-size: 13px; padding: 1px 3px; }
+  .auto-row strong { display: block; font-size: 13px; }
+  .auto-row small { display: block; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .auto-row input { width: 19px; height: 19px; accent-color: var(--accent); }
+  .entry-list { display: flex; flex-direction: column; gap: 9px; }
+  .entry-card { display: flex; align-items: center; gap: 5px; border-radius: 12px;
+    border: 1px solid var(--line); min-height: 70px; background: #fff; overflow: hidden; }
+  .entry-card.preferred { border-color: #39c5bb9e; background: #f6fffd; }
+  .entry-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;
+    padding: 13px 6px 13px 12px; border: 0; background: transparent; color: inherit;
+    text-align: left; cursor: pointer; }
+  .entry-symbol { display: grid; place-items: center; flex: 0 0 35px; height: 35px;
+    background: var(--surface-2); border-radius: 10px; color: #299b96; font-size: 19px; }
+  .entry-copy { flex: 1; min-width: 0; }
+  .entry-copy strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .entry-copy small { display: block; color: var(--muted); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .entry-copy em { display: block; margin-top: 5px; font-size: 10.5px;
+    color: #16867e; font-style: normal; }
+  .entry-edit { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    font-size: 12px; padding: 19px 12px; }
+  .empty-entries { font-size: 12px; color: var(--muted); text-align: center;
+    padding: 26px 14px; border: 1px dashed var(--line); border-radius: 11px; }
+  .chooser-actions { display: flex; gap: 9px; }
+  .chooser-actions button { flex: 1; height: 39px; border-radius: 10px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .add-entry { background: var(--accent); color: white; border: 1px solid var(--accent); }
+  .retry-entry { background: white; color: var(--ink); border: 1px solid var(--line); }
+  .chooser-status { min-height: 16px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .chooser-status.error { color: var(--danger); }
+  .editor-head { display: flex; justify-content: space-between; align-items: center;
+    gap: 10px; font-size: 15px; font-weight: 750; }
+  .editor-head button { border: 0; background: transparent; color: var(--muted);
+    font-size: 12px; padding: 8px 0; cursor: pointer; }
+  .wifi-memory { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+  .wifi-memory span { flex: 1; color: var(--muted); min-width: 130px; overflow-wrap: anywhere; }
+  .editor-footer { display: flex; gap: 8px; flex-wrap: wrap; }
+  .editor-footer button { flex: 1; }
+  .editor-footer .danger { color: var(--danger); }
 </style>
 </head>
 <body>
 <section class="gate">
   <div class="spacer"></div>
   <form class="card" id="login-form" autocomplete="off">
+    <header class="brand">
+      <div class="brand-icon" aria-hidden="true">M</div>
+      <div><strong>Mikuchin</strong><p>连接到你的桌面助手</p></div>
+    </header>
+    <div class="entry-chooser" id="entry-chooser">
+      <div class="network-summary"><span>当前网络</span><strong id="network-name">检测中…</strong></div>
+      <label class="auto-row" for="auto-connect">
+        <span><strong>智能自动连接</strong><small>优先使用 Wi-Fi 记忆，失败时尝试已保存入口</small></span>
+        <input id="auto-connect" type="checkbox" checked>
+      </label>
+      <div class="entry-list" id="entry-list" role="group" aria-label="已保存的连接入口"></div>
+      <div class="chooser-actions">
+        <button class="add-entry" type="button" id="add-entry">＋ 添加入口</button>
+        <button class="retry-entry" type="button" id="retry-entry">自动重试</button>
+      </div>
+      <div class="chooser-status" id="chooser-status" role="status" aria-live="polite"></div>
+    </div>
+    <div class="entry-editor" id="entry-editor" hidden>
+    <div class="editor-head"><span id="editor-title">新建连接入口</span><button type="button" id="editor-back">返回入口列表</button></div>
+    <label for="entry-name" class="row"><span class="label">名称</span>
+      <input class="input" id="entry-name" type="text" maxlength="45" autocomplete="off" placeholder="例如：桌面热点"></label>
     <div class="mode-tabs" role="tablist">
       <button type="button" class="mode-tab active" id="tab-direct" data-mode="direct">直接连接</button>
       <button type="button" class="mode-tab" id="tab-tailscale" data-mode="tailscale">Tailscale</button>
@@ -246,12 +319,23 @@
       </label>
       <label class="row" for="key">
         <span class="label">key</span>
-        <input class="input" id="key" type="password" autocomplete="off">
+        <input class="input" id="key" type="password" autocomplete="off" placeholder="该入口的 API Key">
       </label>
+      <button type="button" class="btn-secondary" id="reuse-key" hidden>使用当前已保存的 Key</button>
       <div class="actions">
         <span class="error" id="error" role="alert"></span>
-        <button type="submit" class="submit" id="submit">连接</button>
+        <button type="submit" class="submit" id="submit">保存并连接</button>
       </div>
+    </div>
+    <div class="wifi-memory" id="wifi-memory" hidden>
+      <span id="wifi-memory-text">尚未绑定 Wi-Fi</span>
+      <button type="button" class="btn-secondary" id="wifi-bind">绑定当前 Wi-Fi</button>
+      <button type="button" class="btn-secondary" id="wifi-clear" hidden>取消记忆</button>
+    </div>
+    <div class="editor-footer">
+      <button type="button" class="btn-secondary" id="save-only">仅保存</button>
+      <button type="button" class="btn-secondary danger" id="delete-entry" hidden>删除入口</button>
+    </div>
     </div>
   </form>
   <div class="spacer"></div>
@@ -280,11 +364,8 @@
   let tsRunning = false;
 
   function syncFieldsVisibility() {
-    if (currentMode === "direct") {
-      mikuchinFields.classList.remove("hidden");
-    } else {
-      mikuchinFields.classList.toggle("hidden", !tsRunning);
-    }
+    // A Tailscale entry should be editable/savable even before first login.
+    mikuchinFields.classList.remove("hidden");
   }
 
   function applyMode(mode, notifyBridge = true) {
@@ -363,7 +444,8 @@
   }
 
   function refreshTailscaleStatus() {
-    if (currentMode !== "tailscale" || !window.MikuchinAndroid || !window.MikuchinAndroid.getTailscaleStatus) return;
+    if (document.getElementById("entry-editor").hidden || currentMode !== "tailscale" ||
+        !window.MikuchinAndroid || !window.MikuchinAndroid.getTailscaleStatus) return;
     renderTailscaleStatus(window.MikuchinAndroid.getTailscaleStatus());
   }
 
@@ -416,29 +498,215 @@
 
   setInterval(refreshTailscaleStatus, 1500);
 
-  window.onConnectResult = (ok, message) => {
-    submitEl.disabled = false;
-    if (!ok) errorEl.textContent = message || "无法连接到接口";
-  };
+  const chooser = document.getElementById("entry-chooser");
+  const editor = document.getElementById("entry-editor");
+  const entryList = document.getElementById("entry-list");
+  const entryName = document.getElementById("entry-name");
+  const autoToggle = document.getElementById("auto-connect");
+  const chooserStatus = document.getElementById("chooser-status");
+  const wifiMemory = document.getElementById("wifi-memory");
+  const wifiMemoryText = document.getElementById("wifi-memory-text");
+  const wifiClear = document.getElementById("wifi-clear");
+  const bridge = window.MikuchinAndroid || null;
+  let snapshot = {entries:[],preferredId:"",currentSsid:"",autoEnabled:true};
+  let editingId = "";
+  let autoTimer = null;
 
-  form.onsubmit = (e) => {
-    e.preventDefault();
-    const ep = endpointEl.value.trim();
-    const key = keyEl.value.trim();
-    if (!ep) {
-      errorEl.textContent = "请输入接口地址";
-      return;
+  function status(message, failed = false) {
+    chooserStatus.textContent = message;
+    chooserStatus.classList.toggle("error", failed);
+  }
+  function stopAuto() {
+    if (autoTimer != null) { clearTimeout(autoTimer); autoTimer = null; }
+    bridge?.cancelAutoConnect?.();
+  }
+  function loadSnapshot(next) {
+    if (typeof next === "string") {
+      try { next = JSON.parse(next); } catch { next = {}; }
     }
-    if (currentMode === "tailscale" && !tsRunning) {
-      errorEl.textContent = "请先登录并连接 Tailscale 后再连接接口";
-      return;
+    snapshot = next && typeof next === "object" ? next : snapshot;
+    const wifi = snapshot.currentSsid;
+    document.getElementById("network-name").textContent = wifi || "SSID 不可用 / 未授权";
+    autoToggle.checked = snapshot.autoEnabled !== false;
+    renderEntries();
+  }
+  function renderEntries() {
+    entryList.replaceChildren();
+    const list = Array.isArray(snapshot.entries) ? snapshot.entries : [];
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-entries";
+      empty.textContent = "尚无连接入口。点击下方按钮保存桌面地址。";
+      entryList.append(empty);
     }
+    const selectedWifi = snapshot.currentSsid;
+    const ordered = [...list].sort((a,b) => {
+      const rank = p => p.wifiSsid && p.wifiSsid === selectedWifi ? 0 :
+        p.id === snapshot.preferredId ? 1 : 2;
+      return rank(a) - rank(b);
+    });
+    for (const item of ordered) {
+      const card = document.createElement("div");
+      card.className = "entry-card" + (item.id === snapshot.preferredId ? " preferred" : "");
+      const main = document.createElement("button");
+      main.type = "button";
+      main.className = "entry-main";
+      main.setAttribute("aria-label", "连接 " + item.name);
+      const symbol = document.createElement("span");
+      symbol.className = "entry-symbol";
+      symbol.textContent = item.mode === "tailscale" ? "◇" :
+        item.endpoint.startsWith("https://") ? "◎" : "⌁";
+      const copy = document.createElement("span");
+      copy.className = "entry-copy";
+      const name = document.createElement("strong");
+      name.textContent = item.name;
+      const address = document.createElement("small");
+      address.textContent = item.endpoint;
+      copy.append(name,address);
+      if (item.wifiSsid) {
+        const label = document.createElement("em");
+        label.textContent = item.wifiSsid === selectedWifi ? "当前 Wi-Fi · 优先入口" :
+          "记忆网络：" + item.wifiSsid;
+        copy.append(label);
+      }
+      main.append(symbol,copy);
+      main.onclick = () => {
+        stopAuto();
+        status("正在连接 " + item.name + "…");
+        bridge?.connectProfile?.(item.id);
+      };
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "entry-edit";
+      change.textContent = "编辑";
+      change.setAttribute("aria-label", "编辑 " + item.name);
+      change.onclick = () => openEditor(item);
+      card.append(main,change);
+      entryList.append(card);
+    }
+  }
+
+  function updateWifiControls() {
+    const found = (snapshot.entries || []).find(p => p.id === editingId);
+    wifiMemory.hidden = !found;
+    wifiMemoryText.textContent = found?.wifiSsid ? "已记住：" + found.wifiSsid :
+      "尚未记住 Wi-Fi，可选绑定";
+    wifiClear.hidden = !found?.wifiSsid;
+  }
+  function openEditor(item = null) {
+    stopAuto();
+    chooser.hidden = true;
+    editor.hidden = false;
+    editingId = item?.id || "";
+    document.getElementById("editor-title").textContent = item ? "编辑连接入口" : "添加连接入口";
+    entryName.value = item?.name || "";
+    applyMode(item?.mode || "direct");
+    endpointEl.value = item?.endpoint || "";
+    keyEl.value = item ? (bridge?.getProfileKey?.(item.id) || "") : "";
+    document.getElementById("reuse-key").hidden = !!item;
+    document.getElementById("delete-entry").hidden = !editingId;
     errorEl.textContent = "";
-    submitEl.disabled = true;
-    if (window.MikuchinAndroid) {
-      window.MikuchinAndroid.connectEndpoint(ep, key);
+    submitEl.disabled = false;
+    updateWifiControls();
+  }
+  function showChooser() {
+    editor.hidden = true;
+    chooser.hidden = false;
+    loadSnapshot(bridge?.getConnectionProfiles?.());
+  }
+  function saveEditor(connect) {
+    if (!bridge?.saveConnectionProfile) return;
+    const result = JSON.parse(bridge.saveConnectionProfile(editingId, entryName.value,
+      currentMode, endpointEl.value.trim(), keyEl.value.trim()));
+    if (!result.ok) { errorEl.textContent = result.error || "保存失败"; return; }
+    editingId = result.id;
+    loadSnapshot(result.profiles);
+    if (connect) {
+      showChooser();
+      status("正在连接 " + entryName.value.trim() + "…");
+      bridge.connectProfile(result.id);
+    } else {
+      showChooser();
+      status("入口已保存，可以点击连接或绑定 Wi-Fi 记忆");
+    }
+  }
+
+  document.getElementById("add-entry").onclick = () => openEditor();
+  document.getElementById("reuse-key").onclick = () => {
+    keyEl.value = bridge?.getSavedKey?.() || "";
+    errorEl.textContent = keyEl.value ? "已填入此前连接的 Key，仅用于你接下来保存的入口" :
+      "此前没有可复用的 Key";
+  };
+  document.getElementById("editor-back").onclick = showChooser;
+  document.getElementById("save-only").onclick = () => saveEditor(false);
+  let confirmDeleteId = "";
+  document.getElementById("delete-entry").onclick = () => {
+    if (!editingId) return;
+    if (confirmDeleteId !== editingId) {
+      confirmDeleteId = editingId;
+      errorEl.textContent = "再次点击「删除入口」将永久移除此入口和它的 Wi-Fi 记忆";
+      return;
+    }
+    loadSnapshot(bridge.deleteConnectionProfile(editingId));
+    confirmDeleteId = "";
+    showChooser();
+  };
+  document.getElementById("wifi-bind").onclick = () => {
+    if (!editingId) return;
+    bridge?.bindCurrentWifi?.(editingId);
+  };
+  wifiClear.onclick = () => {
+    if (!editingId) return;
+    loadSnapshot(bridge.clearWifiMemory(editingId));
+    updateWifiControls();
+  };
+  autoToggle.onchange = () => {
+    bridge?.setConnectionAutoEnabled?.(autoToggle.checked);
+    if (!autoToggle.checked) {stopAuto();status("已关闭自动连接，入口仍可手动选择");}
+  };
+  function startAutomatic(force = false) {
+    stopAuto();
+    if (!(snapshot.entries || []).length) {status("请先添加至少一个入口",true);return;}
+    status("正在按网络记忆检测已保存入口…");
+    if (force) bridge?.retryAutoConnect?.();
+    else bridge?.startAutoConnect?.();
+  }
+  document.getElementById("retry-entry").onclick = () => startAutomatic(true);
+
+  window.onEntryProgress = (_id,message) => status(message);
+  window.onWifiMemoryResult = (ok,message,next) => {
+    loadSnapshot(next);
+    updateWifiControls();
+    if (editor.hidden) status(message,!ok); else errorEl.textContent = message;
+  };
+  window.onConnectResult = (ok,message) => {
+    submitEl.disabled = false;
+    if (!ok) {
+      status(message || "入口连接失败",true);
+      if (!editor.hidden) errorEl.textContent = message || "连接失败";
     }
   };
+  form.onsubmit = e => {e.preventDefault();saveEditor(true);};
+
+  if (bridge?.getConnectionProfiles) {
+    loadSnapshot(bridge.getConnectionProfiles());
+    if (!location.search.includes("manual=1") && snapshot.autoEnabled !== false &&
+        snapshot.entries?.length) {
+      status("即将自动连接 · 点按或滑动可暂停自动连接");
+      autoTimer = setTimeout(() => {
+        autoTimer = null;
+        startAutomatic();
+      }, 4000);
+    }
+  }
+  // Reading/editing the chooser is an intentional decision: never auto-open
+  // the chat page while the user is scrolling through their saved entries.
+  document.addEventListener("pointerdown", () => {
+    if (autoTimer !== null) {
+      stopAuto();
+      status("已暂停自动连接，点击入口即可手动连接");
+    }
+  }, {passive:true});
 </script>
 </body>
 </html>

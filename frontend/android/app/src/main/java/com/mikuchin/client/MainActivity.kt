@@ -1,11 +1,17 @@
 package com.mikuchin.client
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Base64
 import android.webkit.CookieManager
@@ -19,19 +25,39 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var secureStore: SecureStore
+    private lateinit var connectionProfiles: ConnectionProfiles
     private lateinit var tailscaleController: TailscaleController
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
+    private val connectGeneration = AtomicInteger(0)
+    private val connectExecutor = Executors.newSingleThreadExecutor()
+    private var pendingWifiBindId: String? = null
+
+    private val wifiPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val id = pendingWifiBindId
+        pendingWifiBindId = null
+        if (id != null) {
+            val ssid = if (granted) currentWifiSsid() else null
+            val ok = ssid != null && connectionProfiles.bindWifi(id, ssid)
+            emitWifiResult(ok, if (ok) "已记住当前 Wi-Fi：$ssid" else
+                "无法获取 Wi-Fi 名称。请检查定位服务和位置权限，或继续手动选择入口。")
+        }
+    }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -76,6 +102,7 @@ class MainActivity : ComponentActivity() {
         }
 
         secureStore = SecureStore(applicationContext)
+        connectionProfiles = ConnectionProfiles(applicationContext, secureStore)
         tailscaleController = TailscaleController(applicationContext)
 
         webView = WebView(this)
@@ -207,35 +234,9 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        val savedMode = secureStore.connectionMode
-        val savedEndpoint = secureStore.activeEndpoint
-        val savedKey = secureStore.apiKey
-        val wasConnected = secureStore.isConnected
-
-        if (savedMode == "tailscale") {
-            thread {
-                tailscaleController.ensureStarted()
-                if (savedEndpoint.isNotEmpty()) {
-                    tailscaleController.setTargetEndpoint(savedEndpoint)
-                }
-                if (wasConnected && savedEndpoint.isNotEmpty()) {
-                    // Wait up to 10s for persisted Tailscale node state to reach Running
-                    for (i in 0 until 20) {
-                        if (tailscaleController.getStatus().state == "Running") break
-                        Thread.sleep(500)
-                    }
-                    verifyAndOpen(savedEndpoint, savedKey, fallbackToLogin = true)
-                } else {
-                    showLoginGate()
-                }
-            }
-        } else {
-            if (wasConnected && savedEndpoint.isNotEmpty()) {
-                verifyAndOpen(savedEndpoint, savedKey, fallbackToLogin = true)
-            } else {
-                showLoginGate()
-            }
-        }
+        // Every launch starts at the native-controlled connection chooser.
+        // Its short auto-connect countdown is cancelable by selecting any row.
+        showLoginGate()
     }
 
     override fun onResume() {
@@ -252,6 +253,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        connectGeneration.incrementAndGet()
+        connectExecutor.shutdownNow()
         tailscaleController.stop()
     }
 
@@ -309,105 +312,275 @@ class MainActivity : ComponentActivity() {
         return isAuthorizedWebUrl(currentUrl)
     }
 
-    private fun showLoginGate() {
+    private fun isChooserPage(): Boolean =
+        getCurrentWebViewUrlSafe().substringBefore('?').substringBefore('#') ==
+            "file:///android_asset/login.html"
+
+    private fun showLoginGate(manual: Boolean = false) {
         runOnUiThread {
-            webView.loadUrl("file:///android_asset/login.html")
+            webView.loadUrl("file:///android_asset/login.html" + if (manual) "?manual=1" else "")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentWifiSsid(): String? {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) return null
+        return try {
+            val network = getSystemService(ConnectivityManager::class.java)
+            // The system's active Network may be a VPN (Clash/Mihomo); inspect
+            // existing underlying transports too without scanning nearby APs.
+            val candidates = listOfNotNull(network.activeNetwork) + network.allNetworks.toList()
+            val capabilities = candidates.distinct().mapNotNull { network.getNetworkCapabilities(it) }
+                .firstOrNull { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
+                ?: return null
+            fun cleaned(raw: String?): String? = raw?.removeSurrounding("\"")?.takeIf {
+                it.isNotBlank() && it != WifiManager.UNKNOWN_SSID && it != "<unknown ssid>"
+            }
+            // Some API 31+ capability snapshots redact SSID even with a Wi-Fi
+            // transport. The legacy getter is only a fallback, never a scan.
+            cleaned((capabilities.transportInfo as? WifiInfo)?.ssid) ?:
+                cleaned((getSystemService(WIFI_SERVICE) as WifiManager).connectionInfo?.ssid)
+        } catch (_: Exception) { null }
+    }
+
+    private fun emitWifiResult(ok: Boolean, message: String) {
+        val snapshot = connectionProfiles.snapshot(currentWifiSsid())
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.onWifiMemoryResult && window.onWifiMemoryResult($ok,${JSONObject.quote(message)},$snapshot);", null)
+        }
+    }
+
+    private fun chooserProgress(id: String, message: String) {
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.onEntryProgress && window.onEntryProgress(${JSONObject.quote(id)},${JSONObject.quote(message)});", null)
+        }
+    }
+
+    private fun chooserFinished(ok: Boolean, message: String) {
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.onConnectResult && window.onConnectResult($ok,${JSONObject.quote(message)});", null)
+        }
+    }
+
+    /** One candidate at a time: tsnet's proxy target is shared across requests. */
+    private fun connectCandidate(profile: ConnectionProfile, generation: Int): String? {
+        val mode = profile.mode
+        val endpoint = profile.endpoint
+        val key = connectionProfiles.keyOf(profile)
+        try {
+            if (generation != connectGeneration.get()) return "连接已取消"
+            if (mode == "tailscale") {
+                tailscaleController.ensureStarted()
+                for (i in 0 until 20) {
+                    if (generation != connectGeneration.get()) return "连接已取消"
+                    if (tailscaleController.getStatus().state == "Running") break
+                    Thread.sleep(500)
+                }
+                if (tailscaleController.getStatus().state != "Running")
+                    return "Tailscale 未就绪，请先完成设备授权"
+            }
+
+            // Probe first without the API key. Never send credentials to an
+            // address that has not been explicitly saved in this profile.
+            val health = tailscaleController.openMikuchinConnection(mode, endpoint, "/health", "")
+            val healthCode = try {health.responseCode} finally {health.disconnect()}
+            if (generation != connectGeneration.get()) return "连接已取消"
+            if (healthCode !in 200..299) return "健康检查 HTTP $healthCode"
+
+            val request = tailscaleController.openMikuchinConnection(
+                mode, endpoint, "/v1/strata/sessions", key)
+            val code: Int
+            val body: String
+            try {
+                code = request.responseCode
+                body = if (code in 200..299) {
+                    request.inputStream.bufferedReader(Charsets.UTF_8).use {it.readText()}
+                } else ""
+            } finally {request.disconnect()}
+            if (generation != connectGeneration.get()) return "连接已取消"
+            if (code !in 200..299)
+                return if (code == 401) "API Key 错误或无权限" else "HTTP $code"
+
+            val sessions = JSONObject(body).optJSONArray("sessions")
+                ?: return "目标不是有效的 Mikuchin 会话服务"
+            var latestId = ""
+            var updated = -1.0
+            for (i in 0 until sessions.length()) {
+                val entry = sessions.optJSONObject(i) ?: continue
+                if (entry.optDouble("updated", 0.0) > updated) {
+                    updated = entry.optDouble("updated", 0.0)
+                    latestId = entry.optString("id", "")
+                }
+            }
+            val url = tailscaleController.buildWebViewEntryUrl(mode, endpoint)
+            if (generation != connectGeneration.get()) return "连接已取消"
+
+            // Persist only after authentication against the intended endpoint.
+            secureStore.connectionMode = mode
+            secureStore.activeEndpoint = endpoint
+            secureStore.apiKey = key
+            secureStore.latestSessionId = latestId
+            secureStore.isConnected = true
+            connectionProfiles.preferredId = profile.id
+            runOnUiThread {
+                if (generation == connectGeneration.get()) webView.loadUrl(url)
+            }
+            return null
+        } catch (e: Exception) {
+            return if (mode == "tailscale") "Tailnet 连接失败：${e.message.orEmpty().take(100)}" else
+                "无法连接：${e.message.orEmpty().take(100)}"
+        }
+    }
+
+    private fun selectProfile(id: String) {
+        val generation = connectGeneration.incrementAndGet()
+        val chosen = connectionProfiles.byId(id)
+        if (chosen == null) {chooserFinished(false, "入口不存在，请重新选择"); return}
+        connectExecutor.execute {
+            if (generation != connectGeneration.get()) return@execute
+            chooserProgress(id, "正在连接 ${chosen.name}…")
+            val error = connectCandidate(chosen, generation)
+            if (generation == connectGeneration.get() && error != null) chooserFinished(false, error)
+        }
+    }
+
+    private fun autoConnect(manualRetry: Boolean = false) {
+        if (!connectionProfiles.autoEnabled && !manualRetry) return
+        val generation = connectGeneration.incrementAndGet()
+        connectExecutor.execute {
+            val candidates = connectionProfiles.candidates(currentWifiSsid())
+            if (candidates.isEmpty()) {
+                if (generation == connectGeneration.get()) chooserFinished(false,
+                    "没有可安全自动尝试的入口。陌生 Wi-Fi 不会自动访问明文局域网地址；请手动连接或绑定当前 Wi-Fi。")
+                return@execute
+            }
+            for (candidate in candidates) {
+                if (generation != connectGeneration.get()) return@execute
+                chooserProgress(candidate.id, "正在检测 ${candidate.name}…")
+                if (connectCandidate(candidate, generation) == null) return@execute
+            }
+            if (generation == connectGeneration.get())
+                chooserFinished(false, "已尝试所有已保存入口，请手动选择或编辑地址")
         }
     }
 
     private fun verifyAndOpen(rawEndpoint: String, rawKey: String, fallbackToLogin: Boolean) {
-        val endpoint = rawEndpoint.trim()
-        val key = rawKey.trim()
-        val mode = secureStore.connectionMode
-
-        thread {
-            try {
-                if (mode == "tailscale") {
-                    tailscaleController.ensureStarted()
-                    tailscaleController.setTargetEndpoint(endpoint)
-                    val st = tailscaleController.getStatus()
-                    if (st.state != "Running") {
-                        runOnUiThread {
-                            if (fallbackToLogin) showLoginGate()
-                            webView.evaluateJavascript(
-                                "window.onConnectResult && window.onConnectResult(false, 'Tailscale 尚未连接，请先完成授权或重连');",
-                                null
-                            )
-                        }
-                        return@thread
-                    }
-                }
-
-                // 1. Check /health first
-                val healthConn = tailscaleController.openMikuchinConnection(mode, endpoint, "/health", key)
-                val healthCode = healthConn.responseCode
-                healthConn.disconnect()
-                if (healthCode !in 200..299) {
-                    val msg = "无法访问服务健康检查 (HTTP $healthCode)"
-                    runOnUiThread {
-                        if (fallbackToLogin) showLoginGate()
-                        webView.evaluateJavascript("window.onConnectResult && window.onConnectResult(false, ${JSONObject.quote(msg)});", null)
-                    }
-                    return@thread
-                }
-
-                // 2. Verify API Key and fetch recent sessions via /v1/strata/sessions
-                val conn = tailscaleController.openMikuchinConnection(mode, endpoint, "/v1/strata/sessions", key)
-                val code = conn.responseCode
-                val body = if (code in 200..299) {
-                    conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                } else ""
-                conn.disconnect()
-
-                if (code in 200..299) {
-                    var latestSessionId = ""
-                    try {
-                        val json = JSONObject(body)
-                        val arr = json.optJSONArray("sessions")
-                        var maxUpdated = -1.0
-                        if (arr != null) {
-                            for (i in 0 until arr.length()) {
-                                val item = arr.optJSONObject(i) ?: continue
-                                val updated = item.optDouble("updated", 0.0)
-                                if (updated > maxUpdated) {
-                                    maxUpdated = updated
-                                    latestSessionId = item.optString("id", "")
-                                }
-                            }
-                        }
-                    } catch (_: Exception) {}
-
-                    secureStore.activeEndpoint = endpoint
-                    secureStore.apiKey = key
-                    secureStore.latestSessionId = latestSessionId
-                    secureStore.isConnected = true
-
-                    val entryUrl = tailscaleController.buildWebViewEntryUrl(mode, endpoint)
-                    runOnUiThread {
-                        webView.loadUrl(entryUrl)
-                    }
-                } else {
-                    val msg = if (code == 401) "key 错误或未填写" else "连接失败 (HTTP $code)"
-                    runOnUiThread {
-                        if (fallbackToLogin) showLoginGate()
-                        webView.evaluateJavascript("window.onConnectResult && window.onConnectResult(false, ${JSONObject.quote(msg)});", null)
-                    }
-                }
-            } catch (_: Exception) {
-                val errHint = if (mode == "tailscale") {
-                    "无法通过 Tailnet 连接到目标接口，请检查节点 ACL 授权与服务端状态"
-                } else {
-                    "无法连接到接口，请检查地址与网络"
-                }
-                runOnUiThread {
-                    if (fallbackToLogin) showLoginGate()
-                    webView.evaluateJavascript("window.onConnectResult && window.onConnectResult(false, ${JSONObject.quote(errHint)});", null)
-                }
-            }
+        // Legacy Android settings 'Save & reconnect' still works. Update the
+        // explicitly selected entry rather than overwriting other endpoints.
+        val current = connectionProfiles.byId(connectionProfiles.preferredId)
+        try {
+            val profile = connectionProfiles.upsert(current?.id, current?.name ?: "自定义入口",
+                secureStore.connectionMode, rawEndpoint, rawKey)
+            selectProfile(profile.id)
+        } catch (e: IllegalArgumentException) {
+            chooserFinished(false, e.message ?: "无效连接地址")
+            if (fallbackToLogin) showLoginGate(manual = true)
         }
     }
 
     inner class AndroidBridge {
+        @JavascriptInterface
+        fun getConnectionProfiles(): String {
+            if (!isChooserPage()) return "{}"
+            return connectionProfiles.snapshot(currentWifiSsid())
+        }
+
+        @JavascriptInterface
+        fun getProfileKey(id: String): String {
+            // Profile credentials are only editable on the bundled login page,
+            // never exposed to a potentially compromised remote WebView page.
+            if (!isChooserPage()) return ""
+            return connectionProfiles.byId(id)?.let {connectionProfiles.keyOf(it)} ?: ""
+        }
+
+        @JavascriptInterface
+        fun saveConnectionProfile(id: String, name: String, mode: String,
+                                  endpoint: String, key: String): String {
+            if (!isChooserPage()) return "{}"
+            return try {
+                val profile = connectionProfiles.upsert(id.ifBlank {null}, name, mode, endpoint, key)
+                JSONObject().put("ok", true).put("id", profile.id)
+                    .put("profiles", JSONObject(connectionProfiles.snapshot(currentWifiSsid()))).toString()
+            } catch (e: Exception) {
+                JSONObject().put("ok", false).put("error", e.message ?: "保存入口失败").toString()
+            }
+        }
+
+        @JavascriptInterface
+        fun deleteConnectionProfile(id: String): String {
+            if (!isChooserPage()) return "{}"
+            connectGeneration.incrementAndGet()
+            connectionProfiles.delete(id)
+            return connectionProfiles.snapshot(currentWifiSsid())
+        }
+
+        @JavascriptInterface
+        fun setConnectionAutoEnabled(enabled: Boolean) {
+            if (!isChooserPage()) return
+            connectionProfiles.autoEnabled = enabled
+            if (!enabled) connectGeneration.incrementAndGet()
+        }
+
+        @JavascriptInterface
+        fun connectProfile(id: String) {
+            if (!isChooserPage()) return
+            selectProfile(id)
+        }
+
+        @JavascriptInterface
+        fun startAutoConnect() {
+            if (!isChooserPage()) return
+            autoConnect()
+        }
+
+        @JavascriptInterface
+        fun retryAutoConnect() {
+            if (!isChooserPage()) return
+            autoConnect(manualRetry = true)
+        }
+
+        @JavascriptInterface
+        fun cancelAutoConnect() {
+            if (!isChooserPage()) return
+            connectGeneration.incrementAndGet()
+        }
+
+        @JavascriptInterface
+        fun bindCurrentWifi(id: String) {
+            if (!isChooserPage()) return
+            if (connectionProfiles.byId(id) == null) return
+            runOnUiThread {
+                if (ContextCompat.checkSelfPermission(this@MainActivity,
+                        Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    pendingWifiBindId = id
+                    wifiPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                } else {
+                    val wifi = currentWifiSsid()
+                    val ok = wifi != null && connectionProfiles.bindWifi(id, wifi)
+                    emitWifiResult(ok, if (ok) "已绑定 Wi-Fi：$wifi" else
+                        "当前无法读取 SSID，请检查 Wi-Fi、定位权限及系统定位开关")
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun clearWifiMemory(id: String): String {
+            if (!isChooserPage()) return "{}"
+            connectionProfiles.clearWifi(id)
+            return connectionProfiles.snapshot(currentWifiSsid())
+        }
+
+        @JavascriptInterface
+        fun showConnectionChooser() {
+            if (!isCallerAuthorized()) return
+            connectGeneration.incrementAndGet()
+            showLoginGate(manual = true)
+        }
+
         @JavascriptInterface
         fun getSavedEndpoint(): String {
             if (!isCallerAuthorized()) return ""
@@ -512,8 +685,9 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun disconnect() {
             if (!isCallerAuthorized()) return
+            connectGeneration.incrementAndGet()
             secureStore.isConnected = false
-            showLoginGate()
+            showLoginGate(manual = true)
         }
     }
 }

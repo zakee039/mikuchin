@@ -43,7 +43,11 @@
       name.textContent = item.name;
       const meta = document.createElement("span");
       meta.className = "muted small";
-      meta.textContent = item.model + (item.proxy ? " · 代理" : "") + (item.has_key ? "" : " · 未配置密钥");
+      meta.textContent = item.model + (item.proxy ? " · 代理" : " · 直连") +
+        " · 并发 " + (item.concurrency || 1) +
+        " · 连接 " + (item.connect_timeout_seconds || 15) + "s" +
+        " / 读取 " + (item.timeout_seconds || 240) + "s" +
+        (item.has_key ? "" : " · 未配置密钥");
       detail.append(name, meta);
       const edit = document.createElement("button");
       edit.type = "button";edit.className="st-btn st-btn--secondary";edit.textContent="编辑";
@@ -89,6 +93,9 @@
     get("mk-api-seed").checked = !!item?.seed;
     get("mk-api-steps").checked = !!item?.steps;
     get("mk-api-sizes").value = item?.sizes || "standard";
+    get("mk-api-concurrency").value = String(item?.concurrency || 1);
+    get("mk-api-connect-timeout").value = String(item?.connect_timeout_seconds || 15);
+    get("mk-api-timeout").value = String(item?.timeout_seconds || 240);
     for (const radio of document.querySelectorAll('input[name="mk-api-ref"]'))
       radio.checked = radio.value === (item?.reference_mode || "multi");
     get("mk-api-backdrop").hidden = false;
@@ -221,6 +228,9 @@
       negative: get("mk-api-negative").checked,
       seed: get("mk-api-seed").checked, steps: get("mk-api-steps").checked,
       sizes: get("mk-api-sizes").value,
+      concurrency: Number(get("mk-api-concurrency").value),
+      connect_timeout_seconds: Number(get("mk-api-connect-timeout").value),
+      timeout_seconds: Number(get("mk-api-timeout").value),
     };
     if (!service.id) delete service.id;
     try {

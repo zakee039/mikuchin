@@ -3,8 +3,11 @@
 Run with: python -m serve.test_mikuchin_image_jobs
 """
 import io
+import os
+import base64
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -14,7 +17,7 @@ from unittest import mock
 
 from PIL import Image
 
-from serve import gallery, image_jobs
+from serve import gallery, image_jobs, image_api_services
 from serve.session_v1 import SessionV1
 
 
@@ -29,6 +32,10 @@ class DesktopJobsTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
+        override = mock.patch.dict(os.environ, {
+            "MIKUCHIN_IMAGE_SERVICES_FILE": str(root / "test-api-services.json")})
+        override.start()
+        self.addCleanup(override.stop)
         (root / "generated-images").mkdir()
         # This suite only checks newly indexed gallery files, not history imports.
         with sqlite3.connect(root / "gallery-index.sqlite3") as db:
@@ -47,7 +54,7 @@ class DesktopJobsTest(unittest.TestCase):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             status = image_jobs.snapshot(self.svc, ident)
-            if status["state"] not in ("queued", "working"):
+            if status["state"] not in ("queued", "working", "running"):
                 return status
             time.sleep(.025)
         self.fail("detached job did not complete")
@@ -82,7 +89,360 @@ class DesktopJobsTest(unittest.TestCase):
             begun = time.monotonic()
             job = image_jobs.submit(self.svc, {"kind": "generate", "request": {"prompt": "a cat"}})
             self.assertLess(time.monotonic() - begun, .10)
-            self.assertEqual(self._wait(job["id"])["state"], "done")
+            self.assertEqual(self._wait(job["id"])["state"], "success")
+
+    def test_generation_timer_starts_at_submit_and_stops_on_success(self):
+        """Editing a draft for a long time must not count as generation time."""
+        drafted = image_jobs.submit(self.svc, {"action":"draft", "request":{"prompt":"a landscape"}})
+        self.assertIsNone(drafted["started_at"])
+        self.assertIsNone(drafted["finished_at"])
+        original_created = drafted["created"]
+        retouched = image_jobs.submit(self.svc, {"action":"draft", "id":drafted["id"]})
+        self.assertEqual(retouched["id"], drafted["id"])
+        self.assertIsNone(retouched["started_at"])
+        self.assertIsNone(retouched["elapsed_s"])
+        waiting = threading.Event()
+        release = threading.Event()
+        def fake_generate(*_args):
+            waiting.set()
+            self.assertTrue(release.wait(timeout=4))
+            return {"image_ids":[self.original_id]}
+        clicked = time.time() - 2.0
+        with mock.patch.object(image_jobs, "_generate", side_effect=fake_generate):
+            running = image_jobs.submit(self.svc, {"action":"activate", "id":drafted["id"],
+                "client_started_at":clicked})
+            self.assertEqual(running["state"], "running")
+            self.assertEqual(running["id"], drafted["id"])
+            self.assertAlmostEqual(running["started_at"], clicked, delta=.2)
+            self.assertNotEqual(running["started_at"], original_created)
+            self.assertIsNone(running["finished_at"])
+            self.assertTrue(waiting.wait(3))
+            in_flight = image_jobs.snapshot(self.svc, running["id"])
+            self.assertGreater(in_flight["elapsed_s"], 1.5)
+            release.set()
+            finished = self._wait(running["id"])
+        self.assertEqual(finished["state"], "success")
+        self.assertIsNotNone(finished["finished_at"])
+        self.assertAlmostEqual(finished["elapsed_s"],
+            finished["finished_at"] - clicked, delta=.2)
+        time.sleep(.06)
+        again = image_jobs.snapshot(self.svc, running["id"])
+        self.assertEqual(again["finished_at"], finished["finished_at"])
+        self.assertEqual(again["elapsed_s"], finished["elapsed_s"])
+
+    def test_failed_and_retried_jobs_have_independent_start_finish_timestamps(self):
+        with mock.patch.object(image_jobs, "_generate", side_effect=RuntimeError("upstream broke")):
+            failed_id = image_jobs.submit(self.svc, {"kind":"generate",
+                "request":{"prompt":"try again"}})["id"]
+            failed = self._wait(failed_id)
+        self.assertEqual(failed["state"], "failed")
+        self.assertIsNotNone(failed["started_at"])
+        self.assertIsNotNone(failed["finished_at"])
+        clicked = time.time() - 1.0
+        with mock.patch.object(image_jobs, "_generate", return_value={"image_ids":[self.original_id]}):
+            retried = image_jobs.submit(self.svc, {"action":"retry", "id":failed_id,
+                "client_started_at":clicked})
+            done = self._wait(retried["id"])
+        self.assertNotEqual(done["id"], failed_id)
+        self.assertAlmostEqual(done["started_at"], clicked, delta=.2)
+        self.assertIsNotNone(done["finished_at"])
+        still_failed = image_jobs.snapshot(self.svc, failed_id)
+        self.assertEqual(still_failed["state"], "failed")
+        self.assertEqual(still_failed["finished_at"], failed["finished_at"])
+        self.assertEqual(still_failed["started_at"], failed["started_at"])
+
+    def test_old_job_does_not_fabricate_a_click_timestamp(self):
+        image_jobs._initialize(self.svc)
+        with image_jobs._db(self.svc) as db:
+            db.execute("INSERT INTO jobs(id,kind,state,phase,created,updated) VALUES(?,?,?,?,?,?)",
+                ("img-" + "a"*24, "generate", "success", "done", 123.0, 900.0))
+        legacy = image_jobs.snapshot(self.svc, "img-" + "a"*24)
+        self.assertIsNone(legacy["started_at"])
+        self.assertIsNone(legacy["finished_at"])
+        self.assertIsNone(legacy["elapsed_s"])
+        self.assertTrue(legacy["legacy_timer_unknown"])
+
+    def test_api_pool_honors_per_service_concurrency_without_blocking_local(self):
+        active, peak = 0, 0
+        lock = threading.Lock()
+        provider = "api-abcdef0011223344"
+        def fake_generate(_svc, request, _id):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                time.sleep(.20)
+                return {"image_ids": [self.original_id], "model": "fake"}
+            finally:
+                with lock:
+                    active -= 1
+
+        with mock.patch.object(image_jobs.api_images, "get", return_value={"concurrency":2}), \
+             mock.patch.object(image_jobs, "_generate", side_effect=fake_generate):
+            ids = [image_jobs.submit(self.svc, {"kind":"generate",
+                    "request":{"strata_image_profile":provider,
+                               "prompt":f"image {i}", "size":"1024x1024"}})["id"] for i in range(4)]
+            results = [self._wait(i) for i in ids]
+        self.assertTrue(all(r["state"] == "success" for r in results), results)
+        self.assertEqual(peak, 2, "per-service concurrency must never exceed the configured cap")
+        self.assertTrue(all(r["profile_id"] == provider for r in results))
+        self.assertTrue(all(r["requested_size"] == "1024x1024" for r in results))
+        self.assertTrue(all(r["prompt_summary"].startswith("image ") for r in results))
+
+    def test_twenty_api_requests_can_run_concurrently(self):
+        """Regression: the old global 12-job cap made the 20 setting fake."""
+        provider = "api-abcdef0011223344"
+        barrier = threading.Barrier(20)
+        active = peak = 0
+        lock = threading.Lock()
+
+        def fake_generate(_svc, _request, _id):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                barrier.wait(timeout=7)
+                time.sleep(.02)
+                return {"image_ids": [self.original_id]}
+            finally:
+                with lock:
+                    active -= 1
+
+        with mock.patch.object(image_jobs.api_images, "get", return_value={"concurrency":20}), \
+             mock.patch.object(image_jobs, "_generate", side_effect=fake_generate):
+            ids = [image_jobs.submit(self.svc, {"kind":"generate", "request":{
+                "strata_image_profile":provider, "prompt":f"test image {i}"}})["id"]
+                   for i in range(20)]
+            results = [self._wait(i) for i in ids]
+        self.assertTrue(all(r["state"] == "success" for r in results), results)
+        self.assertEqual(peak, 20)
+
+    def test_separate_api_profiles_do_not_block_each_other(self):
+        """A slow provider at its limit must not stall a different provider."""
+        profiles = ("api-abcdef0011223344", "api-1234567890abcdef")
+        barrier = threading.Barrier(2)
+        started = set()
+        lock = threading.Lock()
+
+        def fake_generate(_svc, request, _id):
+            with lock:
+                started.add(request["strata_image_profile"])
+            barrier.wait(timeout=5)
+            return {"image_ids": [self.original_id]}
+
+        with mock.patch.object(image_jobs.api_images, "get", return_value={"concurrency":1}), \
+             mock.patch.object(image_jobs, "_generate", side_effect=fake_generate):
+            job_ids = [image_jobs.submit(self.svc, {"kind":"generate", "request":{
+                "strata_image_profile":profile, "prompt":"isolated task"}})["id"]
+                for profile in profiles]
+            results = [self._wait(ident) for ident in job_ids]
+        self.assertEqual(started, set(profiles))
+        self.assertTrue(all(item["state"] == "success" for item in results), results)
+
+    def test_studio_only_listing_and_safe_record_cleanup(self):
+        """Filtering must not let chat/4x records evict 40 studio rows."""
+        image_jobs._initialize(self.svc)
+        now = time.time()
+        entries = [
+            ("img-" + "b"*24, "generate", "success"),
+            ("img-" + "c"*24, "generate", "failed"),
+            ("img-" + "d"*24, "chat", "done"),
+            ("img-" + "e"*24, "upscale", "done"),
+            ("img-" + "f"*24, "generate", "running"),
+        ]
+        with image_jobs._db(self.svc) as db:
+            db.executemany("INSERT INTO jobs(id,kind,state,phase,created,updated) "
+                           "VALUES(?,?,?,?,?,?)",
+                           [(ident,kind,state,state,now,now) for ident,kind,state in entries])
+        self.assertEqual(len(image_jobs.snapshot(self.svc,kind="generate")["jobs"]), 3)
+        self.assertEqual(image_jobs.delete_records(self.svc,job_id=entries[4][0])["deleted"],0)
+        self.assertEqual(image_jobs.delete_records(self.svc,job_id=entries[1][0])["deleted"],1)
+        self.assertEqual(image_jobs.delete_records(self.svc,clear_completed=True)["deleted"],1)
+        self.assertEqual(len(image_jobs.snapshot(self.svc,kind="generate")["jobs"]),1)
+        self.assertEqual(len(image_jobs.snapshot(self.svc,kind="chat")["jobs"]),1)
+        self.assertEqual(len(image_jobs.snapshot(self.svc,kind="upscale")["jobs"]),1)
+        self.assertTrue((self.svc.session_v1.root / "generated-images" /
+                         (self.original_id + ".png")).is_file())
+        with self.assertRaises(ValueError):
+            image_jobs.snapshot(self.svc,kind="nonsense")
+
+    def test_older_active_request_stays_in_list_past_recent_forty(self):
+        image_jobs._initialize(self.svc)
+        with image_jobs._db(self.svc) as db:
+            active_id = "img-" + "b"*24
+            db.execute("INSERT INTO jobs(id,kind,state,phase,created,updated) "
+                       "VALUES(?,?,?,?,?,?)",
+                       (active_id,"generate","queued","queued",1,1))
+            for i in range(45):
+                db.execute("INSERT INTO jobs(id,kind,state,phase,created,updated) "
+                           "VALUES(?,?,?,?,?,?)",
+                           ("img-"+f"{i+1:024x}","generate","success","done",i+2,i+2))
+        jobs = image_jobs.snapshot(self.svc,kind="generate")["jobs"]
+        self.assertEqual(len(jobs),46)
+        self.assertIn(active_id, {job["id"] for job in jobs})
+
+    def test_service_concurrency_bounds_and_default(self):
+        base = {"name":"test", "base_url":"https://img.example.net/v1",
+                "model":"test-image", "api_key":"test", "reference_mode":"none",
+                "sizes":"square"}
+        self.assertEqual(image_api_services.save_service(self.svc,base)["concurrency"],1)
+        for count in (1,20):
+            self.assertEqual(image_api_services.save_service(self.svc,{
+                **base,"concurrency":count})["concurrency"],count)
+        for count in (0,21,1.5,True,"20"):
+            with self.subTest(concurrency=count), self.assertRaises(image_api_services.ImageServiceError):
+                image_api_services.save_service(self.svc,{**base,"concurrency":count})
+
+    def test_draft_edit_same_id_non_draft_edit_copies_and_retry_creates_another(self):
+        """Exact final UI contract, including immutable original tasks."""
+        photo = base64.b64encode(png((12,8))).decode("ascii")
+        request = {"prompt":"original full prompt", "natural_prompt":"中文原文",
+                   "negative_prompt":"negative test", "steps":9, "seed":21,
+                   "size":"768x1024", "strata_upscale":"off",
+                   "strata_image_profile":"default", "strata_reference_mode":"single",
+                   "strata_reference_assets":[{"data_url":"data:image/png;base64,"+photo,
+                                               "name":"reference one.png"}]}
+        drafted = image_jobs.submit(self.svc,{"action":"draft","request":request})
+        self.assertEqual(drafted["state"],"draft")
+        self.assertEqual(drafted["request"]["negative_prompt"],"negative test")
+        ref = drafted["request"]["strata_reference_assets"][0]
+        self.assertNotIn("data_url",ref)
+        self.assertEqual(ref["name"],"reference one.png")
+        self.assertEqual(image_jobs.reference_bytes(self.svc,ref["id"])[0],png((12,8)))
+        self.assertNotIn(photo[:80],str(drafted))
+        created_at = drafted["created"]
+        time.sleep(.018)
+        touched = image_jobs.submit(self.svc,{"action":"draft","id":drafted["id"]})
+        self.assertEqual(touched["id"],drafted["id"])
+        self.assertGreater(touched["updated"],drafted["updated"])
+        self.assertEqual(touched["created"],created_at)
+        changed = {**drafted["request"],"prompt":"edited once", "seed":33}
+        saved = image_jobs.submit(self.svc,{"action":"save_draft", "id":drafted["id"],
+                                            "request":changed})
+        self.assertEqual(saved["id"],drafted["id"])
+        self.assertEqual(saved["request"]["seed"],33)
+        with mock.patch.object(image_jobs,"_generate",return_value={"image_ids":[self.original_id]}):
+            executing = image_jobs.submit(self.svc,{"action":"activate","id":drafted["id"]})
+            self.assertEqual(executing["id"],drafted["id"])
+            self.assertEqual(executing["state"],"running")
+            completed = self._wait(drafted["id"])
+        self.assertEqual(completed["state"],"success")
+        self.assertEqual(completed["request"]["seed"],33)
+        with self.assertRaises(ValueError):
+            image_jobs.submit(self.svc,{"action":"save_draft","id":completed["id"],"request":changed})
+        source_bytes = image_jobs.reference_bytes(self.svc,ref["id"])[0]
+        copy = image_jobs.submit(self.svc,{"action":"draft","copy_id":completed["id"]})
+        self.assertNotEqual(copy["id"],completed["id"])
+        self.assertEqual(copy["state"],"draft")
+        self.assertEqual(copy["request"],completed["request"])
+        image_jobs.submit(self.svc,{"action":"save_draft","id":copy["id"],
+            "request":{**copy["request"],"prompt":"copied then modified"}})
+        self.assertEqual(image_jobs.snapshot(self.svc,completed["id"])["request"]["prompt"],"edited once")
+        self.assertEqual(image_jobs.reference_bytes(self.svc,ref["id"])[0],source_bytes)
+        with mock.patch.object(image_jobs,"_generate",return_value={"image_ids":[self.original_id]}):
+            retried = image_jobs.submit(self.svc,{"action":"retry","id":completed["id"]})
+            self.assertEqual(retried["state"],"running")
+            self.assertNotIn(retried["id"],(copy["id"],completed["id"]))
+            self.assertEqual(self._wait(retried["id"])["state"],"success")
+        self.assertEqual(image_jobs.snapshot(self.svc,completed["id"])["request"],completed["request"])
+
+    def test_active_task_edit_copies_without_mutation_or_retry(self):
+        original = image_jobs.submit(self.svc,{"action":"draft","request":{
+            "prompt":"keep active","size":"768x768"}})
+        with mock.patch.object(image_jobs,"_generate",side_effect=lambda *_: (time.sleep(.16) or
+                                                            {"image_ids":[self.original_id]})):
+            running=image_jobs.submit(self.svc,{"action":"activate","id":original["id"]})
+            copy=image_jobs.submit(self.svc,{"action":"draft","copy_id":original["id"]})
+            self.assertEqual(copy["state"],"draft")
+            self.assertNotEqual(copy["id"],running["id"])
+            with self.assertRaises(ValueError):
+                image_jobs.submit(self.svc,{"action":"retry","id":running["id"]})
+            self.assertEqual(self._wait(running["id"])["state"],"success")
+
+    def test_limit_100_preserves_drafts_and_running(self):
+        image_jobs._initialize(self.svc)
+        with image_jobs._db(self.svc) as db:
+            for i in range(100):
+                db.execute("INSERT INTO jobs(id,kind,state,phase,created,updated) "
+                    "VALUES(?,?,?,?,?,?)", ("img-"+f"{i+1:024x}","generate",
+                    "draft" if i==0 else "running" if i==1 else "success",
+                    "historical",i+1,i+1))
+        fresh=image_jobs.submit(self.svc,{"action":"draft","request":{"prompt":"new"}})
+        self.assertEqual(fresh["state"],"draft")
+        records=image_jobs.snapshot(self.svc,kind="generate")["jobs"]
+        self.assertEqual(len(records),100)
+        self.assertIn("img-"+f"{1:024x}",{row["id"] for row in records})
+        self.assertIn("img-"+f"{2:024x}",{row["id"] for row in records})
+        self.assertNotIn("img-"+f"{3:024x}",{row["id"] for row in records})
+
+    def test_full_capacity_never_trims_the_edit_or_retry_source(self):
+        original = image_jobs.submit(self.svc,{"action":"draft","request":{"prompt":"valuable original"}})
+        with mock.patch.object(image_jobs,"_generate",return_value={"image_ids":[self.original_id]}):
+            image_jobs.submit(self.svc,{"action":"activate","id":original["id"]})
+            self.assertEqual(self._wait(original["id"])["state"],"success")
+        # One eligible success source plus 99 protected drafts fills 100 slots.
+        with image_jobs._db(self.svc) as db:
+            for i in range(99):
+                db.execute("INSERT INTO jobs(id,kind,state,phase,created,updated) VALUES(?,?,?,?,?,?)",
+                           ("img-"+f"{i+2:024x}","generate","draft","saved",i+2,i+2))
+        with self.assertRaisesRegex(ValueError,"100"):
+            image_jobs.submit(self.svc,{"action":"draft","copy_id":original["id"]})
+        with self.assertRaisesRegex(ValueError,"100"):
+            image_jobs.submit(self.svc,{"action":"retry","id":original["id"]})
+        self.assertEqual(image_jobs.snapshot(self.svc,original["id"])["state"],"success")
+        self.assertEqual(image_jobs.snapshot(self.svc,original["id"])["request"]["prompt"],
+                         "valuable original")
+
+    def test_api_service_timeout_and_key_are_independent_and_private(self):
+        service = image_api_services.save_service(self.svc, {
+            "name":"test provider", "base_url":"https://img.example.net/v1",
+            "model":"test-image", "api_key":"secret-for-test-only",
+            "reference_mode":"none", "sizes":"square", "proxy":False,
+            "concurrency":2, "timeout_seconds":710,
+        })
+        self.assertEqual(service["concurrency"], 2)
+        self.assertEqual(service["timeout_seconds"], 710)
+        self.assertEqual(service["connect_timeout_seconds"], 15)
+        self.assertNotIn("api_key", service)
+        recorded = []
+        @contextmanager
+        def fake_session(_service):
+            class Session:
+                def post(self, url, **kwargs):
+                    recorded.append(kwargs["timeout"])
+                    return SimpleNamespace(ok=True, json=lambda:{"data":[{
+                        "b64_json":base64.b64encode(png((12,8))).decode("ascii")}]})
+            yield Session()
+        with mock.patch.object(image_api_services,"_session", fake_session):
+            out = image_api_services.generate(self.svc, {
+                "prompt":"tiny image", "size":"1024x1024", "strata_image_profile":service["id"]})
+        self.assertEqual(recorded, [(15,710)])
+        self.assertTrue(out["strata"]["image_file"])
+        updated = image_api_services.save_service(self.svc, {
+            "id":service["id"], "name":"test provider",
+            "base_url":"https://img.example.net/v1", "model":"test-image",
+            "reference_mode":"none", "sizes":"square", "proxy":False,
+            "concurrency":2, "timeout_seconds":710,
+            "connect_timeout_seconds":30,
+        })
+        self.assertEqual(updated["connect_timeout_seconds"], 30)
+        self.assertTrue(updated["has_key"], "updating timeout must preserve the API secret")
+        for invalid in (4,61,True,"30"):
+            with self.subTest(connect_timeout=invalid), self.assertRaises(image_api_services.ImageServiceError):
+                image_api_services.save_service(self.svc, {
+                    "id":service["id"], "name":"test provider",
+                    "base_url":"https://img.example.net/v1", "model":"test-image",
+                    "reference_mode":"none", "sizes":"square", "proxy":False,
+                    "concurrency":2, "timeout_seconds":710,
+                    "connect_timeout_seconds":invalid,
+                })
+        with self.assertRaises(image_api_services.ImageServiceError):
+            image_api_services.save_service(self.svc, {
+                "name":"test", "base_url":"https://img.example.net/v1",
+                "model":"test-image", "api_key":"secret", "reference_mode":"none",
+                "sizes":"square", "concurrency":21, "timeout_seconds":710})
 
     def test_interrupted_service_job_becomes_interrupted_not_fake_running(self):
         path = self.svc.session_v1.root / "image-jobs.sqlite3"
@@ -92,7 +452,7 @@ class DesktopJobsTest(unittest.TestCase):
             db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)",
                        ("img-" + "b"*24, "generate", "", "working", "running", "{}", "", 1, 1))
         db.close()
-        self.assertEqual(image_jobs.snapshot(self.svc, "img-" + "b"*24)["state"], "interrupted")
+        self.assertEqual(image_jobs.snapshot(self.svc, "img-" + "b"*24)["state"], "failed")
 
 
 class DetachedChatRecoveryTest(unittest.TestCase):
