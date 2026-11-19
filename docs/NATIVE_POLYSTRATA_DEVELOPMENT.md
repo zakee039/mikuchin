@@ -70,6 +70,24 @@ Markdown reference path.
 - `characters.js` already composes character identity, worldbook snippets and workflow instructions into the **full system prompt sent to official PolyStrata**. This does not turn external `/v1/chat/completions` calls into a server-side role injector; separate non-browser callers must still construct their own context.
 - Character module unit tests were carried forward and adapted as native Gateway tests; HTTP tests now cover locked-after-first-message role assignment, Markdown lookup, workflow first-turn initialization/version freeze and protected reference images. The one-command official-process smoke test also verifies a character + Markdown + workflow through the Gateway.
 
+## Online image API + task history + indexed gallery (first implementation)
+
+Mikuchin owns `backend/gateway/image_providers.py`, `image_jobs.py` and
+`gallery.py`. These modules are **outside** the official engine's Git submodule.
+They currently run in the Gateway's **background worker thread**, not yet a
+separately supervised Image Worker process. The model/GPU resource arbiter and
+local Qwen-Image/LoRA/4x worker are not implemented.
+
+- `GET/POST /v1/mikuchin/image-api-services` saves/list/deletes online OpenAI Images-compatible services and probes model catalogs on explicit request. Service credentials live in the isolated Native data root under `images/config/image-api-services.json`; returned public service metadata contains `has_key`, never the API key. SOCKS proxy selection needs PySocks from `backend/gateway/requirements.txt`.
+- `GET /v1/mikuchin/image-models` lists configured **online API** image models only. It deliberately does not advertise missing local engines/LoRA models. Nine fixed standards (including 1536×1536), local preset sizes and custom 16-aligned sizes are enforced according to provider configuration.
+- `GET/POST /v1/mikuchin/image-jobs` supports detached, SQLite-backed drafts, edit, copy, activate, retry, list, delete and clear completed records. **Draft saving never causes a paid API call. Only explicit activation or retry enters the queue.** Task capacity is bounded to 80; this first worker serializes generation even if a provider advertises greater concurrency. Browser disconnect does not automatically cancel accepted tasks. Service restart converts uncertain `running` tasks to `failed` **without replay**, warning the user to check upstream billing before manually retrying.
+- A failed task retry inserts the replacement `running` record and deletes its predecessor in **one SQLite transaction**, only after preparing/validating the new job. Successful-task retries keep the old success record. A failed validation/queue rejection cannot delete the old failed record.
+- Up to 8 reference PNG/JPEG/WebP images are stored using SHA-256 content-addressed files outside SQLite. Credentials and raw image bytes are never added to job rows. Existing reference IDs work across draft edits and retries. Generated PNGs are independent files under `images/generated-images` and do not disappear when users delete history records.
+- `GET/POST /v1/mikuchin/gallery`, `GET /v1/mikuchin/gallery/item`, and authenticated image/thumbnail GETs use a private SQLite gallery index; NSFW flags, multiple selection/delete and existing variant operations are separate from task records. Neither old gallery databases nor old session folders are imported.
+- **Not ported**: Qwen-Image local/uncensored paths, LoRA, image-to-image local workers, GPU sharing, 4× upscaling, chat-triggered image tool, generating-image-to-LLM vision feedback, and client runtime packaging. `strata_upscale=4x` is rejected instead of silently claiming success. Full browser UI still requires all its non-image settings endpoints.
+- **UI authentication gap**: Gateway's image/file endpoints currently require Bearer authorization, but raw browser `<img src="...">` requests cannot attach a Bearer header. They are verified with authenticated HTTP clients only. Before enabling the full browser/gallery UI, update its image loader to use authenticated `fetch` and local Blob URLs (or design a bounded, audited capability mechanism); **do not relax Gateway authentication merely to show thumbnails**.
+- Local tests use a **localhost fake OpenAI Images server** to exercise actual HTTP, base64 response decoding, PNG writing, gallery registration and task/gallery deletion separately. The smoke script only creates a disposable service and an **offline draft**; it never activates a paid request. Real third-party image APIs have not been contacted.
+
 ## One-time setup in a new worktree
 
 ```powershell
@@ -91,7 +109,7 @@ An isolated Python **3.12** environment with the official pinned Python requirem
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-native-transport.ps1
 ```
 
-This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240` and the standalone Gateway on `127.0.0.1:15249`, using two freshly generated API keys inherited as environment variables. It verifies `/health`, `/v1/models`, Chat Completions, SSE streaming, fresh session CRUD, role assignment and immutability, character Markdown retrieval, one-time workflow initialization, and HTTP 501 for unported answer-budget semantics. Both children are stopped and disposable conversation data deleted when the script exits. The original stable port **15239 is neither opened nor restarted**. A successful mock test does not demonstrate GPU throughput or KV cache speed.
+This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240` and the standalone Gateway on `127.0.0.1:15249`, using two freshly generated API keys inherited as environment variables. It verifies `/health`, `/v1/models`, Chat Completions, SSE streaming, fresh session CRUD, role assignment and immutability, character Markdown retrieval, one-time workflow initialization, online image service registry, **offline draft** and empty gallery, and HTTP 501 for unported answer-budget semantics. Both children are stopped and disposable conversation data deleted when the script exits. The original stable port **15239 is neither opened nor restarted**. A successful mock test does not demonstrate GPU throughput or KV cache speed.
 
 For an isolated Gateway smoke test after official engine setup:
 
@@ -105,7 +123,7 @@ Never hard-code real keys in scripts, commit them, or copy existing Mikuchin sec
 
 ## Current Gateway contract (first milestone)
 
-Supported: authorized `GET /health`, `GET /v1/models`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session, character, Markdown/workflow, role reference and global sampling APIs are handled by Mikuchin's own stores and **never** forwarded upstream.
+Supported: authorized `GET /health`, `GET /v1/models`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session, character, Markdown/workflow, role reference, online image services/jobs/gallery, and global sampling APIs are handled by Mikuchin's own stores and **never** forwarded upstream. Generated image URLs under `/v1/images/files/{id}.png` are served from the Native gallery when indexed there, with the official server as fallback.
 
 Explicitly blocked (HTTP 501): `strata_image_tool`, `answer_budget_tokens`. The UI-only `strata_session_id` and `mikuchin_stateless` are validated and stripped from otherwise full-context inference requests. The old `lock_kv` API returns HTTP 410 (retired). No `/slots`, `/config`, direct model control or other private application endpoints are exposed to remote clients.
 

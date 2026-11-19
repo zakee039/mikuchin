@@ -1,0 +1,5 @@
+# Mikuchin-owned image provider/thumbnail layer. Install separately from the
+# upstream PolyStrata engine dependencies; never patch their requirements.
+Pillow==12.3.0
+requests==2.32.5
+PySocks==1.7.1

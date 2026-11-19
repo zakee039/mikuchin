@@ -21,10 +21,14 @@ try:
     from .app import GatewayServer
     from .conversations import ConversationStore
     from .characters import CharacterStore
+    from .image_jobs import ImageJobStore
+    from . import gallery
 except ImportError:
     from app import GatewayServer
     from conversations import ConversationStore
     from characters import CharacterStore
+    from image_jobs import ImageJobStore
+    import gallery
 
 
 class FakeOfficial(BaseHTTPRequestHandler):
@@ -89,13 +93,15 @@ class GatewayContract(unittest.TestCase):
         cls.data = tempfile.TemporaryDirectory()
         cls.store = ConversationStore(cls.data.name)
         cls.cards = CharacterStore(Path(cls.data.name) / "character")
+        cls.images = ImageJobStore(Path(cls.data.name) / "images")
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeOfficial)
         cls.upstream.daemon_threads = True
         cls.gateway = GatewayServer(("127.0.0.1", 0), api_key="client-test-secret",
                                     upstream_key="official-test-secret",
                                     upstream_host="127.0.0.1",
                                     upstream_port=cls.upstream.server_address[1],
-                                    conversations=cls.store, characters=cls.cards)
+                                    conversations=cls.store, characters=cls.cards,
+                                    image_jobs=cls.images)
         cls.threads = []
         for server in (cls.upstream, cls.gateway):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -142,10 +148,11 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.request("GET", "/v1/models", origin=local_origin)[0], 200)
 
     def test_private_routes_not_forwarded(self):
-        for path in ("/slots/0?action=restore", "/v1/mikuchin/image-jobs", "/config"):
+        for path in ("/slots/0?action=restore", "/v1/mikuchin/unsupported-image-endpoint", "/config"):
             self.assertEqual(self.request("GET", path)[0], 404, path)
         self.assertEqual(self.request("POST", "/unload", payload={})[0], 404)
         self.assertEqual(self.request("GET", "/v1/strata/sessions")[0], 200)
+        self.assertEqual(self.request("GET", "/v1/mikuchin/image-jobs")[0], 200)
 
     def test_unported_mikuchin_semantics_fail_explicitly(self):
         for key in ("strata_image_tool", "answer_budget_tokens"):
@@ -298,6 +305,61 @@ class GatewayContract(unittest.TestCase):
             "id":card["id"]})[0],200)
         self.assertNotEqual(self.request("GET",url)[0],200)
         self.assertEqual(self.request("POST",endpoint,payload={"action":"delete","id":card["id"]})[0],200)
+
+    def test_native_image_service_catalog_drafts_and_no_paid_requests(self):
+        endpoint="/v1/mikuchin/image-api-services"
+        jobs="/v1/mikuchin/image-jobs"
+        self.assertEqual(self.request("GET",endpoint,key=None)[0],401)
+        service={"name":"Test image API","model":"fake-image",
+                 "base_url":"http://127.0.0.1:19999/v1",
+                 "api_key":"DISPOSABLE_TEST_KEY","sizes":"standard"}
+        status,body=self.request("POST",endpoint,payload={"action":"save","service":service})
+        self.assertEqual(status,200)
+        public=json.loads(body)["service"]
+        self.assertTrue(public["has_key"])
+        self.assertNotIn("DISPOSABLE_TEST_KEY",body.decode())
+        listed=self.request("GET",endpoint)[1].decode()
+        self.assertNotIn("DISPOSABLE_TEST_KEY",listed)
+        catalog=json.loads(self.request("GET","/v1/mikuchin/image-models")[1])
+        self.assertTrue(any(item["id"]==public["id"] for item in catalog["models"]))
+        self.assertEqual(catalog["loras"],[])
+        data={"prompt":"A harmless offline draft","size":"1536x1536",
+              "strata_image_profile":public["id"],"strata_upscale":"off"}
+        status,body=self.request("POST",jobs,payload={"action":"draft","request":data})
+        self.assertEqual(status,200)
+        draft=json.loads(body)
+        self.assertEqual(draft["state"],"draft")
+        status,body=self.request("GET",jobs+"?kind=generate")
+        self.assertEqual(status,200)
+        self.assertTrue(any(item["id"]==draft["id"] for item in json.loads(body)["jobs"]))
+        self.assertEqual(self.request("POST",jobs,payload={"action":"delete","id":draft["id"]})[0],200)
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"delete","id":public["id"]})[0],200)
+
+    def test_native_gallery_serves_indexed_image_only_and_independent_nsfw(self):
+        from PIL import Image
+        ident=uuid4().hex
+        directory=self.images.root/"generated-images"
+        directory.mkdir(exist_ok=True)
+        file=directory/(ident+".png")
+        Image.new("RGB",(64,40),"white").save(file,"PNG")
+        gallery.register(self.images,file.name,source="studio",provider="api",
+                         model="offline-smoke",prompt="A private test image")
+        result=json.loads(self.request("GET","/v1/mikuchin/gallery?source=api")[1])
+        self.assertTrue(any(x["id"]==ident for x in result["items"]))
+        data_url="/v1/images/files/"+ident+".png"
+        self.assertEqual(self.request("GET",data_url,key=None)[0],401)
+        status,raw=self.request("GET",data_url)
+        self.assertEqual(status,200)
+        self.assertTrue(raw.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(self.request("GET","/v1/mikuchin/gallery/thumb/"+ident)[0],200)
+        self.assertEqual(self.request("POST","/v1/mikuchin/gallery",payload={
+            "action":"nsfw","id":ident,"nsfw":True})[0],200)
+        detail=json.loads(self.request("GET","/v1/mikuchin/gallery/item?id="+ident)[1])
+        self.assertTrue(detail["nsfw"])
+        self.assertEqual(self.request("POST","/v1/mikuchin/gallery",payload={
+            "action":"delete","ids":[ident]})[0],200)
+        self.assertFalse(file.exists())
+        self.assertEqual(self.request("GET",data_url)[0],404)
 
     def test_conversation_store_survives_restart_and_simultaneous_clients(self):
         with tempfile.TemporaryDirectory() as directory:

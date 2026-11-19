@@ -150,6 +150,32 @@ try {
   }
   Write-Output 'GATEWAY_NATIVE_SESSIONS_OK'
 
+  # Native online image adapter: service registry and drafts are offline.
+  # Never activate a task in this smoke test: even a local fake service can
+  # accidentally become chargeable if a user substitutes their configuration.
+  $imageApi = "http://127.0.0.1:$GatewayPort/v1/mikuchin/image-api-services"
+  $jobApi = "http://127.0.0.1:$GatewayPort/v1/mikuchin/image-jobs"
+  $imageSettings = @{action='save';service=@{
+    name='Offline native smoke';model='fake-image';api_key='DO_NOT_USE_ON_PUBLIC_PROVIDERS';
+    base_url='http://127.0.0.1:19999/v1';sizes='standard'
+  }} | ConvertTo-Json -Depth 5 -Compress
+  $profile=(Invoke-RestMethod -Method POST -Uri $imageApi -Headers $headers `
+    -Body $imageSettings -TimeoutSec 5).service
+  if (-not $profile.id -or $profile.api_key -or -not $profile.has_key) {
+    throw 'Native image service credentials leaked or failed to save'
+  }
+  $imageReq=@{action='draft';request=@{prompt='Offline native smoke';size='1536x1536';
+    strata_image_profile=$profile.id;strata_upscale='off'}} | ConvertTo-Json -Depth 6 -Compress
+  $draft=Invoke-RestMethod -Method POST -Uri $jobApi -Headers $headers -Body $imageReq -TimeoutSec 5
+  if ($draft.state -ne 'draft') {throw 'Native image draft was not persisted offline'}
+  $galleryItems=Invoke-RestMethod -Uri "http://127.0.0.1:$GatewayPort/v1/mikuchin/gallery" `
+    -Headers $headers -TimeoutSec 5
+  if ($galleryItems.total -ne 0) {throw 'Offline smoke unexpectedly generated an image'}
+  $remove=@{action='delete';id=$draft.id}|ConvertTo-Json -Compress
+  $removed=Invoke-RestMethod -Method POST -Uri $jobApi -Headers $headers -Body $remove -TimeoutSec 5
+  if ($removed.deleted -ne 1) {throw 'Cannot delete native image draft'}
+  Write-Output 'GATEWAY_IMAGE_SERVICES_DRAFT_GALLERY_OFFLINE_OK'
+
   $sseBody = '{"model":"mock","messages":[{"role":"user","content":"ping"}],"stream":true,"max_tokens":32}'
   $sse = Invoke-WebRequest -Method POST -Uri "http://127.0.0.1:$GatewayPort/v1/chat/completions" `
     -Headers $headers -Body $sseBody -UseBasicParsing -TimeoutSec 15

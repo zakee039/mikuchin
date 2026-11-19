@@ -25,11 +25,17 @@ try:
     from .characters import CharacterStore, card_from_tavern
     from .workflows import WorkflowRuntime
     from .lore import search_sources
+    from .image_jobs import ImageJobStore
+    from . import image_providers
+    from . import gallery
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
     from characters import CharacterStore, card_from_tavern
     from workflows import WorkflowRuntime
     from lore import search_sources
+    from image_jobs import ImageJobStore
+    import image_providers
+    import gallery
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -46,6 +52,13 @@ SESSIONS = "/v1/strata/sessions"
 SAMPLING_DEFAULT = "/v1/strata/sampling-default"
 CHARACTERS = "/v1/strata/characters"
 REFERENCE = CHARACTERS + "/reference/"
+IMAGE_JOBS = "/v1/mikuchin/image-jobs"
+IMAGE_SERVICES = "/v1/mikuchin/image-api-services"
+IMAGE_MODELS = "/v1/mikuchin/image-models"
+IMAGE_REFERENCE = "/v1/mikuchin/image-job-reference/"
+GALLERY = "/v1/mikuchin/gallery"
+GALLERY_THUMB = GALLERY + "/thumb/"
+GALLERY_ITEM = GALLERY + "/item"
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -55,7 +68,8 @@ class GatewayServer(ThreadingHTTPServer):
     def __init__(self, address, *, api_key: str, upstream_key: str,
                  upstream_host: str, upstream_port: int, allowed_origins=(),
                  conversations: ConversationStore | None = None,
-                 characters: CharacterStore | None = None):
+                 characters: CharacterStore | None = None,
+                 image_jobs: ImageJobStore | None = None):
         if not api_key or not upstream_key:
             raise ValueError("Both gateway and upstream API keys are required")
         if upstream_host not in ("127.0.0.1", "::1", "localhost"):
@@ -69,6 +83,7 @@ class GatewayServer(ThreadingHTTPServer):
         self.allowed_origins = frozenset(allowed_origins)
         self.conversations = conversations
         self.characters = characters
+        self.image_jobs = image_jobs
         super().__init__(address, GatewayHandler)
 
 
@@ -86,6 +101,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             path = SESSIONS + "/{id}"
         elif path.startswith(REFERENCE):
             path = REFERENCE + "{id}"
+        elif path.startswith(IMAGE_REFERENCE):
+            path = IMAGE_REFERENCE + "{id}"
+        elif path.startswith(GALLERY_THUMB):
+            path = GALLERY_THUMB + "{id}"
         elif path.startswith("/v1/images/files/"):
             path = "/v1/images/files/{image}"
         if len(path) > 100:
@@ -152,6 +171,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
+        if path in (GALLERY,GALLERY_ITEM) or path.startswith(GALLERY_THUMB):
+            self._handle_gallery_get(path)
+            return
+        if path in (IMAGE_JOBS,IMAGE_SERVICES,IMAGE_MODELS) or path.startswith(IMAGE_REFERENCE):
+            self._handle_image_get(path)
+            return
         if path == CHARACTERS or path.startswith(REFERENCE):
             self._handle_character_get(path)
             return
@@ -180,6 +205,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path not in INFERENCE_GETS and not IMAGE_PATH.fullmatch(path):
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
             return
+        if IMAGE_PATH.fullmatch(path) and self.server.image_jobs:
+            ident=path[len("/v1/images/files/"):-4]
+            try:
+                file=gallery._file(self.server.image_jobs,ident)
+                if file.is_file():
+                    gallery.detail(self.server.image_jobs,ident)  # indexed, not arbitrary local file
+                    self._binary("image/png",file.read_bytes())
+                    return
+            except (gallery.GalleryError,ValueError,OSError):
+                pass
         self._proxy("GET")
 
     def do_POST(self):
@@ -190,7 +225,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
-                   or path == SAMPLING_DEFAULT or path == CHARACTERS)
+                   or path == SAMPLING_DEFAULT or path == CHARACTERS
+                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY))
         if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
             return
@@ -220,7 +256,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Expected a JSON object")
             return
         if private:
-            if path == CHARACTERS:
+            if path == GALLERY:
+                self._handle_gallery_post(request)
+            elif path in (IMAGE_JOBS,IMAGE_SERVICES):
+                self._handle_image_post(path,request)
+            elif path == CHARACTERS:
                 self._handle_character_post(request)
             else:
                 self._handle_private("POST", path, request)
@@ -397,6 +437,134 @@ class GatewayHandler(BaseHTTPRequestHandler):
             LOG.exception("native character operation failed")
             self._error(503, "Native character store is unavailable", "unavailable")
 
+    def _binary(self, mime, raw):
+        self.send_response(200)
+        self.send_header("Content-Type",mime)
+        self.send_header("Content-Length",str(len(raw)))
+        self.send_header("Cache-Control","private, no-store")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _handle_image_get(self,path):
+        jobs=self.server.image_jobs
+        if jobs is None:
+            self._error(503,"Native image task worker is not configured","unavailable")
+            return
+        try:
+            if path == IMAGE_SERVICES:
+                self._json(200,{"services":image_providers.list_services(jobs)})
+            elif path == IMAGE_MODELS:
+                # No local image models are advertised until a real Image
+                # Worker exists. Saved online providers are the only options.
+                self._json(200,{"models":image_providers.catalog(jobs),"loras":[]})
+            elif path == IMAGE_JOBS:
+                from urllib.parse import parse_qs
+                query=parse_qs(urlsplit(self.path).query)
+                ident=query.get("id",[None])[0]
+                kind=query.get("kind",[None])[0]
+                self._json(200,jobs.listing(ident,kind=kind))
+            elif path.startswith(IMAGE_REFERENCE):
+                data,mime=jobs.reference_bytes(path[len(IMAGE_REFERENCE):])
+                self._binary(mime,data)
+            else:
+                self._error(404,"Native image resource not found","not_found")
+        except (ValueError,TypeError,OverflowError) as exc:
+            self._error(400,str(exc),"invalid_request")
+        except (sqlite3.Error,OSError):
+            LOG.exception("native image read failed")
+            self._error(503,"Native image storage unavailable","unavailable")
+
+    def _handle_image_post(self,path,req):
+        jobs=self.server.image_jobs
+        if jobs is None:
+            self._error(503,"Native image task worker is not configured","unavailable")
+            return
+        try:
+            action=req.get("action")
+            if path == IMAGE_SERVICES:
+                if action == "save":
+                    result={"service":image_providers.save_service(jobs,req.get("service"))}
+                elif action == "delete":
+                    image_providers.delete_service(jobs,req.get("id"))
+                    result={"deleted":True}
+                elif action == "discover":
+                    result=image_providers.discover_models(jobs,req.get("connection"))
+                else:
+                    raise ValueError("unknown image API service action")
+            elif path == IMAGE_JOBS:
+                if action in ("delete","clear_completed"):
+                    result=jobs.delete(req.get("id"),clear=action=="clear_completed")
+                else:
+                    result=jobs.submit(req)
+            else:
+                raise ValueError("unknown image action")
+            self._json(200,result)
+        except image_providers.ImageProviderError as exc:
+            self._error(502,str(exc),"image_provider_error")
+        except (ValueError,TypeError,OverflowError) as exc:
+            self._error(400,str(exc),"invalid_request")
+        except (sqlite3.Error,OSError):
+            LOG.exception("native image operation failed")
+            self._error(503,"Native image storage unavailable","unavailable")
+
+    def _handle_gallery_get(self,path):
+        jobs=self.server.image_jobs
+        if jobs is None:
+            self._error(503,"Native gallery is not configured","unavailable")
+            return
+        from urllib.parse import parse_qs
+        params=parse_qs(urlsplit(self.path).query)
+        try:
+            if path == GALLERY:
+                self._json(200,gallery.listing(jobs,
+                    limit=int(params.get("limit",["60"])[0]),
+                    offset=int(params.get("offset",["0"])[0]),
+                    source=params.get("source",["all"])[0],
+                    order=params.get("order",["newest"])[0]))
+            elif path == GALLERY_ITEM:
+                self._json(200,gallery.detail(jobs,params.get("id",[None])[0]))
+            elif path.startswith(GALLERY_THUMB):
+                data=gallery.thumbnail(jobs,path[len(GALLERY_THUMB):])
+                if data is None:
+                    self._error(404,"Gallery thumbnail not found","not_found")
+                else:
+                    self._binary("image/jpeg",data)
+            else:
+                self._error(404,"Gallery resource not found","not_found")
+        except (gallery.GalleryError,ValueError,TypeError,OverflowError) as exc:
+            self._error(400,str(exc),"invalid_request")
+        except (OSError,sqlite3.Error):
+            LOG.exception("native gallery read failed")
+            self._error(503,"Native gallery storage unavailable","unavailable")
+
+    def _handle_gallery_post(self,req):
+        jobs=self.server.image_jobs
+        if jobs is None:
+            self._error(503,"Native gallery is not configured","unavailable")
+            return
+        try:
+            action=req.get("action")
+            if action == "nsfw":
+                result=gallery.set_nsfw(jobs,req.get("id"),req.get("nsfw"))
+            elif action == "nsfw_many":
+                result=gallery.set_nsfw_many(jobs,req.get("ids"),req.get("nsfw"))
+            elif action == "delete":
+                result=gallery.delete_many(jobs,req.get("ids"))
+            elif action == "delete_variant":
+                result=gallery.delete_variant(jobs,req.get("id"),req.get("variant"))
+            elif action == "repair":
+                result=gallery.repair(jobs)
+            else:
+                raise ValueError("unknown gallery action")
+            self._json(200,result)
+        except (gallery.GalleryError,ValueError,TypeError) as exc:
+            self._error(400,str(exc),"invalid_request")
+        except (sqlite3.Error,OSError):
+            LOG.exception("native gallery operation failed")
+            self._error(503,"Native gallery storage unavailable","unavailable")
+
     def _proxy(self, method: str, body: bytes | None = None):
         conn = http.client.HTTPConnection(self.server.upstream_host,
                                           self.server.upstream_port, timeout=1800)
@@ -458,10 +626,12 @@ def main():
     data_dir = os.environ.get("MIKUCHIN_NATIVE_DATA_DIR") or ConversationStore.default_root()
     conversations = ConversationStore(data_dir)
     characters = CharacterStore(os.path.join(data_dir, "character"))
+    images = ImageJobStore(os.path.join(data_dir, "images"))
     with GatewayServer((args.host, args.port), api_key=gateway_key,
                        upstream_key=upstream_key, upstream_host="127.0.0.1",
                        upstream_port=args.upstream_port, allowed_origins=origins,
-                       conversations=conversations, characters=characters) as server:
+                       conversations=conversations, characters=characters,
+                       image_jobs=images) as server:
         LOG.info("Gateway on %s:%d; official PolyStrata on 127.0.0.1:%d",
                  args.host, args.port, args.upstream_port)
         try:

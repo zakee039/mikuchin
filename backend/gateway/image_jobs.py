@@ -1,0 +1,342 @@
+"""Mikuchin Native's detached *online* image task queue.
+
+Offline drafts never call providers. Only an explicit activate/retry submits a
+chargeable request. Worker execution is independent of browser connections.
+Unfinished jobs are marked failed (never replayed) on service restart.
+Local GPU/4x and gallery mutation are deliberately separate future adapters.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import re
+import secrets
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from queue import Queue
+
+from PIL import Image
+
+try:
+    from . import image_providers as providers
+    from . import gallery
+except ImportError:  # standalone python -m unittest discover -s backend/gateway
+    import image_providers as providers
+    import gallery
+
+JOB_ID = re.compile(r"img-[a-f0-9]{24}\Z")
+REF_ID = re.compile(r"[a-f0-9]{64}\Z")
+SIZE = re.compile(r"\d{3,4}x\d{3,4}\Z")
+MAX_PENDING = 80
+FIELDS = frozenset(("prompt", "positive_prompt", "natural_prompt", "negative_prompt",
+                   "size", "steps", "seed", "strata_upscale", "strata_image_profile",
+                   "strata_reference_mode", "strata_reference_assets", "response_format"))
+
+
+class ImageJobStore:
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.path = self.root / "native-image-jobs.sqlite3"
+        self.lock = threading.RLock()
+        self.queue = Queue()
+        self.thread = None
+        self._provider = providers.generate
+        with self._db() as db:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS jobs(
+                id TEXT PRIMARY KEY,kind TEXT NOT NULL DEFAULT 'generate',
+                state TEXT NOT NULL,phase TEXT NOT NULL,request_json TEXT NOT NULL,
+                result_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',
+                profile_id TEXT NOT NULL, prompt_summary TEXT NOT NULL,
+                requested_size TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,
+                started_at REAL,finished_at REAL,source_id TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created DESC);
+            """)
+            db.execute("""UPDATE jobs SET state='failed',phase='服务已重启，未自动重试',
+                          error='进程重启前任务未完成；上游可能已经扣费，请核对用量后手动重试',
+                          finished_at=?,updated=? WHERE state IN ('running','queued','working')""",
+                       (time.time(),time.time()))
+
+    def _db(self):
+        class Context:
+            def __init__(self, db_path):
+                self.conn = sqlite3.connect(db_path, timeout=15)
+                self.conn.row_factory = sqlite3.Row
+                self.conn.execute("PRAGMA busy_timeout=15000")
+            def __enter__(self): return self.conn
+            def __exit__(self, kind, exc, tb):
+                try:
+                    if kind: self.conn.rollback()
+                    else: self.conn.commit()
+                finally: self.conn.close()
+        return Context(self.path)
+
+    @staticmethod
+    def _public(row):
+        result = dict(row)
+        result["result"] = json.loads(result.pop("result_json"))
+        result["request"] = json.loads(result.pop("request_json"))
+        start, finish = result.get("started_at"),result.get("finished_at")
+        result["elapsed_s"] = round(max(0,(finish or time.time()) - start),1) if start else None
+        result["legacy_timer_unknown"] = start is None and result["state"] != "draft"
+        return result
+
+    @staticmethod
+    def _check_id(ident):
+        if not isinstance(ident,str) or not JOB_ID.fullmatch(ident):
+            raise ValueError("invalid image task ID")
+        return ident
+
+    def _reference_path(self, ident):
+        if not isinstance(ident,str) or not REF_ID.fullmatch(ident):
+            raise ValueError("invalid image reference ID")
+        file = self.root / "image-job-references" / (ident + ".bin")
+        if file.is_symlink(): raise ValueError("reference symlink is not allowed")
+        return file
+
+    def reference_bytes(self, ident):
+        file = self._reference_path(ident)
+        if not file.is_file() or not 0 < file.stat().st_size <= 5 * 1024 * 1024:
+            raise ValueError("reference image not found")
+        data = file.read_bytes()
+        if hashlib.sha256(data).hexdigest() != ident:
+            raise ValueError("reference checksum mismatch")
+        with Image.open(io.BytesIO(data)) as image:
+            mime = {"PNG":"image/png","JPEG":"image/jpeg","WEBP":"image/webp"}.get(image.format)
+            if mime is None: raise ValueError("invalid reference image")
+        return data,mime
+
+    def _store_ref(self, data_url):
+        if not isinstance(data_url,str) or len(data_url) > 7_200_000:
+            raise ValueError("reference image is too large")
+        match = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)",data_url)
+        if not match: raise ValueError("expected base64 PNG/JPEG/WebP data URL")
+        try:
+            raw = base64.b64decode(match.group(2),validate=True)
+            if not 0 < len(raw) <= 5 * 1024 * 1024:
+                raise ValueError("reference exceeds 5 MB")
+            with Image.open(io.BytesIO(raw)) as image:
+                if image.format != {"jpeg":"JPEG","png":"PNG","webp":"WEBP"}[match.group(1)] \
+                        or image.width * image.height > 16_000_000:
+                    raise ValueError("invalid image format or dimensions")
+                image.verify()
+        except (ValueError,OSError,base64.binascii.Error,Image.DecompressionBombError) as exc:
+            raise ValueError("invalid reference image") from exc
+        ident = hashlib.sha256(raw).hexdigest()
+        file = self._reference_path(ident)
+        file.parent.mkdir(exist_ok=True)
+        if not file.exists():
+            temp = file.with_suffix("." + secrets.token_hex(6) + ".tmp")
+            try:
+                temp.write_bytes(raw)
+                temp.replace(file)
+            finally: temp.unlink(missing_ok=True)
+        return ident
+
+    def _prepare(self, request):
+        if not isinstance(request,dict) or set(request) - FIELDS:
+            raise ValueError("invalid image request fields")
+        result = {key:val for key,val in request.items() if key in FIELDS and key != "strata_reference_assets"}
+        for field,limit in (("prompt",16000),("positive_prompt",12000),
+                            ("natural_prompt",6000),("negative_prompt",3000)):
+            if not isinstance(result.get(field,""),str) or len(result.get(field,"")) > limit:
+                raise ValueError(field + " must be short text")
+        profile = result.get("strata_image_profile","default")
+        if not isinstance(profile,str) or len(profile) > 64:
+            raise ValueError("invalid image profile")
+        result["strata_image_profile"] = profile
+        mode = result.get("strata_upscale","auto")
+        if mode not in ("off","auto",None):
+            raise ValueError("native upscaling not implemented; set upscale to off")
+        if result.get("strata_reference_mode", "none") not in ("none","single","multi"):
+            raise ValueError("invalid image reference mode")
+        if result.get("response_format", "url") not in ("url",):
+            raise ValueError("only URL image results are supported")
+        size = result.get("size","1024x1024")
+        if not isinstance(size,str) or not SIZE.fullmatch(size):
+            raise ValueError("invalid image size")
+        if result.get("seed") is not None and (type(result["seed"]) is not int or not 0 <= result["seed"] <= 2**31-1):
+            raise ValueError("invalid seed")
+        if result.get("steps") is not None and (type(result["steps"]) is not int or not 1 <= result["steps"] <= 100):
+            raise ValueError("invalid steps")
+        refs = request.get("strata_reference_assets",[])
+        if not isinstance(refs,list) or len(refs) > 8:
+            raise ValueError("too many reference images")
+        saved=[]
+        for index,item in enumerate(refs):
+            if not isinstance(item,dict): raise ValueError("invalid reference description")
+            name=item.get("name",f"参考图 {index+1}")
+            if not isinstance(name,str): raise ValueError("invalid reference name")
+            ident = item.get("id")
+            if ident is not None: self.reference_bytes(ident)
+            else: ident=self._store_ref(item.get("data_url"))
+            saved.append({"id":ident,"name":name[:120]})
+        result["strata_reference_assets"]=saved
+        if len(json.dumps(result,ensure_ascii=False)) > 44_000:
+            raise ValueError("image request too large")
+        return result
+
+    def _require_provider(self, request):
+        profile=request["strata_image_profile"]
+        service=providers.get(self,profile)
+        if not service:
+            raise ValueError("native version currently supports configured online API models only")
+        if not service.get("api_key"):
+            raise ValueError("image provider API key not configured")
+        w,h=map(int,request["size"].split("x"))
+        if not providers.allowed_image_size(service["sizes"],w,h):
+            raise ValueError("resolution is unavailable for the selected API model")
+        if request["strata_reference_assets"] and service["reference_mode"] == "none":
+            raise ValueError("this image API does not accept reference images")
+        return service
+
+    def _insert(self,db,request,state,started_at=None,source_id=""):
+        ident="img-"+secrets.token_hex(12)
+        now=time.time()
+        db.execute("""INSERT INTO jobs(id,state,phase,request_json,profile_id,prompt_summary,
+                    requested_size,created,updated,started_at,source_id)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                   (ident,state,"草稿已保存" if state == "draft" else "排队等待执行",
+                    json.dumps(request,ensure_ascii=False),request["strata_image_profile"],
+                    " ".join((request.get("prompt") or request.get("natural_prompt") or "").split())[:180],
+                    request.get("size",""),now,now,started_at,source_id))
+        return self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
+
+    def listing(self,ident=None,kind=None,limit=100):
+        if kind not in (None,"generate"):
+            raise ValueError("native image worker supports generate jobs only")
+        with self.lock,self._db() as db:
+            if ident:
+                self._check_id(ident)
+                row=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
+                return self._public(row) if row else {"id":ident,"state":"unknown"}
+            rows=db.execute("SELECT * FROM jobs ORDER BY created DESC LIMIT ?",(min(max(limit,1),100),)).fetchall()
+            return {"jobs":[self._public(row) for row in rows]}
+
+    def submit(self,req):
+        if not isinstance(req,dict): raise ValueError("expected image task object")
+        action=req.get("action")
+        with self.lock:
+            if action in ("draft","save_draft"):
+                if action == "draft" and req.get("id"):
+                    ident=self._check_id(req["id"])
+                    with self._db() as db:
+                        row=db.execute("SELECT * FROM jobs WHERE id=? AND state='draft'",(ident,)).fetchone()
+                        if not row: raise ValueError("draft not found")
+                        db.execute("UPDATE jobs SET updated=? WHERE id=?",(time.time(),ident))
+                        return self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
+                if action == "draft" and req.get("copy_id"):
+                    source=self.listing(self._check_id(req["copy_id"]))
+                    if source["state"] == "unknown": raise ValueError("source task not found")
+                    original=source["request"]
+                else:
+                    original=req.get("request")
+                prepared=self._prepare(original)
+                with self._db() as db:
+                    if action == "save_draft":
+                        ident=self._check_id(req.get("id"))
+                        update=db.execute("""UPDATE jobs SET request_json=?,profile_id=?,requested_size=?,
+                             prompt_summary=?,updated=? WHERE id=? AND state='draft'""",
+                             (json.dumps(prepared,ensure_ascii=False),prepared["strata_image_profile"],
+                              prepared.get("size",""),prepared.get("prompt","")[:180],time.time(),ident))
+                        if update.rowcount != 1: raise ValueError("draft was already submitted")
+                        return self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
+                    return self._insert(db,prepared,"draft")
+            if action in ("activate","retry",None):
+                with self._db() as db:
+                    count=db.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0]
+                    if count >= MAX_PENDING: raise ValueError("image request queue is full")
+                    original_id=None
+                    if action in ("activate","retry"):
+                        original_id=self._check_id(req.get("id"))
+                        row=db.execute("SELECT * FROM jobs WHERE id=?",(original_id,)).fetchone()
+                        if not row: raise ValueError("source task not found")
+                        if action == "activate" and row["state"] != "draft":
+                            raise ValueError("only a draft can be activated")
+                        if action == "retry" and row["state"] not in ("failed","success"):
+                            raise ValueError("only completed tasks can be retried")
+                        prepared=self._prepare(json.loads(row["request_json"]))
+                    else:
+                        prepared=self._prepare(req.get("request"))
+                    if not (prepared.get("prompt") or "").strip():
+                        raise ValueError("image prompt is required")
+                    self._require_provider(prepared)
+                    if action == "activate":
+                        now=time.time()
+                        db.execute("""UPDATE jobs SET state='running',phase='排队等待执行',updated=?,
+                                    started_at=?,finished_at=NULL WHERE id=? AND state='draft'""",
+                                   (now,self._start_time(req.get("client_started_at")),original_id))
+                        created=self._public(db.execute("SELECT * FROM jobs WHERE id=?",(original_id,)).fetchone())
+                    else:
+                        created=self._insert(db,prepared,"running",self._start_time(req.get("client_started_at")),original_id or "")
+                        if action == "retry" and row["state"] == "failed":
+                            db.execute("DELETE FROM jobs WHERE id=? AND state='failed'",(original_id,))
+                            created["deleted_original_id"]=original_id
+                self.queue.put((created["id"],prepared))
+                self._start_worker()
+                return created
+            raise ValueError("unsupported native image task action")
+
+    @staticmethod
+    def _start_time(value):
+        now=time.time()
+        return min(float(value),now) if type(value) in (int,float) and now-300 <= value <= now+5 else now
+
+    def delete(self,ident=None,clear=False):
+        with self.lock,self._db() as db:
+            if clear:
+                cur=db.execute("DELETE FROM jobs WHERE state IN ('success','failed')")
+            else:
+                ident=self._check_id(ident)
+                cur=db.execute("DELETE FROM jobs WHERE id=? AND state IN ('draft','success','failed')",(ident,))
+            return {"deleted":cur.rowcount}
+
+    def _start_worker(self):
+        if self.thread is None or not self.thread.is_alive():
+            self.thread=threading.Thread(target=self._work,daemon=True,name="mikuchin-native-image-worker")
+            self.thread.start()
+
+    def _work(self):
+        while True:
+            ident,request=self.queue.get()
+            try:
+                refs=[]
+                for item in request.get("strata_reference_assets",[]):
+                    raw,mime=self.reference_bytes(item["id"])
+                    refs.append("data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii"))
+                payload={key:val for key,val in request.items() if key != "strata_reference_assets"}
+                payload["strata_reference_images"]=refs
+                def status(phase):
+                    with self.lock,self._db() as db:
+                        db.execute("UPDATE jobs SET phase=?,updated=? WHERE id=? AND state='running'",
+                                   (str(phase)[:200],time.time(),ident))
+                response=self._provider(self,payload,on_status=status,diagnostic_id=ident)
+                extra=response.get("strata") or {}
+                name=extra.get("image_file")
+                if not isinstance(name,str) or not re.fullmatch(r"[a-f0-9]{32}\.png",name):
+                    raise ValueError("provider image was not saved in native storage")
+                gallery.register(self,name,source="studio",provider="api",
+                                 model=response.get("model", ""),prompt=request.get("prompt", ""))
+                result={"image_ids":[name.removesuffix(".png")],"image_file":name,
+                        "model":response.get("model"),"size":response.get("size"),
+                        "seconds":extra.get("seconds"),"provider":"api"}
+                with self.lock,self._db() as db:
+                    db.execute("""UPDATE jobs SET state='success',phase='生成完成',result_json=?,
+                                  updated=?,finished_at=? WHERE id=?""",
+                               (json.dumps(result),time.time(),time.time(),ident))
+            except Exception as exc:
+                # Exception type and bounded error text only; prompts, keys,
+                # endpoints, images and reference bytes are never logged here.
+                message=(type(exc).__name__+": "+str(exc))[:350]
+                with self.lock,self._db() as db:
+                    db.execute("""UPDATE jobs SET state='failed',phase='任务失败',error=?,
+                                  updated=?,finished_at=? WHERE id=?""",
+                               (message,time.time(),time.time(),ident))
+            finally:
+                self.queue.task_done()
