@@ -8,6 +8,14 @@
 - **Local development Gateway:** `backend/gateway/app.py` is a standalone, dependency-free minimal transport adapter. It has **not** yet ported Mikuchin sessions, character cards, KV management, workflows, image tools, gallery or launcher supervision. The existing Web/Android clients are retained for incremental porting but are not presently end-to-end usable against this Gateway.
 - **Original stable installation:** `E:\LLM\deploy\mikuchin` (main, v0.3.0); running service remains on its established ports and data. Do not point it at this worktree before acceptance testing.
 
+## Simplified KV policy (2026-11-19 design decision)
+
+- **No migration of existing chats or `POLYKV1!` snapshots** into the new Gateway. The new application starts a clean chat store for chats created there. The stable v0.3.0 data directory is not deleted.
+- **Do not port the old manual “Lock KV” / “Pin session” UI or its custom 5-snapshot-per-model manager.** Favor the official native engine's automatic exact-token-prefix checkpoint matching and opt-in parked-conversation cache (`--conversation-cache-mib auto` / `--conversation-cache-slots`). On cache miss simply prefill again.
+- **Do not enable the manual disk `/slots/0?action=save|restore` path in the first implementation.** This is a separate, opt-in cross-restart mechanism, not the automatic conversation cache; it complicates serialization with parallel requests.
+- Official `warm_start` and its engine `PIN` are for **one reusable common system prompt** and are distinct from the old user's manual pinned conversation snapshots. Leave `warm_start` off initially; measure repeated prompt-prefix use before enabling it.
+- The new UI may still keep **new** chat transcripts and a “pin to top” ordering control; neither is a KV persistence contract. Chat messages must be resent to the engine when in-memory cache is lost.
+
 ## One-time setup in a new worktree
 
 ```powershell
@@ -53,8 +61,8 @@ Run the engine model/KV/tool/SSE compatibility suite **before** committing the n
 
 ## Planned work (not yet implemented)
 
-1. Native PolyStrata bootstrapping + real model smoke test (chat, visuals, KV SAVE/RESTORE/PIN; version mismatch rejection).
-2. Complete Gateway state management, character/worldbook/workflow and isolated SQLite stores (old chat/KV history need not migrate).
+1. Native PolyStrata bootstrapping + real model smoke test (chat, visuals, automatic checkpoints and parked-conversation cache; optional Warm Start and official PIN in isolation).
+2. Complete Gateway state management, character/worldbook/workflow and new isolated SQLite stores (old chat/KV history need not migrate; no manual KV lock feature).
 3. Chat tool orchestration, answer token budget, `strata_mcp` events, image-worker scheduling and GPU mutual exclusion.
 4. Desktop launcher to supervise *both* Gateway and official PolyStrata, mobile/gallery parity, authentication and upgrade rollbacks.
 5. Replace the original single-repo release packager: its current `.gitmodules` restriction belongs to v0.3.0, and cannot be used unmodified for this development branch. Packaging must include a separately versioned official engine with verifiable commit and license.

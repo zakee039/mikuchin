@@ -13,8 +13,9 @@
 1. 官方 PolyStrata 源代码、引擎二进制及推理服务作为**独立的不可修改上游组件**；只依赖公开 HTTP API 和其声明的会话保存协议。不得继续在官方源码里插入 Mikuchin 业务分支。
 2. Mikuchin 维护自己的 Gateway、会话/身份/角色/世界书/工作流/图像任务/画廊/设置和资源仲裁；所有远程用户继续访问单一的 Mikuchin 外部入口。
 3. 已有聊天记录与旧的 `POLYKV1!` 快照**不必迁移或格式兼容**，新架构启用新的会话库与快照目录；但**此次 v0.3.0 基线不会删除它们**。角色、世界书、工作流、API Key、模型与画廊等其他数据需按业务实际需要保持或迁移。
-4. **软件分发要支持其他电脑**：Windows、Linux、macOS 与不同 GPU 后端分别构建/安装官方引擎。绝不把 RTX 3070 Ti 专用二进制当成所有设备可用的构建。
-5. 每个里程碑均要求可回退到此 v0.3.0 基线。任何服务切换必须先完成数据备份、运行时端口检查与回归测试。
+4. **取消 Mikuchin 自制 KV 会话锁定/手动 Pin 和按模型管理的 5 个动态快照名额。** 未来由官方引擎用 Token 前缀自动命中 Prompt Cache；多会话轮流使用时启用官方 Conversation Cache。Mikuchin 不再为每个会话主动执行 SAVE/RESTORE，不做旧快照索引或淘汰器。官方内部的 `PIN` 属于共享系统提示词缓存，与旧 UI 的手动锁定不是一回事。
+5. **软件分发要支持其他电脑**：Windows、Linux、macOS 与不同 GPU 后端分别构建/安装官方引擎。绝不把 RTX 3070 Ti 专用二进制当成所有设备可用的构建。
+6. 每个里程碑均要求可回退到此 v0.3.0 基线。任何服务切换必须先完成数据备份、运行时端口检查与回归测试。
 
 ## 2. 已确认的差异事实（不能当作已完成改造）
 
@@ -35,7 +36,7 @@ Windows / Android / Browser / iOS (remote)
         - API authentication / Host-Origin policy
         - Chat SSE proxy / cancellation / tool orchestrator
         - Character / Persona / Worldbook / Workflow
-        - Session store / sampling / KV snapshot index
+        - New chat store / sampling / caching preferences
         - Image Jobs / API provider / Gallery / 4x
         - Model and GPU resource arbiter
                   |
@@ -45,7 +46,8 @@ Windows / Android / Browser / iOS (remote)
  Official PolyStrata     Image Worker
  127.0.0.1:15240        local private worker
  models / inference      Qwen-Image / LoRA
- SAVE RESTORE PIN        online image API
+ Prompt / Conversation   online image API
+ Cache (native)
  warm_start             upscaling / catalog
 ```
 
@@ -59,8 +61,8 @@ Windows / Android / Browser / iOS (remote)
 | 子系统 | 当前嵌入点 | 新架构中的责任 | 接口/风险 |
 |---|---|---|---|
 | OpenAI 聊天 | 修改的 `server.py` `_openai` 等 | Gateway 组装请求、角色、世界书、处理流式回复 | 保持 `reasoning_budget_tokens`、正文预算、工具消息与 SSE 的可观察语义 |
-| KV 快照 | `SessionV1` + 原生 C++ `session_disk.hpp` | Gateway 追踪对话/模型指纹与锁定/淘汰，官方 SAVE/RESTORE 做实际序列化 | 旧格式不迁移；过期或恢复失败完整 Prefill；先实现单槽再评估并行 |
-| 系统提示词 | 本地预热 `warm_start` | 官方 `warm_start` + `PIN` | 角色前缀变化、角色隔离、是否能共享前缀须验证；不能默认多个角色同时 PIN |
+| KV 缓存 | `SessionV1` + 原生 C++ `session_disk.hpp` + 手动锁定/动态名额 | **完全交给官方** Prompt Cache 和 Conversation Cache；Gateway 只发送完整上下文 | 旧 KV 不迁移，不移植手动锁定/自制磁盘快照调度；缓存未命中时由官方正常 Prefill |
+| 系统提示词 | 本地预热 `warm_start` | 可选使用官方 `warm_start` + 内部 `PIN` | 默认先不启用，验证同模型同系统提示词前缀重复度后再打开；不同角色不能错误共用 |
 | 会话与采样 | `session_v1.py` 与扩展 HTTP | Gateway 新 SQLite 会话库 | 用户数据权限、内容修订、会话模型路由、独立采样参数 |
 | 角色 / 世界书 / 工作流 | `character_cards.py` 等及 `/v1/strata/characters` | Gateway 的私有 API | 保留角色参考图、无状态语义、世界书召回与工作流提交 |
 | 本地图像 | `images.py` 定制/图像 profile / LoRA | 独立 Image Worker + Gateway 调度 | Qwen-Image official/uncensored、图生图、LoRA、显存卸载/恢复 |
@@ -74,10 +76,10 @@ Windows / Android / Browser / iOS (remote)
 ## 5. 官方接口的具体限制
 
 1. 官方 `/v1/chat/completions` 能处理流式输出、思考预算和 `strata_mcp`，但不理解我们的 `strata_session_id`、`mikuchin_stateless`、`strata_image_tool` 和独立 `answer_budget_tokens` 语义；不能盲目透传。
-2. 官方 `/slots/0?action=save|restore` 需要配置 `slot_save_path`，且对并行配置可能返回不可用；使用官方 `PIN` 前要测量它与正在运行的会话/工具调用的关系。
+2. **第一版不启用**官方 `/slots/0?action=save|restore`，也不配置 `slot_save_path`。它是官方可选的跨重启完整状态恢复接口，需手动调用且并行配置下可能不可用；未来确有需求再考虑，不提前开发管理器。
 3. Gateway 要维持真正的取消语义：断开聊天 SSE 应取消普通生成，**但已独立提交的付费生图任务不能随浏览器断开而重复投递或隐式取消**。
-4. 恢复 KV 前校验**模型内容、量化、上下文与引擎版本**；新架构不读取旧 `POLYKV1!` 文件，升级官方版本后若旧快照不适用则重新 Prefill。
-5. 独立 Image Worker 与官方 LLM 必须共享唯一的 GPU 资源仲裁器：单张 8 GB 显卡上加载大图像模型之前先协调卸载/保存，不得两个进程互相抢显存。
+4. 新架构不读取旧 `POLYKV1!` 快照，**不保存新会话的完整磁盘 KV**；模型卸载或重启后发送完整上下文正常 Prefill。将来开启官方 Session Files 时，模型、量化、引擎版本一致性由官方验证，Gateway 仍需处理恢复失败的回退。
+5. 独立 Image Worker 与官方 LLM 必须共享唯一的 GPU 资源仲裁器：单张 8 GB 显卡上加载大图像模型之前先协调卸载/释放，不得两个进程互相抢显存；若缓存丢失，允许下一次重新 Prefill。
 6. 外部 API 不应透露内部进程/磁盘路径；密钥继续使用本机安全存储，不写入仓库或发布包。
 
 ## 6. 按阶段实施（每阶段可回退）
@@ -91,8 +93,8 @@ Windows / Android / Browser / iOS (remote)
 ### P1 — 官方核心独立验证
 
 - 固定官方 Tag，单独的 `upstream/PolyStrata` 或包缓存和私有 `127.0.0.1:15240`；避免与旧引擎复用运行目录。
-- 在 Windows + RTX 3070 Ti 用真实模型验证常规聊天/视觉、长上下文、SAVE/RESTORE/PIN、拒绝损坏/错配快照、加载/卸载。随后面向其他 OS/GPU 建构建矩阵。
-- 记录实际 Prefill、保存、恢复时间、内存/显存占用，**不要把上游基准直接算作 Mikuchin 实测**。
+- 在 Windows + RTX 3070 Ti 用真实模型验证常规聊天/视觉、长上下文、自动 Prompt Cache、Conversation Cache 多会话轮换、加载/卸载。`SAVE/RESTORE/PIN` 属于官方可选能力，仅做隔离研究，不作为新版 Mikuchin 必须接入的功能。随后面向其他 OS/GPU 建构建矩阵。
+- 记录实际 Prefill、自动缓存命中、停放/恢复耗时、内存/显存占用，**不要把上游基准直接算作 Mikuchin 实测**。
 
 ### P2 — Gateway 最小闭环
 
@@ -100,10 +102,12 @@ Windows / Android / Browser / iOS (remote)
 - 保持桌面 Web/Android 外部 `15239` 不变；SSE、思考/正文预算、取消、历史保存必须经契约测试。
 - 新对话使用新的数据库；不对旧聊天文件做兼容迁移。
 
-### P3 — KV 管理与 Warm Start
+### P3 — 官方自动缓存配置与 Warm Start（不自制 KV 管理器）
 
-- 仅通过官方 API 做 KV 导出/恢复，Gateway 提供按模型独立名额、锁定/淘汰、失效、回退 Prefill；考察单槽与并发限制。
-- `PIN` 用于可共享的公共前缀；多个角色的系统提示词不得错误共享一个可变的 PIN 状态。
+- 默认 Prompt Cache 随引擎工作；为多会话轮流运行设置官方 `--conversation-cache-mib auto --conversation-cache-slots 4 --conversation-cache-min-tokens 1024`（或可配置固定预算），在 8 GB GPU + 64 GB RAM 的目标机上实测内存、停放与命中率，不做自制快照名额或手动锁定。
+- 前端删除旧「锁定 KV / 手动 Pin」入口，Gateway 不暴露对应业务 API；会话置顶仍然只是 UI 列表排序，不影响 KV 保留策略。
+- 官方 `warm_start` 默认关闭，真实测试发现长期复用的大型系统提示词时可选开启。其内部 `PIN` 用于共享系统提示词，不等于旧会话锁定；一次只固定一个共享前缀，角色系统提示词各异时不可乱用。
+- 暂不启用整段对话 `SAVE/RESTORE`。失去内存缓存、模型切换和进程重启后正常 Prefill，是可接受的设计取舍。
 
 ### P4 — 生图与后台任务彻底独立
 
@@ -119,9 +123,9 @@ Windows / Android / Browser / iOS (remote)
 ## 7. 必需验收与发布门槛
 
 - API：`/health`、OpenAI/Anthropic/Responses、SSE 事件顺序、tool calls、取消、认证/Origin/CF Tunnel、Android 客户端。
-- KV：多轮一致性、模型切换与不同版本/量化拒绝错配、错误格式回退 Prefill、锁定与淘汰、开关机/重启、PIN 只共享同前缀。
+- KV：重复相同 Token 前缀可复用、不同会话/角色不混淆、自动 Park 和资源不足时淘汰、失去缓存与重启后重新 Prefill、可选 Warm Start 仅共享相同前缀；**不要求旧快照兼容或用户手动锁定**。
 - 图像：本地双 Qwen-Image、LoRA、参考图优先级、云 API 代理/超时、付费重试、画廊 4x 与 NSFW、聊天 256 token 视觉跟进。
-- 资源：idle 15 分钟卸载、手动停机状态、8 GB VRAM 下生图和 LLM 互斥、KV 保存/恢复时无重复竞态。
+- 资源：idle 15 分钟卸载、手动停机状态、8 GB VRAM 下生图和 LLM 互斥、缓存停放/释放与模型卸载时无重复竞态。
 - 数据：新对话库从空白开始；保留用户角色/世界书/画廊等非聊天资产，或经明确的数据迁移步骤验证后再切换。
 - 回滚：任何失败可用保留的 v0.3.0 Launcher/APK/后端恢复服务，不覆盖旧配置和用户数据。
 
