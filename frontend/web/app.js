@@ -1042,6 +1042,10 @@ function onTool(m, x) {
   } else if (x.event === "result") {
     Object.assign(t, {result: x.text, ok: x.ok, chars: x.chars, truncated: x.truncated, ms: x.ms,
                       state: x.skipped ? "skipped" : x.ok ? "done" : "error"});
+    if (x.image_job_id) {
+      t.image_job_id = x.image_job_id;
+      t.state = "running"; // HTTP request is done; desktop processing is not.
+    }
     if (x.image_file) {
       t.image_file = x.image_file; t.image_prompt = x.image_prompt || "";
       t.image_original_file = x.image_original_file || "";
@@ -1051,6 +1055,54 @@ function onTool(m, x) {
     }
   }
 }
+// Chat image jobs are executed by desktop workers. Browser polling is only
+// presentation; closing the tab cannot cancel or erase a finished image.
+let chatImageJobPolling = false;
+async function refreshChatImageJobs() {
+  if (!sessionV1 || !sessionId || chatImageJobPolling || document.hidden) return;
+  const pending = messages.some(m => m.role === "assistant" &&
+    (m.tools || []).some(t => t.image_job_id && t.state === "running"));
+  if (!pending) return;
+  const currentId = sessionId;
+  chatImageJobPolling = true;
+  try {
+    const r = await fetch("v1/mikuchin/image-jobs?session_id=" + encodeURIComponent(currentId),
+      {headers:headers(),cache:"no-store"});
+    if (!r.ok || sessionId !== currentId) return;
+    const result = await r.json();
+    if (sessionId !== currentId) return;
+    const jobs = new Map((result.jobs || []).map(job => [job.id,job]));
+    let changed = false;
+    for (const m of messages) {
+      if (m.role !== "assistant") continue;
+      for (const t of m.tools || []) {
+        const job = jobs.get(t.image_job_id);
+        if (!job || !["done","error","interrupted"].includes(job.state) || t.state !== "running") continue;
+        if (job.state === "done") {
+          const picture = job.result || {};
+          Object.assign(t, {state:"done",ok:true,result:picture.text || "图片已生成。",
+            image_file:picture.image_file || "",image_original_file:picture.image_original_file || "",
+            image_prompt:picture.image_prompt || "",image_model:picture.image_model || "",
+            edited_previous:picture.edited_previous===true,
+            upscale_applied:picture.upscale_applied===true,upscale_fallback:picture.upscale_fallback===true});
+          if (picture.reply_text && (!m.text || m.text.includes("已提交桌面端后台生图任务")))
+            m.text = picture.reply_text;
+        } else {
+          Object.assign(t,{state:"error",ok:false,result:job.error || "桌面端生图任务未完成"});
+        }
+        if (Array.isArray(m.swipes)) swipeSave(m);
+        changed = true;
+      }
+    }
+    if (changed) {
+      if (!busy) renderChat();
+      saveChat();
+    }
+  } catch (error) { console.warn("Image job refresh:", error); }
+  finally { chatImageJobPolling = false; }
+}
+setInterval(() => { void refreshChatImageJobs(); }, 2500);
+
 function updateAssistant(el, m, streaming) {
   const det = el.querySelector("details.think");
   if (m.reasoning) {

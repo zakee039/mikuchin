@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.2.9** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.9)
+**メインアプリ v0.2.10** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.2.10)
 
-**個別バージョン：**メインアプリ `0.2.9` · Windows ランチャー `0.2.9` · Android クライアント `0.2.9`（versionCode 209）。今回は全 3 コンポーネントを再ビルドしました。Release のマニフェストを参照してください。 以降のバージョンは個別に管理し、versions.json に記録します。
+**個別バージョン：**メインアプリ `0.2.10` · Windows ランチャー `0.2.10` · Android クライアント `0.2.10`（versionCode 210）。今回は全 3 コンポーネントを再ビルドしました。Release のマニフェストを参照してください。 以降のバージョンは個別に管理し、versions.json に記録します。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -80,7 +80,7 @@
 - **ユーザー空間 Tailscale 統合**：公式 `tailscale.com/tsnet`（Go + `gomobile` AAR）をアプリ内に内蔵。**Android の `VpnService` を一切使用しない**ため、Android の VPN スロットを占有しません。実際の接続経路は端末の設定に依存し、Root 化や公式 Tailscale アプリのインストールも不要です。
 - **認証情報の保護**：API キーは Android Keystore（`AES/GCM/NoPadding`）で暗号化保存されます。接続設定は認証済みのアプリ内で管理されます。
 
-**アップグレード時の注意：** v0.2.9 は正式署名済み APK です。同じ証明書の旧版は通常上書きできますが、Debug 署名版では再インストールが必要になる場合があります。先にアプリ内設定をバックアップしてください。
+**アップグレード時の注意：** v0.2.10 は正式署名済み APK です。同じ証明書の旧版は通常上書きできますが、Debug 署名版では再インストールが必要になる場合があります。先にアプリ内設定をバックアップしてください。
 
 #### 7.3 Apple デバイスからアクセス（iPhone / iPad / Mac）
 

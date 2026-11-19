@@ -3,12 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./style.css";
 import { modelIsLoaded } from "./model-state";
-import {getLocale,setLocale,observeLocale,translateDom} from "./i18n";
+import {getLocale,setLocale,observeLocale,translateDom,tr} from "./i18n";
 
 type Prefs={autostart:boolean;auto_load_model:boolean;manual_model_hold:boolean;watchdog:boolean;lan_access:boolean;cf_enabled:boolean;cf_binary:string;cf_hostname:string;config_path:string;project_path:string;port:number};
 type Model={name:string;path:string;model:string;context:number|null;quantization:string|null;engine:string|null;tokenizer:string|null;draft_model:string|null;vision_projector:string|null;kv_type:string|null;vram_reserve_mib:number|null;idle_unload_s:number|null;conversation_cache_mib:string|null};
 type Metrics={engine?:Record<string,unknown>;live?:Record<string,unknown>;hardware?:Record<string,unknown>;totals?:Record<string,number>;requests?:Array<Record<string,number>>;conversation_cache?:{requests?:number;requests_reused?:number;reused_tokens?:number}};
-type Status={phase:string;managed:boolean;desired:boolean;error:string;restarts:number;settings:Prefs;metrics:Metrics|null;host_gpu?:Record<string,number>|null;cf_running:boolean;cf_connections:number|null;cf_error:string;cf_latency_ms:number|null;cf_test_status:string;cf_token_present:boolean;api_key_present:boolean;lan_chat_url?:string|null};
+type LanAddress={address:string;interface:string;description:string};
+type Status={phase:string;managed:boolean;desired:boolean;error:string;restarts:number;settings:Prefs;metrics:Metrics|null;host_gpu?:Record<string,number>|null;cf_running:boolean;cf_connections:number|null;cf_error:string;cf_latency_ms:number|null;cf_test_status:string;cf_token_present:boolean;api_key_present:boolean;lan_addresses?:LanAddress[]};
 let prefs:Prefs|null=null, status:Status|null=null, models:Model[]=[], tab="overview", busy=false, toast="";
 let idleSeconds=900;let idleBusy=false;
 let avatarTapCount=0;
@@ -50,7 +51,7 @@ function badge(){const [s,c]=phases[status?.phase||"stopped"]||["异常","bad"];
 function render(){
  root.innerHTML=`<header class="head"><div class="brand"><button type="button" class="brand-symbol avatar-trigger" id="avatar-trigger" aria-label="Mikuchin" title="Mikuchin"><img src="/mikuchin-icon.png" width="43" height="43" alt="Mikuchin"></button><div><h1>Mikuchin</h1><small>LOCAL MODEL MANAGER</small></div></div><div class="header-status"><span id="phase">${badge()}</span><button id="btn-log" class="header-log">查看运行日志</button></div></header>
  <nav class="tabs">${Object.keys(names).map(t=>`<button class="tab ${tab===t?"selected":""}" data-tab="${t}">${names[t]}</button>`).join("")}</nav>
- <main id="content"></main><footer><span id="notice">${esc(toast||"本机服务管理 · Windows")}</span><span>v0.2.9</span></footer>`;
+ <main id="content"></main><footer><span id="notice">${esc(toast||"本机服务管理 · Windows")}</span><span>v0.2.10</span></footer>`;
  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>{tab=b.dataset.tab!;render();});
  document.getElementById("avatar-trigger")?.addEventListener("click",onAvatarTap);
  document.getElementById("btn-log")?.addEventListener("click",()=>void showLogs());
@@ -128,18 +129,38 @@ function cfView(){
 function cfLatency(){
  return typeof status?.cf_latency_ms==="number"?status.cf_latency_ms+" ms":"— ms";
 }
-function lanChatLink(){
- const url=prefs?.lan_access?status?.lan_chat_url:null;
+function lanAddressKind(address:LanAddress){
+ const adapter=(address.interface+" "+address.description).toLowerCase();
+ if(/wi-fi direct virtual adapter|mobile hotspot|hosted network/.test(adapter))return "移动热点";
+ if(/tailscale/.test(adapter))return "Tailscale";
+ if(/wi-fi|wireless|wlan|802\.11/.test(adapter))return "Wi-Fi";
+ if(/ethernet|以太网/.test(adapter))return "以太网";
+ return "其他网络";
+}
+function lanChatLinks(){
  if(!prefs?.lan_access)return "";
- return url && /^http:\/\/(?:\d{1,3}\.){3}\d{1,3}:\d+\/$/.test(url)
-   ? `<a class="lan-chat-link" href="${esc(url)}" title="${esc(url)}（HTTP 明文，建议使用本地 HTTPS 网关）" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`
-   : `<span class="lan-chat-pending">正在获取局域网地址…</span>`;
+ const addresses=(status?.lan_addresses||[]).filter(a=>/^(?:\d{1,3}\.){3}\d{1,3}$/.test(a.address));
+ const ready=Boolean(status?.managed&&status?.metrics);
+ if(!addresses.length)return `<div class="lan-chat-pending">${esc(tr("未检测到可用的 IPv4 地址"))}</div>`;
+ return `<div class="lan-address-list" aria-label="${esc(tr("局域网访问地址"))}">
+ ${!ready?`<span class="lan-address-note">${esc(tr("HTTP 服务尚未就绪，以下地址暂不可访问"))}</span>`:""}
+ ${addresses.map(a=>{
+   const url=`http://${a.address}:${prefs?.port||15239}/`;
+   const kind=lanAddressKind(a);
+   const details=`${a.interface} · ${a.description}`;
+   return `<div class="lan-address-entry">
+    <div class="lan-address-name" title="${esc(details)}"><strong>${esc(tr(kind))}</strong><small>${esc(a.interface)}</small></div>
+    ${ready?`<a class="lan-chat-link" href="${esc(url)}" title="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`:
+      `<span class="lan-chat-inactive">${esc(url)}</span>`}
+   </div>`;
+ }).join("")}</div>`;
 }
 function apiPage(){return `<section class="api-compact">
  <div class="setting-card api-panel">
   <div class="api-line"><strong>端口</strong><input id="port-field" type="number" class="field port-field" min="1024" max="65535" value="${prefs?.port||15239}"><button class="outline-small" id="save-api-port" ${status?.managed?"disabled":""}>保存</button></div>
   <div class="api-line"><strong>API Key</strong><input id="api-key-display" class="field key-display" type="text" readonly value="" autocomplete="off"><button id="copy-key" class="outline-small">复制</button><button id="rotate-key" class="outline-small">更换</button></div>
-  <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong><span class="lan-chat-slot">${lanChatLink()}</span><label class="lan-toggle" title="启用或关闭局域网 HTTP 访问"><input type="checkbox" data-setting="lan_access" ${prefs?.lan_access?"checked":""}><span class="switch"></span></label></div>
+  <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong><label class="lan-toggle" title="启用或关闭局域网 HTTP 访问"><input type="checkbox" data-setting="lan_access" ${prefs?.lan_access?"checked":""}><span class="switch"></span></label></div>
+  <div class="lan-chat-slot">${lanChatLinks()}</div>
  </div>
  <div class="setting-card tunnel-panel">
   <div class="tunnel-heading"><strong>Cloudflare Tunnel</strong>${cfView()}</div>
@@ -264,7 +285,7 @@ async function poll(){try{const latest=await invoke<string>("get_language");if(l
    const indicator=document.querySelector(".api-compact .cf-indicator");
    if(indicator)indicator.outerHTML=cfView();
    const slot=document.querySelector(".lan-chat-slot");
-   if(slot && slot.innerHTML!==lanChatLink())slot.innerHTML=lanChatLink();
+   if(slot && slot.innerHTML!==lanChatLinks())slot.innerHTML=lanChatLinks();
    const latency=document.querySelector("[data-cf-latency]");
    if(latency)latency.textContent=cfLatency();
    const message=document.querySelector("[data-cf-message]");

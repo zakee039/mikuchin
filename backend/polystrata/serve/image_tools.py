@@ -128,9 +128,12 @@ SCHEMA = {
 class ChatImageHub:
     """MCP-compatible adapter so image tools join, not replace, existing MCP."""
 
-    def __init__(self, svc, mcp=None, *, session_id=None, stateless=False, latest_user_text=""):
+    def __init__(self, svc, mcp=None, *, session_id=None, stateless=False,
+                 latest_user_text="", detached=False):
         self.svc, self.mcp = svc, mcp
         self.session_id = session_id if not stateless else None
+        self.delivery_session_id = session_id
+        self.detached = bool(detached and session_id and getattr(svc, "session_v1", None))
         self.latest_user_text = latest_user_text if isinstance(latest_user_text, str) else ""
         self.character_name = None
         self.character_reference = None
@@ -321,7 +324,25 @@ class ChatImageHub:
         output["ms"] = int((time.monotonic() - start) * 1000)
         return output
 
-    def call(self, name, arguments, cancel: threading.Event | None = None):
+    def call(self, name, arguments, cancel: threading.Event | None = None, tool_call_id=None):
+        if name == NAME and self.detached:
+            from serve import image_jobs
+            start = time.monotonic()
+            try:
+                job = image_jobs.submit_chat(self.svc, self, arguments, tool_call_id)
+                reply = "图片生成任务已交由桌面端处理，完成后将在此会话自动显示。请勿重复调用生图。"
+                return {"server": "Mikuchin", "tool": "generate_image", "ok": True,
+                        "text": reply, "chars": len(reply), "truncated": False,
+                        "ms": int((time.monotonic() - start) * 1000),
+                        "image_job_id": job["id"], "image_job_pending": True}
+            except Exception as exc:
+                reply = "无法提交后台生图任务：" + str(exc)[:400]
+                return {"server": "Mikuchin", "tool": "generate_image", "ok": False,
+                        "text": reply, "chars": len(reply), "truncated": False,
+                        "ms": int((time.monotonic() - start) * 1000)}
+        return self._execute_image(name, arguments, cancel)
+
+    def _execute_image(self, name, arguments, cancel: threading.Event | None = None):
         if name != NAME:
             return self.mcp.call(name, arguments, cancel)
         if self.remote_id is not None:

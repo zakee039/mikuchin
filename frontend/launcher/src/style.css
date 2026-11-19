@@ -78,11 +78,21 @@
 .api-compact .toggle-compact input:focus-visible + .switch{outline:2px solid #238f86;outline-offset:3px}
 .api-compact .lan-toggle-row{gap:9px}
 .api-compact .lan-toggle-row>strong{flex:0 0 auto;font-size:11px}
-.api-compact .lan-chat-slot{flex:1 1 auto;min-width:0;font:10px/1.2 Consolas,monospace;color:#238f86}
-.api-compact .lan-chat-link{display:block;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#238f86;text-decoration:none}
+.api-compact .lan-chat-slot{min-width:0}
+.api-compact .lan-chat-slot:empty{display:none}
+.api-compact .lan-address-list{padding:4px 0 7px;max-height:174px;overflow-y:auto;scrollbar-width:thin}
+.api-compact .lan-address-entry{display:flex;align-items:center;gap:9px;min-height:35px;padding:4px 0;border-bottom:1px solid #edf3f1}
+.api-compact .lan-address-entry:last-child{border-bottom:0}
+.api-compact .lan-address-name{display:flex;align-items:center;gap:7px;flex:1 1 0;min-width:0;color:#376866}
+.api-compact .lan-address-name strong{font-size:11px;white-space:nowrap}
+.api-compact .lan-address-name small{font-size:10px;color:#91a5a4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.api-compact .lan-chat-link,.api-compact .lan-chat-inactive{flex:0 0 auto;max-width:65%;font:11px/1.4 Consolas,monospace;overflow-wrap:anywhere}
+.api-compact .lan-chat-link{color:#238f86;text-decoration:none}
 .api-compact .lan-chat-link:hover{text-decoration:underline}
-.api-compact .lan-chat-pending{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#8ba0a1}
+.api-compact .lan-chat-inactive{color:#91a5a4}
+.api-compact .lan-chat-pending,.api-compact .lan-address-note{display:block;color:#8ba0a1;font-size:10px;padding:5px 0}
 .api-compact .lan-toggle{display:flex;align-items:center;justify-content:center;position:relative;flex:0 0 38px;width:38px;height:24px;cursor:pointer}
+.api-compact .lan-toggle-row .lan-toggle{margin-left:auto}
 .api-compact .lan-toggle .switch{margin-left:0}
 .api-compact .tunnel-heading{height:44px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #edf3f1}
 .api-compact .tunnel-heading>strong{font-size:13px}

@@ -90,6 +90,7 @@ from serve import images as images_api  # noqa: E402
 from serve import image_api_services as api_images  # noqa: E402
 from serve import image_task_status  # noqa: E402
 from serve import gallery as gallery_api  # noqa: E402
+from serve import image_jobs  # noqa: E402
 
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
@@ -5661,7 +5662,9 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
 
             def work(c=c, box=box):
                 try:
-                    box["r"] = hub.call(c.name, c.arguments, cancel)
+                    box["r"] = (hub.call(c.name, c.arguments, cancel, tool_call_id=c.id)
+                                if c.name == "polystrata__generate_image" and getattr(hub, "detached", False) else
+                                hub.call(c.name, c.arguments, cancel))
                 except McpCancelled:
                     box["cancelled"] = True
                 except Exception as exc:
@@ -5690,6 +5693,7 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                   f"{r['ms'] / 1000:.1f} s{' (truncated for the model)' if r['truncated'] else ''}", flush=True)
             results.append(r["text"])
             yield "mcp", {"event": "result", "id": c.id, **{k: r[k] for k in ("ok", "text", "chars", "truncated", "ms")},
+                          **({"image_job_id": r["image_job_id"]} if r.get("image_job_id") else {}),
                           **({"image_file": r["image_file"], "image_prompt": r.get("image_prompt", ""),
                               "image_original_file": r.get("image_original_file"),
                               "edited_previous": r.get("edited_previous", False),
@@ -5700,7 +5704,9 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
             # context, with no thinking/tools and at most 256 output tokens.
             # Failure must never trigger another image generation.
             if len(calls) == 1 and c.name == "polystrata__generate_image":
-                if r.get("ok") and r.get("image_file"):
+                if r.get("image_job_id"):
+                    yield "event", Event("content", "已提交桌面端后台生图任务。图片完成后将显示在当前会话，关闭浏览器不会中断生成。")
+                elif r.get("ok") and r.get("image_file"):
                     saw_text = False
                     try:
                         for kind, payload in image_visual_followup(svc, messages, c, r, kw, sampling, cancel):
@@ -6326,6 +6332,23 @@ def make_handler(svc: Service):
             if path == "/v1/mikuchin/ui-language" and MIKUCHIN_LANGUAGE_FILE:
                 self._json(200, {"language": mikuchin_language()})
                 return
+            if path == "/v1/mikuchin/image-jobs" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                try:
+                    job_id = parse_qs(urlsplit(self.path).query).get("id", [None])[0]
+                    chat_id = parse_qs(urlsplit(self.path).query).get("session_id", [None])[0]
+                    self._json(200, image_jobs.snapshot(svc, job_id, session_id=chat_id))
+                except (ValueError, OSError) as exc:
+                    self._json(400, {"error": {"message": str(exc)}})
+                return
+            if path == "/v1/mikuchin/gallery/item" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._authorized(): return
+                try:
+                    ident = parse_qs(urlsplit(self.path).query).get("id", [None])[0]
+                    self._json(200, gallery_api.detail(svc, ident))
+                except (ValueError, OSError) as exc:
+                    self._json(404, {"error": {"message": str(exc)}})
+                return
             if path == "/v1/mikuchin/gallery" and MIKUCHIN_LANGUAGE_FILE:
                 if not self._authorized(): return
                 try:
@@ -6604,6 +6627,15 @@ def make_handler(svc: Service):
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
             if path.startswith("/v1/") and self._foreign_page():
+                return
+            if path == "/v1/mikuchin/image-jobs" and MIKUCHIN_LANGUAGE_FILE:
+                if not self._own_page("image tasks are run independently on the desktop service"):
+                    return
+                try:
+                    req = json.loads(self._body() or b"{}")
+                    self._json(202, image_jobs.submit(svc, req))
+                except (ValueError, OSError) as exc:
+                    self._json(400, {"error": {"message": str(exc)}})
                 return
             if path == "/v1/mikuchin/gallery" and MIKUCHIN_LANGUAGE_FILE:
                 if not self._own_page("gallery items can be modified"):
@@ -7375,7 +7407,8 @@ def make_handler(svc: Service):
                                   if isinstance(parts, list) else "")
                 hub = ChatImageHub(svc, svc.mcp if use_external_mcp else None,
                                    session_id=session_id, stateless=stateless,
-                                   latest_user_text=last_user_text)
+                                   latest_user_text=last_user_text,
+                                   detached=bool(MIKUCHIN_LANGUAGE_FILE and session_id))
                 extra = hub.template_tools(exclude=own)            # the request's own tools win a name clash
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
@@ -7395,6 +7428,16 @@ def make_handler(svc: Service):
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force,
                                                  req=inference_req, cancel=cancel)
             _debug_req("openai", inference_req, messages, tools, max_new, thinking, len(ids))
+            if use_mcp and getattr(hub, "detached", False):
+                # Capture the request's context, but NOT its cancellation event.
+                # The 256-token visual follow-up also runs on the desktop after
+                # generation and remains independent of the SSE/browser lifetime.
+                def detached_image_followup(tool_id, arguments, output):
+                    call = types.SimpleNamespace(id=tool_id, name="polystrata__generate_image",
+                                                 arguments=arguments)
+                    return image_visual_followup(svc, messages, call, output, kw,
+                                                 inference_req, threading.Event())
+                hub.visual_followup = detached_image_followup
             run = run_with_mcp(svc, hub, messages, tools, kw, ids, thinking, max_new, max_req, inference_req, cancel,
                                {t["name"] for t in extra}) if use_mcp else None
             chunks = openai_chunks(svc, inference_req, ids, thinking, tools, max_new, cancel, run=run, force=force)

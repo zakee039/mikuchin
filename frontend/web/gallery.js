@@ -3,10 +3,17 @@
 (() => {
   const $g = id => document.getElementById(id);
   const api = "v1/mikuchin/gallery";
+  const translate = value => window.MikuchinI18n?.translate(value) || value;
   const limit = 60;
   let items = [], total = 0, loading = false, multi = false;
   let selected = new Set(), lightbox = -1, revealed = false;
   let visibleNsfw = false, fetchVersion = 0;
+  let variant = "upscaled", zoom = 1, panX = 0, panY = 0;
+  const fingers = new Map();
+  const upscaleJobs = new Map();
+  let pinch = null, dragStart = null, lastTap = null, chromeVisible = true;
+  const appliedUpscales = new Set();
+  let pollingUpscales = false, tapTimer = null;
 
   const sourceLabel = value => ({
     studio:"生图",chat:"聊天",local:"本地",api:"API"
@@ -122,9 +129,13 @@
   }
   function open(index) {
     if (!items[index]) return;
-    lightbox=index;revealed=false;
+    lightbox=index;revealed=false;variant="upscaled";
+    resetZoom();chromeVisible=true;setChrome(true);
     $g("gallery-viewer").hidden=false;
     showViewer();
+    void checkUpscaleJobs();
+    // Android supports fullscreen/orientation lock; iOS falls back to the fixed viewer.
+    if (matchMedia("(max-width: 760px)").matches) void requestLandscape();
     $g("gallery-close").focus();
   }
   function close() {
@@ -132,6 +143,10 @@
     const id=items[lightbox]?.id;
     lightbox=-1;revealed=false;
     $g("gallery-viewer").hidden=true;
+    resetZoom();
+    if (document.fullscreenElement===$g("gallery-viewer"))
+      void document.exitFullscreen().catch(() => {});
+    try { screen.orientation?.unlock?.(); } catch (_error) {}
     $g("gallery-full").removeAttribute("src");
     const from=$g("gallery-grid").querySelector('[data-gallery-id="'+id+'"]');
     from?.focus({preventScroll:true});
@@ -141,12 +156,26 @@
     const item=items[lightbox];
     if (!item) {close();return;}
     $g("gallery-position").textContent=(lightbox+1)+" / "+total;
-    $g("gallery-full").src="v1/images/files/"+item.id+".png";
+    const pair=Boolean(item.variants?.original && item.variants?.upscaled);
+    if (!pair) variant="original";
+    const imageId=pair && variant==="original" ? item.variants.original : item.id;
+    const nextSrc="v1/images/files/"+imageId+".png";
+    if ($g("gallery-full").getAttribute("src")!==nextSrc){resetZoom();$g("gallery-full").src=nextSrc;}
     const hide=masked(item) && !revealed;
     $g("gallery-full").classList.toggle("gallery-blurred",hide);
     $g("gallery-viewer-spoiler").hidden=!hide;
     $g("gallery-mark-nsfw").textContent=item.nsfw?"取消 NSFW 标记":"标记为 NSFW";
-    const pair=Boolean(item.variants?.original && item.variants?.upscaled);
+    $g("gallery-variant-picker").hidden=!pair;
+    $g("gallery-create-upscale").hidden=pair;
+    $g("gallery-show-original").classList.toggle("active",variant==="original");
+    $g("gallery-show-upscaled").classList.toggle("active",variant==="upscaled");
+    $g("gallery-show-original").setAttribute("aria-pressed",String(variant==="original"));
+    $g("gallery-show-upscaled").setAttribute("aria-pressed",String(variant==="upscaled"));
+    const job=upscaleJobs.get(item.id);
+    const pending=job && ["queued","working"].includes(job.state);
+    const action=$g("gallery-create-upscale");
+    action.disabled=Boolean(pending);
+    action.textContent=translate(pending ? "4x 处理中…" : "生成4x图");
     $g("gallery-delete-original").hidden=!pair;
     $g("gallery-delete-upscaled").hidden=!pair;
     $g("gallery-details").textContent=[
@@ -164,8 +193,101 @@
       if (lightbox === -1) return;
     }
     lightbox=(lightbox+delta+items.length)%items.length;
-    revealed=false;
+    revealed=false;variant="upscaled";resetZoom();
     showViewer();
+    void checkUpscaleJobs();
+  }
+  function setChrome(visible) {
+    chromeVisible=visible;
+    $g("gallery-viewer").classList.toggle("gallery-chrome-hidden",!visible);
+  }
+  function applyZoom() {
+    $g("gallery-full").style.transform=`translate(${panX}px, ${panY}px) scale(${zoom})`;
+    $g("gallery-viewer-wrap").classList.toggle("is-zoomed",zoom>1.01);
+  }
+  function clampPan() {
+    const img=$g("gallery-full"), rect=$g("gallery-viewer-wrap").getBoundingClientRect();
+    if (!img.naturalWidth || !img.naturalHeight || !rect.width || !rect.height) return;
+    const fit=Math.min(rect.width/img.naturalWidth,rect.height/img.naturalHeight);
+    const maxX=Math.max(0,(img.naturalWidth*fit*zoom-rect.width)/2);
+    const maxY=Math.max(0,(img.naturalHeight*fit*zoom-rect.height)/2);
+    panX=Math.min(maxX,Math.max(-maxX,panX));
+    panY=Math.min(maxY,Math.max(-maxY,panY));
+  }
+  function resetZoom() {
+    zoom=1;panX=0;panY=0;pinch=null;dragStart=null;lastTap=null;
+    if(tapTimer){clearTimeout(tapTimer);tapTimer=null;}
+    fingers.clear();applyZoom();
+  }
+  function setZoom(level,x,y) {
+    const next=Math.min(4,Math.max(1,level));
+    const rect=$g("gallery-viewer-wrap").getBoundingClientRect();
+    const cx=x-(rect.left+rect.width/2),cy=y-(rect.top+rect.height/2);
+    panX=cx-(cx-panX)*next/zoom;
+    panY=cy-(cy-panY)*next/zoom;
+    zoom=next;
+    if (zoom<=1.01) {zoom=1;panX=0;panY=0;}
+    clampPan();applyZoom();
+  }
+  async function requestLandscape() {
+    const viewer=$g("gallery-viewer");
+    try {
+      if (!document.fullscreenElement && viewer.requestFullscreen) await viewer.requestFullscreen();
+      if (document.fullscreenElement===viewer && screen.orientation?.lock)
+        await screen.orientation.lock("landscape");
+    } catch (_error) {
+      // Safari/iOS has no cross-browser orientation-lock API for ordinary web pages.
+      // The fixed 100dvh viewer still works when the user rotates the device.
+    }
+  }
+  async function updateUpscaledItem(sourceId) {
+    if (appliedUpscales.has(sourceId)) return;
+    const response=await fetch(api+"/item?id="+encodeURIComponent(sourceId),
+      {headers:headers(),cache:"no-store"});
+    if (!response.ok) throw Error("无法读取超分结果");
+    const fresh=await response.json();
+    appliedUpscales.add(sourceId);
+    const index=items.findIndex(item=>item.id===sourceId||item.variants?.original===sourceId);
+    if (index!==-1) {
+      items[index]=fresh;
+      render();
+      if (lightbox===index) {variant="upscaled";showViewer();}
+    }
+  }
+  async function checkUpscaleJobs() {
+    if (lightbox===-1||pollingUpscales) return;
+    pollingUpscales=true;
+    try {
+      const response=await fetch("v1/mikuchin/image-jobs", {headers:headers(),cache:"no-store"});
+      if (!response.ok) return;
+      const data=await response.json();
+      for (const job of data.jobs||[]) {
+        if (job.kind!=="upscale") continue;
+        upscaleJobs.set(job.source_id,job);
+        if (job.state==="done" && !appliedUpscales.has(job.source_id)) {
+          try {await updateUpscaledItem(job.source_id);}catch(_error){}
+        }
+      }
+      if (lightbox!==-1) showViewer();
+    } catch (_error) { /* The desktop worker keeps running while the browser is offline. */ }
+    finally {pollingUpscales=false;}
+  }
+  async function createUpscale() {
+    const item=items[lightbox];
+    if (!item || item.variants?.upscaled) return;
+    const button=$g("gallery-create-upscale");
+    button.disabled=true;
+    try {
+      const response=await fetch("v1/mikuchin/image-jobs",{
+        method:"POST",headers:headers(true),cache:"no-store",
+        body:JSON.stringify({kind:"upscale",image_id:item.id})});
+      const job=await response.json().catch(()=>({}));
+      if (!response.ok) throw Error(job.error?.message || "HTTP "+response.status);
+      upscaleJobs.set(item.id,job);
+      toast("success","已提交 4x 任务","桌面端会独立完成；可关闭浏览器或继续浏览图片。",5000);
+    } catch (error) {
+      toast("error","无法提交 4x 任务",String(error.message||error),6000);
+    } finally {if(lightbox!==-1)showViewer();}
   }
   async function mutateNsfw() {
     const item=items[lightbox];
@@ -263,6 +385,10 @@
   });
   $g("gallery-more").addEventListener("click",()=>load(false));
   $g("gallery-close").addEventListener("click",close);
+  $g("gallery-create-upscale").addEventListener("click",()=>void createUpscale());
+  $g("gallery-show-original").addEventListener("click",()=>{variant="original";showViewer();});
+  $g("gallery-show-upscaled").addEventListener("click",()=>{variant="upscaled";showViewer();});
+  $g("gallery-landscape").addEventListener("click",()=>void requestLandscape());
   $g("gallery-prev").addEventListener("click",()=>shift(-1));
   $g("gallery-next").addEventListener("click",()=>shift(1));
   $g("gallery-mark-nsfw").addEventListener("click",mutateNsfw);
@@ -274,7 +400,8 @@
     if(item) void deleteImages([item.id]);
   });
   $g("gallery-viewer").addEventListener("click",e=>{
-    if(e.target===$g("gallery-viewer")||e.target===$g("gallery-viewer-stage"))close();
+    if(e.target===$g("gallery-viewer")||e.target===$g("gallery-viewer-stage"))
+      setChrome(!chromeVisible);
   });
   document.addEventListener("keydown",e=>{
     if (lightbox===-1) return;
@@ -282,15 +409,79 @@
     else if(e.key==="ArrowLeft"){e.preventDefault();void shift(-1);}
     else if(e.key==="ArrowRight"){e.preventDefault();void shift(1);}
   });
-  let touchX=null;
-  $g("gallery-viewer-stage").addEventListener("touchstart",e=>{
-    touchX=e.touches.length===1?e.touches[0].clientX:null;
-  },{passive:true});
-  $g("gallery-viewer-stage").addEventListener("touchend",e=>{
-    if(touchX==null||!e.changedTouches.length)return;
-    const dist=e.changedTouches[0].clientX-touchX;touchX=null;
-    if(Math.abs(dist)>75)void shift(dist>0?-1:1);
-  },{passive:true});
+  const wrap=$g("gallery-viewer-wrap");
+  const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const middle=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+  wrap.addEventListener("pointerdown",e=>{
+    if (e.target.closest("button") || $g("gallery-viewer-spoiler").contains(e.target) &&
+        !$g("gallery-viewer-spoiler").hidden) return;
+    e.preventDefault();
+    wrap.setPointerCapture(e.pointerId);
+    fingers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if (fingers.size===1) {
+      dragStart={x:e.clientX,y:e.clientY,panX,panY,started:Date.now(),moved:false};
+      pinch=null;
+    } else if(fingers.size===2){
+      const [a,b]=[...fingers.values()];
+      pinch={initialDistance:Math.max(1,distance(a,b)),initialScale:zoom,lastMid:middle(a,b)};
+      dragStart=null;
+      if(tapTimer){clearTimeout(tapTimer);tapTimer=null;}
+    }
+  });
+  wrap.addEventListener("pointermove",e=>{
+    if(!fingers.has(e.pointerId))return;
+    e.preventDefault();
+    fingers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(fingers.size>=2 && pinch){
+      const [a,b]=[...fingers.values()],mid=middle(a,b);
+      setZoom(pinch.initialScale*distance(a,b)/pinch.initialDistance,mid.x,mid.y);
+      panX+=mid.x-pinch.lastMid.x;panY+=mid.y-pinch.lastMid.y;
+      pinch.lastMid=mid;clampPan();applyZoom();
+    } else if(fingers.size===1 && dragStart){
+      const dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y;
+      if(Math.abs(dx)>9||Math.abs(dy)>9)dragStart.moved=true;
+      if(zoom>1.01){panX=dragStart.panX+dx;panY=dragStart.panY+dy;clampPan();applyZoom();}
+    }
+  });
+  const endPointer=e=>{
+    if(!fingers.has(e.pointerId))return;
+    const start=dragStart;
+    fingers.delete(e.pointerId);
+    if(pinch){
+      if(fingers.size<2){pinch=null;dragStart=null;}
+      return;
+    }
+    if(start && fingers.size===0){
+      const dx=e.clientX-start.x,dy=e.clientY-start.y;
+      if(zoom<=1.01 && Math.abs(dx)>65 && Math.abs(dx)>Math.abs(dy)*1.2){
+        lastTap=null;
+        void shift(dx>0?-1:1);
+      }else if(!start.moved && Date.now()-start.started<500){
+        const now=Date.now();
+        if(lastTap && now-lastTap.time<310 &&
+            Math.hypot(e.clientX-lastTap.x,e.clientY-lastTap.y)<36){
+          if(tapTimer){clearTimeout(tapTimer);tapTimer=null;}
+          setZoom(zoom>1.01?1:2.2,e.clientX,e.clientY);
+          lastTap=null;
+        }else{
+          lastTap={time:now,x:e.clientX,y:e.clientY};
+          if(tapTimer)clearTimeout(tapTimer);
+          tapTimer=setTimeout(()=>{tapTimer=null;setChrome(!chromeVisible);},320);
+        }
+      }
+    }
+    dragStart=null;
+  };
+  wrap.addEventListener("pointerup",endPointer);
+  wrap.addEventListener("pointercancel",endPointer);
+  wrap.addEventListener("wheel",e=>{
+    if(lightbox===-1)return;
+    e.preventDefault();
+    setZoom(zoom*(e.deltaY<0?1.2:1/1.2),e.clientX,e.clientY);
+  },{passive:false});
+  $g("gallery-full").addEventListener("load",()=>{clampPan();applyZoom();});
+  window.addEventListener("resize",()=>{if(lightbox!==-1){clampPan();applyZoom();}});
+  setInterval(()=>{if(lightbox!==-1)void checkUpscaleJobs();},2300);
   window.MikuchinGallery={refresh:()=>load(true)};
   if(location.hash==="#gallery")void load(true);
 })();

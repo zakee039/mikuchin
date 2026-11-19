@@ -231,6 +231,9 @@ class SessionV1:
         if not isinstance(messages, list) or len(messages) > MAX_MESSAGES:
             raise ValueError("messages must be an array of at most 5000 entries")
         with self.lock:
+            if field == "web_messages":
+                # A stale browser save must never erase a completed desktop image.
+                messages = self._merge_image_jobs(ident, messages)
             packed = json_value(self._pack(ident, messages))
             with self._db() as c:
                 self._ensure(c, ident)
@@ -262,6 +265,110 @@ class SessionV1:
 
     def store_web(self, ident, messages):
         self._store(ident, messages, "web_messages")
+
+    def _merge_image_jobs(self, ident, messages):
+        """Merge authoritative desktop image jobs into a browser chat snapshot.
+
+        Called under self.lock. Existing streamed tool IDs are preferred; if the
+        client closed before saving the tool event, add a recovery assistant turn.
+        Reconciliation on EVERY browser save prevents late stale saves from
+        undoing completed image results.
+        """
+        path = self.root / "image-jobs.sqlite3"
+        if not path.is_file():
+            return messages
+        db = sqlite3.connect(path, timeout=15)
+        try:
+            db.row_factory = sqlite3.Row
+            columns = {item[1] for item in db.execute("PRAGMA table_info(jobs)")}
+            if "tool_call_id" not in columns:
+                return messages  # v0.2.9 task database: upgraded on first job query
+            rows = db.execute(
+                "SELECT id,tool_call_id,state,phase,result,error,created FROM jobs "
+                "WHERE kind='chat' AND source_id=? ORDER BY created LIMIT 200", (ident,)).fetchall()
+        finally:
+            db.close()
+        if not rows:
+            return messages
+        messages = json.loads(json.dumps(messages, ensure_ascii=False))
+        for row in rows:
+            ident_job, call_id, state = row["id"], row["tool_call_id"], row["state"]
+            if not call_id:
+                continue
+            # Remove a recovery placeholder when the real streamed response has
+            # subsequently been saved, then patch that real tool instead.
+            natural = any(msg.get("role") == "assistant" and not msg.get("_image_job_recovery")
+                          and any(t.get("id") == call_id for t in msg.get("tools") or [])
+                          for msg in messages if isinstance(msg, dict))
+            if natural:
+                messages = [m for m in messages if not (
+                    isinstance(m, dict) and m.get("_image_job_recovery") == ident_job)]
+            found = False
+            for msg in messages:
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                for variant in [msg] + (msg.get("swipes") if isinstance(msg.get("swipes"), list) else []):
+                    if not isinstance(variant, dict):
+                        continue
+                    for tool in variant.get("tools") or []:
+                        if isinstance(tool, dict) and (tool.get("id") == call_id or
+                                                      tool.get("image_job_id") == ident_job):
+                            self._apply_image_job(tool, row)
+                            if state == "done":
+                                final = json.loads(row["result"] or "{}").get("reply_text")
+                                if final and (not variant.get("text") or
+                                              "已提交桌面端后台生图任务" in variant.get("text", "")):
+                                    variant["text"] = final
+                            found = True
+            if not found and len(messages) < MAX_MESSAGES:
+                tool = {"id": call_id, "name": "polystrata__generate_image",
+                        "tool": "generate_image", "round": 1, "at": 0}
+                self._apply_image_job(tool, row)
+                final = (json.loads(row["result"] or "{}").get("reply_text")
+                         if state == "done" else "")
+                messages.append({"role": "assistant", "text": "",
+                                 "time": int(row["created"] * 1000),
+                                 "_image_job_recovery": ident_job, "tools": [tool]})
+                if final:
+                    messages[-1]["text"] = final
+        return messages
+
+    @staticmethod
+    def _apply_image_job(tool, row):
+        state = row["state"]
+        tool["image_job_id"] = row["id"]
+        tool["state"] = ("done" if state == "done" else "error" if state in
+                         ("error", "interrupted") else "running")
+        if state == "done":
+            result = json.loads(row["result"] or "{}")
+            tool["ok"] = True
+            tool["result"] = result.get("text", "图片已生成。")
+            for field in ("image_file", "image_original_file", "image_prompt", "image_model",
+                          "edited_previous", "upscale_applied", "upscale_fallback"):
+                if field in result:
+                    tool[field] = result[field]
+        elif state in ("error", "interrupted"):
+            tool["ok"] = False
+            tool["result"] = row["error"] or row["phase"]
+        else:
+            tool["ok"] = True
+            tool["result"] = "桌面端正在生成图片；浏览器断开不影响任务。"
+
+    def complete_image_tool_job(self, session_id, job_id, call_id, result):
+        """Persist image-result reconciliation even with every browser closed."""
+        valid_id(session_id)
+        with self.lock, self._db() as db:
+            row = db.execute("SELECT web_messages FROM conversations WHERE id=?",
+                             (session_id,)).fetchone()
+            if not row:
+                return  # a deleted conversation must never be recreated
+            before = row["web_messages"]
+            merged = self._merge_image_jobs(session_id, json.loads(before))
+            after = json_value(merged)
+            if after != before:
+                db.execute("UPDATE conversations SET web_messages=?,updated=?,"
+                           "content_rev=content_rev+1 WHERE id=?",
+                           (after, time.time(), session_id))
 
     def _model_path(self, ident, model):
         name = hashlib.sha256(str(model).encode("utf-8")).hexdigest()[:24]

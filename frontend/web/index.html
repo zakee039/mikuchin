@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="web/app.css?v=20261115-image-api">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <link rel="stylesheet" href="web/image-api.css?v=20261116-image-status-upscale">
-<link rel="stylesheet" href="web/gallery.css?v=20261116-gallery-2">
+<link rel="stylesheet" href="web/gallery.css?v=20261119-mobile-viewer">
 <script>
   // the theme before the first paint: the saved choice, else the system's
   try {
@@ -338,14 +338,22 @@
     </div>
     <div id="gallery-viewer" class="gallery-viewer" hidden role="dialog" aria-modal="true" aria-label="查看图片">
       <div class="gallery-viewer-top">
-        <span id="gallery-position">1 / 1</span>
+        <div class="gallery-viewer-primary">
+          <button class="gallery-icon-button gallery-upscale-button" id="gallery-create-upscale" type="button">生成4x图</button>
+          <div class="gallery-variant-picker" id="gallery-variant-picker" role="group" aria-label="图片版本" hidden>
+            <button class="gallery-icon-button" id="gallery-show-original" type="button">原图</button>
+            <button class="gallery-icon-button" id="gallery-show-upscaled" type="button">4x</button>
+          </div>
+          <span id="gallery-position">1 / 1</span>
+        </div>
         <span class="gallery-viewer-top-actions">
+          <button class="gallery-icon-button gallery-landscape-button" type="button" id="gallery-landscape" aria-label="横屏全屏">⤢</button>
           <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-original" hidden>删除原图</button>
           <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-upscaled" hidden>删除4×</button>
           <button class="gallery-icon-button" type="button" id="gallery-mark-nsfw">标记 NSFW</button>
           <button class="gallery-icon-button" type="button" id="gallery-viewer-delete">删除</button>
-          <button class="gallery-icon-button gallery-viewer-close" type="button" id="gallery-close" aria-label="关闭">✕</button>
         </span>
+        <button class="gallery-icon-button gallery-viewer-close" type="button" id="gallery-close" aria-label="关闭">✕</button>
       </div>
       <div class="gallery-viewer-stage" id="gallery-viewer-stage">
         <button class="gallery-viewer-arrow" type="button" id="gallery-prev" aria-label="上一张">‹</button>
@@ -643,16 +651,16 @@
 </div>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/versions.js?v=0.2.9"></script>
-<script src="web/app.js?v=20261113-sampling-default"></script>
-<script src="web/image-studio.js?v=20261116-image-status-upscale"></script>
+<script src="web/versions.js?v=0.2.10"></script>
+<script src="web/app.js?v=20261119-detached-chat-images"></script>
+<script src="web/image-studio.js?v=20261119-detached-image-jobs"></script>
 <script src="web/sessions.js?v=20261103-session-sampling"></script>
 <script src="web/characters.js?v=20261113-chat-image-controls"></script>
 <script src="web/i18n-data.js?v=20261113-chat-image-controls"></script>
-<script src="web/gallery-i18n.js?v=20261116-gallery-1"></script>
+<script src="web/gallery-i18n.js?v=20261119-mobile-viewer"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 <script src="web/image-api-settings.js?v=20261116-model-discovery"></script>
-<script src="web/gallery.js?v=20261116-gallery-2"></script>
+<script src="web/gallery.js?v=20261119-mobile-viewer"></script>
 </body>
 </html>

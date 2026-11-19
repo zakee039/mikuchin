@@ -289,6 +289,73 @@ def listing(svc, *, limit=60, offset=0, source="all", order="newest"):
                 item["nsfw"] = item["nsfw"] or any(bool(ch["nsfw"]) for ch in attached)
     return {"items":items,"total":total,"limit":limit,"offset":offset}
 
+
+def upscale_source(svc, ident):
+    """Resolve a singleton indexed artwork eligible for an on-demand 4x job."""
+    ensure(svc)
+    path = _file(svc, ident)
+    with _LOCK, _db(svc) as c:
+        row = c.execute("SELECT * FROM images WHERE id=?", (ident,)).fetchone()
+        if row is None or not path.is_file():
+            raise GalleryError("original image no longer exists")
+        if row["parent_id"] or c.execute(
+                "SELECT 1 FROM images WHERE parent_id=? LIMIT 1", (ident,)).fetchone():
+            raise GalleryError("this artwork already has an original/4x pair")
+        if row["width"] <= 0 or row["height"] <= 0:
+            raise GalleryError("invalid original image size")
+        return _view(row)
+
+
+def detail(svc, ident):
+    """Return an artwork group by either the original or its 4x image ID."""
+    ensure(svc)
+    _file(svc, ident)  # validate opaque image ID, not arbitrary paths
+    with _LOCK, _db(svc) as c:
+        main = _main_id(c, ident)
+        if main is None:
+            raise GalleryError("gallery image not found")
+        cover = c.execute("SELECT * FROM images WHERE id=?", (main,)).fetchone()
+        children = c.execute(
+            "SELECT id FROM images WHERE parent_id=? ORDER BY width*height,id", (main,)).fetchall()
+        item = _view(cover)
+        item["variant_count"] = 1 + len(children)
+        item["variants"] = ({"upscaled": main, "original": children[0]["id"]} if children
+                            else {"upscaled": None, "original": None})
+        return item
+
+
+def attach_upscaled(svc, original_id, png):
+    """Atomically promote an existing original into a 4x artwork group.
+
+    The newly generated 4x becomes the cover; the original remains its child.
+    A deleted or already paired original never gets silently overwritten.
+    """
+    if not isinstance(png, bytes):
+        raise GalleryError("upscaled image must be PNG bytes")
+    original = upscale_source(svc, original_id)
+    image_id = secrets.token_hex(16)
+    dest = _file(svc, image_id)
+    try:
+        dest.write_bytes(png)
+        dimensions = _size(dest)
+        if dimensions != (original["width"] * 4, original["height"] * 4):
+            raise GalleryError("4x image dimensions do not match the original")
+        with _LOCK, _db(svc) as c:
+            current = c.execute("SELECT * FROM images WHERE id=?", (original_id,)).fetchone()
+            if current is None or current["parent_id"] or c.execute(
+                    "SELECT 1 FROM images WHERE parent_id=? LIMIT 1", (original_id,)).fetchone():
+                raise GalleryError("original image was deleted or already upscaled")
+            _insert(c, {"id": image_id, "created": current["created"],
+                        "source": current["source"], "provider": current["provider"],
+                        "model": current["model"], "prompt": current["prompt"],
+                        "session_id": current["session_id"], "width": dimensions[0],
+                        "height": dimensions[1], "nsfw": current["nsfw"], "parent_id": ""})
+            c.execute("UPDATE images SET parent_id=? WHERE id=?", (image_id, original_id))
+        return image_id
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+
 def set_nsfw_many(svc, ids, nsfw):
     """One manual NSFW setting applies to both original and 4x versions."""
     if type(nsfw) is not bool:

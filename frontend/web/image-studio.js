@@ -17,6 +17,9 @@
   let references = []; // Ordered, tab-local uploads. Never transmitted before Generate.
   let reference = null; // First item for optional vision-to-prompt conversion.
   let working = false;
+  const imageJobWatchers = new Map();
+  const renderedImageJobs = new Set();
+  let restoredImageJobs = false;
 
   const model = () => catalog.find(m => m.id === current) || catalog[0];
   const defaultSteps = (m) => Number(m?.steps || (m?.family === "sdxl" ? 28 : 8));
@@ -136,6 +139,7 @@
       select.value = current;
       loadDraft(current);
       if (!working) get("img-hint").textContent = model()?.family === "api" ? "API 服务已就绪" : "每次仅生成一张图片；生成图像与聊天请求会相互等待。";
+      if (!restoredImageJobs) {restoredImageJobs = true; void restoreImageJobs();}
     } catch (e) {
       console.warn("Image model list:", e);
       get("img-hint").textContent = "请填写 API 密钥后查看生图模型";
@@ -343,50 +347,82 @@
     finally {get("img-ref-convert").disabled = false;}
   };
 
-  function newTaskId() {
-    const bytes = new Uint8Array(12);
-    if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
-    else for (let i=0; i<bytes.length; i++) bytes[i] = Math.floor(Math.random()*256);
-    return "img-" + Array.from(bytes, x => x.toString(16).padStart(2, "0")).join("");
-  }
   function formatDuration(ms) {
     const seconds = Math.max(0, Math.floor(ms / 1000));
     const m = Math.floor(seconds / 60), s = seconds % 60;
     return (m >= 60 ? String(Math.floor(m / 60)).padStart(2, "0") + ":" : "") +
       String(m % 60).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
-  function watchTask(id, start) {
+  function addImageJobResult(job) {
+    if (renderedImageJobs.has(job.id)) return;
+    const ids = job.result?.image_ids || [];
+    if (!ids.length) return;
+    renderedImageJobs.add(job.id);
+    for (const id of ids) {
+      if (!/^[a-f0-9]{32}$/.test(id)) continue;
+      const fig = document.createElement("figure");
+      const pic = document.createElement("img");
+      pic.src = "v1/images/files/" + id + ".png";
+      pic.alt = job.result.model || "生成图片";
+      const caption = document.createElement("figcaption");
+      caption.textContent = [job.result.model, job.result.size,
+        job.result.upscale_applied ? "Anime 4×" : "", "桌面端任务已完成"].filter(Boolean).join(" · ");
+      fig.append(pic, caption);
+      get("img-results").prepend(fig);
+    }
+  }
+  function watchTask(id, created) {
+    if (imageJobWatchers.has(id)) return;
     let stopped = false, querying = false;
     const clock = get("img-elapsed");
     clock.hidden = false;
-    function tick() {clock.textContent = formatDuration(performance.now() - start);}
+    const tick = () => {clock.textContent = formatDuration(Math.max(0, Date.now() - created * 1000));};
     tick();
-    const ticker = setInterval(tick, 500);
+    const ticker = setInterval(tick, 1000);
+    const finish = () => {stopped = true;clearInterval(ticker);clearInterval(updater);
+      imageJobWatchers.delete(id);};
     const probe = async () => {
       if (stopped || querying) return;
       querying = true;
       try {
-        const res = await fetch("v1/mikuchin/image-task-status?id=" + encodeURIComponent(id),
-          {headers: headers(), cache:"no-store"});
+        const res = await fetch("v1/mikuchin/image-jobs?id=" + encodeURIComponent(id),
+          {headers: headers(),cache:"no-store"});
         if (!res.ok) return;
-        const state = await res.json();
-        if (stopped || state.state === "unknown") return;
-        let label = state.phase || "正在生成";
-        if (state.state === "working" && Number.isInteger(state.step) && state.steps)
-          label += " · " + state.step + "/" + state.steps + " 步";
+        const job = await res.json();
+        if (stopped) return;
+        const label = (job.phase || "等待桌面端生成") +
+          (Number.isInteger(job.step) && job.steps ? " · " + job.step + "/" + job.steps + " 步" : "");
         get("img-hint").textContent = label;
-      } catch (err) {
-        // Progress is best-effort. The generating request remains authoritative.
-      } finally {querying = false;}
+        if (job.state === "done") {
+          addImageJobResult(job);
+          if (job.result?.upscale_error) {
+            get("img-task-error").textContent = String(job.result.upscale_error);
+            get("img-task-error").hidden = false;
+          }
+          finish();
+        } else if (["error","interrupted"].includes(job.state)) {
+          get("img-task-error").textContent = job.error || "桌面端生成任务失败";
+          get("img-task-error").hidden = false;
+          get("img-hint").textContent = "生成失败";
+          finish();
+        }
+      } catch (_error) { /* Browser connectivity is not the worker's lifetime. */ }
+      finally {querying = false;}
     };
-    const updater = setInterval(probe, 1000);
+    const updater = setInterval(probe, 1800);
+    imageJobWatchers.set(id, finish);
     void probe();
-    return () => {
-      stopped = true;
-      clearInterval(ticker);
-      clearInterval(updater);
-      tick();
-    };
+  }
+  async function restoreImageJobs() {
+    try {
+      const r = await fetch("v1/mikuchin/image-jobs", {headers:headers(), cache:"no-store"});
+      if (!r.ok) return;
+      const data = await r.json();
+      for (const job of (data.jobs || []).filter(j => j.kind === "generate").reverse()) {
+        if (job.state === "done") addImageJobResult(job);
+        else if (["queued","working"].includes(job.state)) watchTask(job.id, job.created);
+      }
+    } catch (_error) { /* The UI can reconnect and query the server later. */ }
   }
 
   get("img-form").onsubmit = async ev => {
@@ -397,11 +433,9 @@
     const steps = Number(get("img-steps").value);
     if (!Number.isInteger(steps) || steps < 1 || steps > 100) {toast("warn", "步数错误", "步数应为 1–100 的整数。");return;}
     const selected = model();
-    const taskId = newTaskId();
     const body = {prompt, negative_prompt: get("img-negative").value.trim(), steps,
-      size: `${get("img-width").value}x${get("img-height").value}`, response_format: "b64_json",
-      strata_upscale: get("img-upscale").value, strata_image_profile: current,
-      strata_image_task_id: taskId};
+      size: `${get("img-width").value}x${get("img-height").value}`, response_format: "url",
+      strata_upscale: get("img-upscale").value, strata_image_profile: current};
     if (chosenLora !== "none" && selected?.family === "qwen_turbo")
       body.strata_lora_id = chosenLora;
     if (get("img-seed").value !== "") body.seed = Number(get("img-seed").value);
@@ -415,45 +449,16 @@
     saveDraft();
     working = true;
     get("img-go").disabled = true;
-    const start = performance.now();
     get("img-task-error").textContent = "";
     get("img-task-error").hidden = true;
     get("img-hint").textContent = selected?.family === "api" ? "正在请求 API" : "等待本地生成任务";
-    const stopWatching = watchTask(taskId, start);
     try {
-      const res = await fetch("v1/images/generations", {method:"POST",headers:headers(true),body:JSON.stringify(body)});
+      const res = await fetch("v1/mikuchin/image-jobs", {method:"POST",headers:headers(true),
+        body:JSON.stringify({kind:"generate",request:body})});
       const j = await res.json();
       if (!res.ok) throw Error(j.error?.message || `HTTP ${res.status}`);
-      for (const d of j.data || []) {
-        const fig = document.createElement("figure");
-        const pic = document.createElement("img");
-        pic.src = "data:image/png;base64," + d.b64_json;
-        pic.alt = prompt;
-        const caption = document.createElement("figcaption");
-        const loraName = loraCatalog.find(l => l.id === j.strata?.lora_id)?.name;
-        caption.textContent = `${j.model || selected?.name}, ${j.size}` +
-          (selected?.family === "api" && !selected.supports_steps ? "" : `, ${steps} steps`) +
-          (d.seed == null ? "" : `, ${ui("Seed")} ${d.seed}`) +
-          `, ${((performance.now() - start)/1000).toFixed(0)} s` +
-          (loraName ? ` · LoRA: ${loraName}` : "") +
-          (j.strata?.upscale_applied ? " · Anime 4×" : "") + `: ${prompt}`;
-        const originalFile = (j.strata?.upscale_original_files || [])[0];
-        if (originalFile && /^[a-f0-9]{32}\.png$/.test(originalFile)) {
-          const link = document.createElement("a");
-          link.href = "v1/images/files/" + originalFile;
-          link.textContent = ` · ${ui("Original image")}`;
-          link.target = "_blank"; link.rel = "noopener noreferrer";
-          caption.append(link);
-        }
-        fig.append(pic, caption);
-        get("img-results").prepend(fig);
-      }
-      const upscaleError = j.strata?.upscale_error;
-      get("img-hint").textContent = upscaleError ? "生成成功 · 超分未完成（已保留原图）" : "生成完成";
-      if (upscaleError) {
-        get("img-task-error").textContent = String(upscaleError);
-        get("img-task-error").hidden = false;
-      }
+      get("img-hint").textContent = "已提交桌面端后台任务；关闭浏览器不会取消生成";
+      watchTask(j.id, j.created);
     } catch (e) {
       const detail = String(e.message || e);
       get("img-hint").textContent = "生成失败";
@@ -462,7 +467,6 @@
       toast("error", "生成失败", detail, 9000);
     }
     finally {
-      stopWatching();
       working = false;
       get("img-go").disabled = !catalog.find(m => m.id === current)?.available;
       refreshReferenceHint();
