@@ -702,13 +702,18 @@
   }
 
   async function retryTask(job) {
-    // A new running task; the source task and the current form stay untouched.
+    // A new running task; only a failed source is removed after server success.
     try {
       const clickedAt = Date.now() / 1000;
       const created = await jobCommand({action:"retry",id:job.id,client_started_at:clickedAt});
+      if (created.deleted_original_id) {
+        taskRecords.delete(created.deleted_original_id);
+        taskRows.delete(created.deleted_original_id);
+      }
       taskRecords.set(created.id,created);
       renderTaskRows();
-      toast("success","新任务已提交","原任务保持不变。",4200);
+      toast("success","新任务已提交",created.deleted_original_id ?
+        "原失败任务记录已删除。" : "原成功任务保持不变。",4200);
       void refreshImageJobs();
     } catch (error) {toast("error","重试未提交",String(error.message||error),8500);}
   }

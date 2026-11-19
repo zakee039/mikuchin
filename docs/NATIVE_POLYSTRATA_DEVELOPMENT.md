@@ -19,6 +19,24 @@ official PolyStrata submodule**. The native Gateway prototype does not yet
 implement image service management or generation, so the new UI is synchronized
 but is not yet fully functional on this experimental branch.
 
+### Main v0.3.1 retry behavior synchronized (frontend contract)
+
+The development branch now shares the v0.3.1 task-list interface: when a
+retry response explicitly contains `deleted_original_id`, the original failed
+record disappears immediately; successful-task retries keep their original
+record. A failed retry submission never deletes the source locally.
+
+**Important:** this experimental Gateway still has no Mikuchin image-task
+backend, so this is a shared frontend contract **not a working image retry
+endpoint in the native branch yet**. When the independent Image Worker is
+implemented, its failed-to-running replacement must be one atomic database
+transaction and must preserve any transferred reference images. Do not modify
+official `backend/polystrata` to implement that behavior.
+
+The product manifest on this branch reflects **main 0.3.1**, while Launcher
+and Android remain **0.3.0** without new binaries. No native-architecture
+release is implied by this version synchronization.
+
 ## Simplified KV policy (2026-11-19 design decision)
 
 - **No migration of existing chats or `POLYKV1!` snapshots** into the new Gateway. The new application starts a clean chat store for chats created there. The stable v0.3.0 data directory is not deleted.
