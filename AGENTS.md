@@ -8,6 +8,7 @@
 - 新业务代码全部写入 `backend/gateway` 等 Mikuchin 自有目录；官方服务只允许绑定内部 loopback，预定内部端口 `15240`。当前 Gateway 开发端口 `15249`；在完成验收前**不得占用正式生产的 15239**。
 - 旧版 `scripts/package-main-release.py` 不支持 `.gitmodules`，因此本分支暂时**不得使用旧版主程序发布流程或以 v0.3.0 名义发布新架构**。`versions.json` 的 0.3.0 是开发起点，不是新架构完成版本。
 - 必做检查：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-polystrata.ps1 verify`、`python -m unittest discover -s backend/gateway -v`、`git submodule status`、`git status`。未来真实模型/显存/KV 测试须独立执行。
+- 如改动 Gateway 协议，可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native-transport.ps1`，它将官方 Mock Engine 和 Gateway 临时运行在 15240/15249，结束时自动退出；使用临时随机密钥和新会话测试目录，不会影响 15239。不要把 Mock 测试误报为真实 GPU/KV 推理验证。
 - 迁移文档 `docs/NATIVE_POLYSTRATA_DEVELOPMENT.md`，总体计划 `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`。
 
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。

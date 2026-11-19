@@ -31,3 +31,8 @@ jobs:
           git submodule status
       - name: Gateway contract tests (no actual models or paid API calls)
         run: python -m unittest discover -s backend/gateway -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Browser frontend contracts (no services started)
+        run: node --test frontend/web/tests/*.test.mjs

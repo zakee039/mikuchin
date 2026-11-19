@@ -98,13 +98,6 @@ function renderHistorySidebar(list) {
         if(!role.gray)tag.style.color=historyRoleColor(role.name);
         row.appendChild(tag);
       }
-      if (item.kv_locked || item.kv_cached) {
-        const flag = document.createElement("span");
-        flag.className = "session-state";
-        flag.textContent = item.kv_locked ? "♧" : "◈";
-        flag.title = histTr(item.kv_locked ? "KV locked for at least one model" : "KV cached");
-        row.appendChild(flag);
-      }
       const more = document.createElement("button");
       more.type = "button";
       more.className = "session-dots";
@@ -121,12 +114,10 @@ function renderHistorySidebar(list) {
         menu.hidden = !menu.hidden;
       };
       row.append(more, menu);
-      const sizeText = item.kv_bytes ? " (" + (item.kv_bytes / 1048576).toFixed(0) + " MiB)" : "";
       const actions = [
         ["rename", "Rename"],
         ["pin", item.pinned ? "Unpin" : "Pin"],
         ["export", "Export Markdown"],
-        ["kv", (item.kv_locked_current ? histTr("Release current model KV") + sizeText : histTr("Lock current model KV"))],
         ["delete", "Delete"]
       ];
       for (const pair of actions) {
@@ -184,13 +175,8 @@ async function historyAction(record, action) {
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(anchor.href), 5000);
       return;
-    } else if (action === "kv") {
-      const saved = await historyRequest(record.id, "POST",
-        {action: "lock_kv", locked: !record.kv_locked_current});
-      toast("info", saved.kv_pending ? "KV lock queued" : (saved.kv_locked_current ? "KV locked" : "KV released"),
-        saved.kv_pending ? "The KV will be permanently saved after this model next processes the session." : "");
     } else if (action === "delete") {
-      if (!confirm(histTr("Delete conversation, generated chat images, attachments and KV snapshots permanently?") +
+      if (!confirm(histTr("Delete this conversation and its saved messages permanently?") +
                    "\n" + (record.title || "New chat"))) return;
       await historyRequest(record.id, "DELETE");
       if (record.id === sessionId) {

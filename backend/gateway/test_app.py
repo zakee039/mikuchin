@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import tempfile
 import threading
 import time
 import unittest
@@ -14,8 +15,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     from .app import GatewayServer
+    from .conversations import ConversationStore
 except ImportError:
     from app import GatewayServer
+    from conversations import ConversationStore
 
 
 class FakeOfficial(BaseHTTPRequestHandler):
@@ -77,12 +80,15 @@ class FakeOfficial(BaseHTTPRequestHandler):
 class GatewayContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.data = tempfile.TemporaryDirectory()
+        cls.store = ConversationStore(cls.data.name)
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeOfficial)
         cls.upstream.daemon_threads = True
         cls.gateway = GatewayServer(("127.0.0.1", 0), api_key="client-test-secret",
                                     upstream_key="official-test-secret",
                                     upstream_host="127.0.0.1",
-                                    upstream_port=cls.upstream.server_address[1])
+                                    upstream_port=cls.upstream.server_address[1],
+                                    conversations=cls.store)
         cls.threads = []
         for server in (cls.upstream, cls.gateway):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -96,6 +102,7 @@ class GatewayContract(unittest.TestCase):
             server.server_close()
         for thread in cls.threads:
             thread.join(timeout=2)
+        cls.data.cleanup()
 
     def request(self, method, path, *, payload=None, key="client-test-secret", origin=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.gateway.server_address[1], timeout=5)
@@ -128,18 +135,111 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.request("GET", "/v1/models", origin=local_origin)[0], 200)
 
     def test_private_routes_not_forwarded(self):
-        for path in ("/slots/0?action=restore", "/v1/mikuchin/image-jobs",
-                     "/config", "/v1/strata/sessions"):
+        for path in ("/slots/0?action=restore", "/v1/mikuchin/image-jobs", "/config"):
             self.assertEqual(self.request("GET", path)[0], 404, path)
         self.assertEqual(self.request("POST", "/unload", payload={})[0], 404)
+        self.assertEqual(self.request("GET", "/v1/strata/sessions")[0], 200)
 
     def test_unported_mikuchin_semantics_fail_explicitly(self):
-        for key in ("strata_session_id", "mikuchin_stateless",
-                    "strata_image_tool", "answer_budget_tokens"):
+        for key in ("strata_image_tool", "answer_budget_tokens"):
             status, result = self.request("POST", "/v1/chat/completions",
                                           payload={"messages":[], key: "x"})
             self.assertEqual(status, 501, key)
             self.assertIn(key.encode(), result)
+
+    def test_legacy_session_metadata_stripped_but_complete_history_forwarded(self):
+        ident="a" * 32
+        original={"strata_session_id":ident,"mikuchin_stateless":True,
+                  "messages":[{"role":"user","content":"latest turn"}]}
+        status,data=self.request("POST","/v1/chat/completions",payload=original)
+        self.assertEqual(status,200)
+        sent=FakeOfficial.seen[-1][1]
+        self.assertNotIn("strata_session_id",sent)
+        self.assertNotIn("mikuchin_stateless",sent)
+        self.assertEqual(sent["messages"],original["messages"])
+        bad={"messages":[],"strata_session_id":"../bad"}
+        self.assertEqual(self.request("POST","/v1/chat/completions",payload=bad)[0],400)
+        self.assertEqual(self.request("POST","/v1/chat/completions",payload={
+            "messages":[],"mikuchin_stateless":False})[0],400)
+
+    def test_new_session_crud_and_sampling_are_separate_from_upstream(self):
+        ident="f" * 32
+        base="/v1/strata/sessions"
+        message={"role":"user","text":"A fresh native conversation","time":1234}
+        status,data=self.request("POST",base,payload={"id":ident,"web_messages":[message]})
+        self.assertEqual(status,200)
+        self.assertTrue(json.loads(data)["saved"])
+        status,data=self.request("GET",base+"/"+ident)
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(data)["web_messages"],[message])
+        self.assertEqual(json.loads(data)["title"],"A fresh native conversation")
+        self.assertTrue(any(entry["id"]==ident for entry in
+            json.loads(self.request("GET",base)[1])["sessions"]))
+
+        sampling={"thinking":"low","budget":1024,"temperature":.8,"top_p":.95,
+                  "top_k":20,"max":"","seed":"","show":True,"esp":True,"mcp":False}
+        self.assertEqual(self.request("POST",base+"/"+ident,payload={
+            "action":"sampling","sampling":sampling})[0],200)
+        self.assertEqual(self.request("POST",base+"/"+ident,payload={
+            "action":"rename","title":"Renamed chat"})[0],200)
+        self.assertEqual(self.request("POST",base+"/"+ident,payload={
+            "action":"pin","pinned":True})[0],200)
+        saved=json.loads(self.request("GET",base+"/"+ident)[1])
+        self.assertEqual(saved["sampling"],sampling)
+        self.assertTrue(saved["pinned"])
+        self.assertEqual(saved["title"],"Renamed chat")
+        self.assertEqual(saved["web_messages"],[message])
+
+        self.assertEqual(self.request("POST","/v1/strata/sampling-default",payload={
+            "sampling":sampling})[0],200)
+        self.assertEqual(json.loads(self.request("GET","/v1/strata/sampling-default")[1])["sampling"],sampling)
+        self.assertEqual(self.request("POST",base+"/"+ident,payload={
+            "action":"lock_kv","locked":True})[0],410)
+
+        self.assertEqual(self.request("DELETE",base+"/"+ident)[0],200)
+        self.assertEqual(self.request("GET",base+"/"+ident)[0],404)
+
+    def test_invalid_session_requests_cannot_mutate_store(self):
+        base="/v1/strata/sessions"
+        for request in ({"id":"../bad","web_messages":[]},
+                        {"id":"b"*32,"web_messages":{"role":"user"}},
+                        {"id":"c"*32,"web_messages":[{"role":"invalid"}]}):
+            self.assertEqual(self.request("POST",base,payload=request)[0],400)
+        self.assertEqual(self.request("POST","/v1/strata/sampling-default",payload={
+            "sampling":{"budget":-10}})[0],400)
+        self.assertEqual(self.request("GET",base+"/"+"b"*32)[0],404)
+
+    def test_conversation_store_survives_restart_and_simultaneous_clients(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ConversationStore(directory)
+            def write(index):
+                ident=f"{index+1:032x}"
+                store.save_messages(ident,[{"role":"user","text":f"new session {index}"}])
+                return ident
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                ids=list(executor.map(write,range(24)))
+            self.assertEqual(len(store.listing()),24)
+            reopened=ConversationStore(directory)
+            self.assertEqual(len(reopened.listing()),24)
+            for index,ident in enumerate(ids):
+                self.assertEqual(reopened.get(ident)["web_messages"][0]["text"],
+                                 f"new session {index}")
+            self.assertTrue(reopened.delete(ids[0])["deleted"])
+            self.assertEqual(len(store.listing()),23)
+
+    def test_sampling_before_first_turn_preserves_settings_and_gains_first_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ConversationStore(directory)
+            ident="d" * 32
+            first=store.change(ident,"sampling",{"sampling":{"thinking":"high","budget":16384}})
+            self.assertEqual(first["title"],"New chat")
+            store.save_messages(ident,[{"role":"user","text":"The first user turn"}])
+            second=store.get(ident)
+            self.assertEqual(second["title"],"The first user turn")
+            self.assertEqual(second["sampling"],{"thinking":"high","budget":16384})
+            store.change(ident,"rename",{"title":"Hand-picked title"})
+            store.save_messages(ident,[{"role":"user","text":"Edited first turn"}])
+            self.assertEqual(store.get(ident)["title"],"Hand-picked title")
 
     def test_standard_chat_and_upstream_key_isolation(self):
         before = len(FakeOfficial.seen)

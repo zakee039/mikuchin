@@ -15,8 +15,14 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+
+try:
+    from .conversations import ConversationStore, MissingConversation, valid_id
+except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
+    from conversations import ConversationStore, MissingConversation, valid_id
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -26,10 +32,11 @@ INFERENCE_POSTS = frozenset((
 ))
 INFERENCE_GETS = frozenset(("/v1/models", "/models"))
 UNPORTED_FIELDS = frozenset((
-    "strata_session_id", "mikuchin_stateless", "strata_image_tool",
-    "answer_budget_tokens",
+    "strata_image_tool", "answer_budget_tokens",
 ))
 IMAGE_PATH = re.compile(r"^/v1/images/files/[a-f0-9]{32}\.png$")
+SESSIONS = "/v1/strata/sessions"
+SAMPLING_DEFAULT = "/v1/strata/sampling-default"
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -37,7 +44,8 @@ class GatewayServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, *, api_key: str, upstream_key: str,
-                 upstream_host: str, upstream_port: int, allowed_origins=()):
+                 upstream_host: str, upstream_port: int, allowed_origins=(),
+                 conversations: ConversationStore | None = None):
         if not api_key or not upstream_key:
             raise ValueError("Both gateway and upstream API keys are required")
         if upstream_host not in ("127.0.0.1", "::1", "localhost"):
@@ -49,6 +57,7 @@ class GatewayServer(ThreadingHTTPServer):
         self.upstream_host = upstream_host
         self.upstream_port = upstream_port
         self.allowed_origins = frozenset(allowed_origins)
+        self.conversations = conversations
         super().__init__(address, GatewayHandler)
 
 
@@ -58,8 +67,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
     server_version = "MikuchinGateway/0.1"
 
     def log_message(self, fmt, *args):
-        # Deliberately do not log request bodies, image prompts or Authorization.
-        LOG.info("client=%s %s", self.client_address[0], fmt % args)
+        # Never log raw request lines: /?q=... can contain chat content, and
+        # per-session paths contain private conversation IDs. No headers,
+        # query values, prompts, image data or Authorization enter this log.
+        path = urlsplit(self.path).path
+        if path.startswith(SESSIONS + "/"):
+            path = SESSIONS + "/{id}"
+        elif path.startswith("/v1/images/files/"):
+            path = "/v1/images/files/{image}"
+        if len(path) > 100:
+            path = "{other}"
+        status = str(args[1]) if len(args) >= 2 else "unknown"
+        LOG.info("client=%s method=%s path=%s status=%s",
+                 self.client_address[0], self.command, path, status)
 
     def _json(self, status: int, data: dict):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -119,6 +139,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
+        if path == SESSIONS or path.startswith(SESSIONS + "/") or path == SAMPLING_DEFAULT:
+            self._handle_private("GET", path)
+            return
         if path == "/health":
             try:
                 conn = http.client.HTTPConnection(self.server.upstream_host,
@@ -150,7 +173,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
-        if path not in INFERENCE_POSTS:
+        private = path == SESSIONS or path.startswith(SESSIONS + "/") or path == SAMPLING_DEFAULT
+        if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
             return
         if self.headers.get("Transfer-Encoding"):
@@ -170,12 +194,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Incomplete request body")
             return
         try:
-            request = json.loads(body)
+            request = json.loads(body, parse_constant=lambda x: (_ for _ in ()).throw(
+                ValueError("Non-finite JSON numbers are not permitted")))
         except (ValueError, UnicodeDecodeError):
             self._error(400, "Expected a JSON request body")
             return
         if not isinstance(request, dict):
             self._error(400, "Expected a JSON object")
+            return
+        if private:
+            self._handle_private("POST", path, request)
             return
         unsupported = sorted(UNPORTED_FIELDS.intersection(request))
         if unsupported:
@@ -183,7 +211,80 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "Mikuchin semantics not yet ported: " + ", ".join(unsupported),
                         "feature_not_ported")
             return
+        # The UI transmits the entire context each turn. These two fields are
+        # application metadata, not a native KV snapshot or hidden engine state.
+        if "strata_session_id" in request:
+            try:
+                valid_id(request.pop("strata_session_id"))
+            except ValueError as exc:
+                self._error(400, str(exc), "invalid_session")
+                return
+        if "mikuchin_stateless" in request:
+            if request.pop("mikuchin_stateless") is not True:
+                self._error(400, "mikuchin_stateless must be true", "invalid_request")
+                return
+        body = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")
         self._proxy("POST", body)
+
+    def do_DELETE(self):
+        if not self._authorized():
+            return
+        if not self.path.startswith("/") or self.path.startswith("//"):
+            self._error(400, "Invalid request target")
+            return
+        path = urlsplit(self.path).path
+        if path.startswith(SESSIONS + "/"):
+            self._handle_private("DELETE", path)
+        else:
+            self._error(404, "Endpoint not found", "not_found")
+
+    def _handle_private(self, method, path, request=None):
+        store = self.server.conversations
+        if store is None:
+            self._error(503, "Native conversation store is not configured", "unavailable")
+            return
+        try:
+            if path == SAMPLING_DEFAULT:
+                if method == "GET":
+                    result = {"sampling": store.default_sampling()}
+                elif method == "POST":
+                    result = store.save_default_sampling(request.get("sampling"))
+                else:
+                    self._error(405, "Method not allowed")
+                    return
+            elif path == SESSIONS:
+                if method == "GET":
+                    result = {"sessions": store.listing()}
+                elif method == "POST":
+                    result = store.save_messages(request.get("id"), request.get("web_messages"))
+                else:
+                    self._error(405, "Method not allowed")
+                    return
+            elif path.startswith(SESSIONS + "/"):
+                ident = path[len(SESSIONS) + 1:]
+                if method == "GET":
+                    result = store.get(ident)
+                elif method == "POST":
+                    if request.get("action") == "lock_kv":
+                        self._error(410, "Manual KV locking has been retired", "feature_retired")
+                        return
+                    result = store.change(ident, request.get("action"), request)
+                elif method == "DELETE":
+                    result = store.delete(ident)
+                else:
+                    self._error(405, "Method not allowed")
+                    return
+            else:
+                self._error(404, "Endpoint not found", "not_found")
+                return
+            self._json(200, result)
+        except MissingConversation:
+            self._error(404, "Conversation not found", "not_found")
+        except (ValueError, TypeError, OverflowError) as exc:
+            self._error(400, str(exc), "invalid_request")
+        except (sqlite3.Error, OSError):
+            LOG.exception("native conversation store failed")
+            self._error(503, "Native conversation store is unavailable", "unavailable")
 
     def _proxy(self, method: str, body: bytes | None = None):
         conn = http.client.HTTPConnection(self.server.upstream_host,
@@ -243,9 +344,12 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     origins = tuple(x.strip() for x in os.environ.get("MIKUCHIN_ALLOWED_ORIGINS", "").split(",")
                     if x.strip())
+    data_dir = os.environ.get("MIKUCHIN_NATIVE_DATA_DIR") or ConversationStore.default_root()
+    conversations = ConversationStore(data_dir)
     with GatewayServer((args.host, args.port), api_key=gateway_key,
                        upstream_key=upstream_key, upstream_host="127.0.0.1",
-                       upstream_port=args.upstream_port, allowed_origins=origins) as server:
+                       upstream_port=args.upstream_port, allowed_origins=origins,
+                       conversations=conversations) as server:
         LOG.info("Gateway on %s:%d; official PolyStrata on 127.0.0.1:%d",
                  args.host, args.port, args.upstream_port)
         try:
