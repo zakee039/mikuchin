@@ -4,7 +4,9 @@ Run from the repository root: python -m unittest discover -s backend/gateway -v
 """
 from __future__ import annotations
 
+import base64
 import http.client
+import io
 import json
 import tempfile
 import threading
@@ -12,13 +14,17 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from uuid import uuid4
 
 try:
     from .app import GatewayServer
     from .conversations import ConversationStore
+    from .characters import CharacterStore
 except ImportError:
     from app import GatewayServer
     from conversations import ConversationStore
+    from characters import CharacterStore
 
 
 class FakeOfficial(BaseHTTPRequestHandler):
@@ -82,13 +88,14 @@ class GatewayContract(unittest.TestCase):
     def setUpClass(cls):
         cls.data = tempfile.TemporaryDirectory()
         cls.store = ConversationStore(cls.data.name)
+        cls.cards = CharacterStore(Path(cls.data.name) / "character")
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeOfficial)
         cls.upstream.daemon_threads = True
         cls.gateway = GatewayServer(("127.0.0.1", 0), api_key="client-test-secret",
                                     upstream_key="official-test-secret",
                                     upstream_host="127.0.0.1",
                                     upstream_port=cls.upstream.server_address[1],
-                                    conversations=cls.store)
+                                    conversations=cls.store, characters=cls.cards)
         cls.threads = []
         for server in (cls.upstream, cls.gateway):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -208,6 +215,89 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.request("POST","/v1/strata/sampling-default",payload={
             "sampling":{"budget":-10}})[0],400)
         self.assertEqual(self.request("GET",base+"/"+"b"*32)[0],404)
+
+    def test_native_character_card_assignment_freezes_after_first_turn(self):
+        endpoint="/v1/strata/characters"
+        ident=uuid4().hex
+        status,body=self.request("GET",endpoint)
+        self.assertEqual(status,200)
+        self.assertIn("cards",json.loads(body))
+        card={"name":"Test role " + ident[:8],"description":"A thoughtful teacher",
+              "lorebook":[{"keys":"winter","content":"Winter break","constant":False}]}
+        status,body=self.request("POST",endpoint,payload={"action":"save","card":card})
+        self.assertEqual(status,200)
+        saved=json.loads(body)["card"]
+        self.assertEqual(saved["name"],card["name"])
+        self.assertTrue(self.request("POST",endpoint,payload={"action":"assign",
+            "session_id":ident,"card_id":saved["id"]})[0]==200)
+        self.assertEqual(self.cards.snapshot()["assignments"][ident],saved["id"])
+        status,body=self.request("POST",endpoint,payload={"action":"global",
+            "global":{"user_name":"Native user","user_description":"Learns AI",
+                      "default_role":saved["id"]}})
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(body)["global"]["default_role"],saved["id"])
+
+        # No silent role reassignment once a real chat turn has been saved.
+        self.store.save_messages(ident,[{"role":"user","text":"Hello"}])
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"assign",
+            "session_id":ident,"card_id":"ordinary"})[0],400)
+        self.assertEqual(self.cards.snapshot()["assignments"][ident],saved["id"])
+        self.assertEqual(self.request("DELETE","/v1/strata/sessions/"+ident)[0],200)
+        self.assertNotIn(ident,self.cards.snapshot()["assignments"])
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"delete","id":saved["id"]})[0],200)
+
+    def test_character_worldbook_markdown_and_one_time_workflow(self):
+        endpoint="/v1/strata/characters"
+        ident=uuid4().hex
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/"my-world.md"
+            path.write_text("# 星星\n星星课堂在晚上开设。",encoding="utf-8")
+            flow=Path(temp)/"profile.md"
+            flow.write_text("## 初始化\n首次见面欢迎\n## 全程行为约束\n保持简洁",encoding="utf-8")
+            card={"name":"World test " + ident[:8],
+                  "sources":[{"kind":"file","path":str(path),"recursive":False}],
+                  "workflow_path":str(flow)}
+            status,data=self.request("POST",endpoint,payload={"action":"save","card":card})
+            self.assertEqual(status,200)
+            cid=json.loads(data)["card"]["id"]
+            self.assertEqual(self.request("POST",endpoint,payload={"action":"assign",
+                "session_id":ident,"card_id":cid})[0],200)
+            result=json.loads(self.request("POST",endpoint,payload={"action":"retrieve",
+                "session_id":ident,"query":"星星课堂"})[1])
+            self.assertIn("晚上",result["snippets"][0]["content"])
+            initial=json.loads(self.request("POST",endpoint,payload={"action":"prepare_workflow",
+                "session_id":ident,"first_user_turn":True})[1])
+            self.assertTrue(initial["initial_pending"])
+            self.assertIn("欢迎",initial["sections"]["initial"])
+            self.assertEqual(self.request("POST",endpoint,payload={"action":"commit_workflow",
+                "session_id":ident})[0],200)
+            flow.write_text("## 初始化\n全新规则\n## 全程行为约束\n不修改旧会话",encoding="utf-8")
+            old=json.loads(self.request("POST",endpoint,payload={"action":"prepare_workflow",
+                "session_id":ident,"first_user_turn":False})[1])
+            self.assertEqual(old["sha256"],initial["sha256"])
+            self.assertFalse(old["initial_pending"])
+            self.assertEqual(self.request("POST",endpoint,payload={"action":"delete","id":cid})[0],200)
+
+    def test_character_reference_image_requires_auth_and_has_valid_png(self):
+        from PIL import Image
+        endpoint="/v1/strata/characters"
+        name="PNG Test " + uuid4().hex[:8]
+        card=json.loads(self.request("POST",endpoint,payload={"action":"save",
+            "card":{"name":name}})[1])["card"]
+        buf=io.BytesIO()
+        Image.new("RGB",(40,20),"white").save(buf,format="PNG")
+        encoded=base64.b64encode(buf.getvalue()).decode()
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"reference_upload",
+            "id":card["id"],"data":encoded})[0],200)
+        url=endpoint+"/reference/"+card["id"]
+        self.assertEqual(self.request("GET",url,key=None)[0],401)
+        status,png=self.request("GET",url)
+        self.assertEqual(status,200)
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"reference_remove",
+            "id":card["id"]})[0],200)
+        self.assertNotEqual(self.request("GET",url)[0],200)
+        self.assertEqual(self.request("POST",endpoint,payload={"action":"delete","id":card["id"]})[0],200)
 
     def test_conversation_store_survives_restart_and_simultaneous_clients(self):
         with tempfile.TemporaryDirectory() as directory:

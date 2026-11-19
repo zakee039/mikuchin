@@ -150,6 +150,13 @@ class ConversationStore:
                 raise MissingConversation("conversation not found")
             return self._record(row, full=True)
 
+    def has_messages(self, ident):
+        """An uncreated fresh session is empty; existing chats cannot change role."""
+        valid_id(ident)
+        with self._db() as db:
+            row = db.execute("SELECT web_messages FROM conversations WHERE id=?", (ident,)).fetchone()
+            return bool(row and json.loads(row["web_messages"]))
+
     def save_messages(self, ident, messages):
         valid_id(ident)
         if not isinstance(messages, list) or len(messages) > _MAX_MESSAGES or not all(

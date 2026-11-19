@@ -1,10 +1,11 @@
-"""Minimal first-stage gateway for an UNMODIFIED official PolyStrata HTTP server.
+"""Mikuchin-owned Gateway for an UNMODIFIED official PolyStrata HTTP server.
 
-This intentionally implements only the standard inference transport. Legacy
-Mikuchin session, image-tool and answer-budget semantics are explicitly refused
-until their adapter is implemented; silently dropping these would corrupt chats.
+Inference streams through the official HTTP API; new chat, character, lore and
+workflow state remains private to Mikuchin. Image tool and visible-answer-budget
+semantics are refused until they have faithful adapters.
 
-No dependency outside the Python standard library is required.
+The Gateway transport and CRUD use the Python stdlib; optional character image
+uploads use Pillow in the isolated official Python environment.
 """
 from __future__ import annotations
 
@@ -21,8 +22,14 @@ from urllib.parse import urlsplit
 
 try:
     from .conversations import ConversationStore, MissingConversation, valid_id
+    from .characters import CharacterStore, card_from_tavern
+    from .workflows import WorkflowRuntime
+    from .lore import search_sources
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
+    from characters import CharacterStore, card_from_tavern
+    from workflows import WorkflowRuntime
+    from lore import search_sources
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -37,6 +44,8 @@ UNPORTED_FIELDS = frozenset((
 IMAGE_PATH = re.compile(r"^/v1/images/files/[a-f0-9]{32}\.png$")
 SESSIONS = "/v1/strata/sessions"
 SAMPLING_DEFAULT = "/v1/strata/sampling-default"
+CHARACTERS = "/v1/strata/characters"
+REFERENCE = CHARACTERS + "/reference/"
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -45,7 +54,8 @@ class GatewayServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, api_key: str, upstream_key: str,
                  upstream_host: str, upstream_port: int, allowed_origins=(),
-                 conversations: ConversationStore | None = None):
+                 conversations: ConversationStore | None = None,
+                 characters: CharacterStore | None = None):
         if not api_key or not upstream_key:
             raise ValueError("Both gateway and upstream API keys are required")
         if upstream_host not in ("127.0.0.1", "::1", "localhost"):
@@ -58,6 +68,7 @@ class GatewayServer(ThreadingHTTPServer):
         self.upstream_port = upstream_port
         self.allowed_origins = frozenset(allowed_origins)
         self.conversations = conversations
+        self.characters = characters
         super().__init__(address, GatewayHandler)
 
 
@@ -73,6 +84,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path.startswith(SESSIONS + "/"):
             path = SESSIONS + "/{id}"
+        elif path.startswith(REFERENCE):
+            path = REFERENCE + "{id}"
         elif path.startswith("/v1/images/files/"):
             path = "/v1/images/files/{image}"
         if len(path) > 100:
@@ -139,6 +152,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
+        if path == CHARACTERS or path.startswith(REFERENCE):
+            self._handle_character_get(path)
+            return
         if path == SESSIONS or path.startswith(SESSIONS + "/") or path == SAMPLING_DEFAULT:
             self._handle_private("GET", path)
             return
@@ -173,7 +189,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
-        private = path == SESSIONS or path.startswith(SESSIONS + "/") or path == SAMPLING_DEFAULT
+        private = (path == SESSIONS or path.startswith(SESSIONS + "/")
+                   or path == SAMPLING_DEFAULT or path == CHARACTERS)
         if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
             return
@@ -203,7 +220,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Expected a JSON object")
             return
         if private:
-            self._handle_private("POST", path, request)
+            if path == CHARACTERS:
+                self._handle_character_post(request)
+            else:
+                self._handle_private("POST", path, request)
             return
         unsupported = sorted(UNPORTED_FIELDS.intersection(request))
         if unsupported:
@@ -271,6 +291,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     result = store.change(ident, request.get("action"), request)
                 elif method == "DELETE":
                     result = store.delete(ident)
+                    if self.server.characters:
+                        self.server.characters.forget_session(ident)
                 else:
                     self._error(405, "Method not allowed")
                     return
@@ -285,6 +307,95 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error, OSError):
             LOG.exception("native conversation store failed")
             self._error(503, "Native conversation store is unavailable", "unavailable")
+
+    def _handle_character_get(self, path):
+        cards = self.server.characters
+        if cards is None:
+            self._error(503, "Native character store is not configured", "unavailable")
+            return
+        try:
+            if path == CHARACTERS:
+                self._json(200, cards.snapshot())
+                return
+            if not path.startswith(REFERENCE):
+                self._error(404, "Character resource not found", "not_found")
+                return
+            reference = cards.image_file(path[len(REFERENCE):])
+            if reference is None:
+                self._error(404, "Character reference image not found", "not_found")
+                return
+            payload = reference.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(payload)
+        except (ValueError, TypeError) as exc:
+            self._error(400, str(exc), "invalid_request")
+        except (sqlite3.Error, OSError):
+            LOG.exception("native character read failed")
+            self._error(503, "Native character store is unavailable", "unavailable")
+
+    def _handle_character_post(self, req):
+        cards = self.server.characters
+        sessions = self.server.conversations
+        if cards is None or sessions is None:
+            self._error(503, "Native character/session store is not configured", "unavailable")
+            return
+        try:
+            action = req.get("action")
+            if action == "save":
+                result = {"card": cards.save(req.get("card"))}
+            elif action == "import":
+                result = {"card": cards.save(card_from_tavern(req.get("card")))}
+            elif action == "delete":
+                cards.remove(req.get("id"))
+                result = {"deleted": True}
+            elif action == "assign":
+                ident = valid_id(req.get("session_id"))
+                if sessions.has_messages(ident):
+                    raise ValueError("角色只能在空白新会话中选择")
+                cards.assign(ident, req.get("card_id"))
+                result = {"saved": True}
+            elif action == "reference_upload":
+                result = {"card": cards.upload_reference(req.get("id"), req.get("data"))}
+            elif action == "reference_remove":
+                result = {"card": cards.remove_reference(req.get("id"))}
+            elif action == "global":
+                # Image-worker configuration is intentionally not available
+                # yet: do not accept nonfunctional model or LoRA selections.
+                result = {"global": cards.set_global(req.get("global"),
+                    allowed_image_profiles={"default"},
+                    image_profile_configs={"default": {"family":"qwen_turbo","max_side":1024}})}
+            elif action in ("inspect_workflow", "prepare_workflow", "commit_workflow"):
+                workflow = WorkflowRuntime(cards)
+                if action == "inspect_workflow":
+                    result = workflow.inspect(req.get("card_id"))
+                elif action == "prepare_workflow":
+                    ident = valid_id(req.get("session_id"))
+                    result = workflow.prepare(ident, req.get("first_user_turn"))
+                else:
+                    ident = valid_id(req.get("session_id"))
+                    result = workflow.commit(ident)
+            elif action in ("retrieve", "test_retrieve"):
+                query = req.get("query", "")
+                if not isinstance(query, str) or len(query) > 4000:
+                    raise ValueError("query must be text up to 4000 characters")
+                card = cards.get(req.get("card_id")) if action == "test_retrieve" else (
+                    cards.assigned_card(valid_id(req.get("session_id"))))
+                result = search_sources(card.get("sources", []), query) if card else {
+                    "snippets": [], "scanned_files": 0, "errors": [], "elapsed_ms": 0}
+            else:
+                raise ValueError("unknown character action")
+            self._json(200, result)
+        except (ValueError, TypeError, OverflowError) as exc:
+            self._error(400, str(exc), "invalid_request")
+        except (sqlite3.Error, OSError):
+            LOG.exception("native character operation failed")
+            self._error(503, "Native character store is unavailable", "unavailable")
 
     def _proxy(self, method: str, body: bytes | None = None):
         conn = http.client.HTTPConnection(self.server.upstream_host,
@@ -346,10 +457,11 @@ def main():
                     if x.strip())
     data_dir = os.environ.get("MIKUCHIN_NATIVE_DATA_DIR") or ConversationStore.default_root()
     conversations = ConversationStore(data_dir)
+    characters = CharacterStore(os.path.join(data_dir, "character"))
     with GatewayServer((args.host, args.port), api_key=gateway_key,
                        upstream_key=upstream_key, upstream_host="127.0.0.1",
                        upstream_port=args.upstream_port, allowed_origins=origins,
-                       conversations=conversations) as server:
+                       conversations=conversations, characters=characters) as server:
         LOG.info("Gateway on %s:%d; official PolyStrata on 127.0.0.1:%d",
                  args.host, args.port, args.upstream_port)
         try:

@@ -5,7 +5,7 @@
 - **Working tree:** `E:\LLM\deploy\mikuchin-native`
 - **Branch:** `refactor/official-polystrata-gateway`, branched from the immutable Mikuchin `v0.3.0` rollback baseline.
 - **Official upstream:** `backend/polystrata` is a **Git submodule** from `https://github.com/simplexai-labs/PolyStrata.git`, pinned to `v0.1.45-poly.10` (`3e1642161198c50ff1abed4046f4e4f476099dbb`).
-- **Local development Gateway:** `backend/gateway/app.py` is a standalone, dependency-free transport adapter **and now owns its fresh session store** in `backend/gateway/conversations.py`. It does not import private PolyStrata Python modules; only local HTTP is used. Character cards, worldbooks, workflows, image jobs, the complete Web application and launcher supervision **are not ported yet**.
+- **Local development Gateway:** `backend/gateway/app.py` is a standalone HTTP transport adapter plus new session/character endpoints. It does **not** import private PolyStrata Python modules: only the official localhost HTTP API is called. **Character cards, Markdown retrieval and workflow APIs are now present**; image-worker scheduling, full browser application, model supervision and cross-device packaging remain unfinished.
 - **Original stable installation:** `E:\LLM\deploy\mikuchin` (main, v0.3.1); running service remains on its established ports and data. Do not point it at this worktree before acceptance testing.
 
 ### Shared image-resolution UI (ported from main)
@@ -51,8 +51,24 @@ release is implied by this version synchronization.
 - `GET/POST /v1/strata/sessions` lists or saves fresh Web chat messages. `GET/POST/DELETE /v1/strata/sessions/{32-hex-id}` reads, renames, lists-pins, saves independent sampling, or deletes one fresh conversation. `GET/POST /v1/strata/sampling-default` reads/writes shared default sampling for new conversations.
 - The Gateway accepts and validates the existing frontend's `strata_session_id` and `mikuchin_stateless` hints, **removes these Mikuchin-only keys before forwarding the supplied full text context to official PolyStrata**. It does not use the old session object, write an engine KV snapshot, or attempt an undocumented model restore.
 - UI sessions sidebar no longer offers manual KV locking, cache badges, or KV sizes. **List pin (置顶) is preserved and has no KV effects.** The API explicitly rejects legacy `lock_kv` actions with HTTP 410.
-- This is only the P2 **conversation persistence subset**, not an entire app transition. In particular `answer_budget_tokens` and `strata_image_tool` still return an explicit HTTP 501 rather than losing their semantics; role cards, history assets, image tools and complete site static serving are not yet available.
+- The session store is one completed subset, not an entire app transition. In particular `answer_budget_tokens` and `strata_image_tool` still return an explicit HTTP 501 rather than losing their semantics; image tasks, gallery/history assets and complete site static serving are not yet available. Character/worldbook/workflow APIs are implemented separately below.
 - Tests use disposable temporary directories and check multi-client concurrent saves, persistence across store reopening, API authentication and no KV pin endpoints. Old chats, old images and stable settings are not read or modified.
+
+## Native character/worldbook/workflow: completed Gateway APIs
+
+Mikuchin's previously owned business logic was moved out of the old embedded
+`serve` source into **`backend/gateway/characters.py`, `lore.py` and
+`workflows.py`**. The engine itself is never edited. Every file read/write
+belongs either to a new Native data root or to an **explicitly configured**
+Markdown reference path.
+
+- `GET/POST /v1/strata/characters`: card creation, edit, delete, Tavern JSON V2/V3 import, global persona, default role, per-session role assignment, Markdown retrieval, workflow inspection/preparation/commit, and role-reference upload/removal. All carry Gateway Bearer authentication. Roles can only be reassigned while a fresh conversation has zero persisted messages.
+- `GET /v1/strata/characters/reference/{card-id}`: authenticated, private/no-store PNG reference image, normalized with Pillow and kept beside the card in the new Native character folder; image path and credentials are never echoed into HTTP logs.
+- Workflow initialization is frozen per session and commits only after a successful first response; a modified Markdown source does not rewrite the active session's pinned workflow **text** (this is not KV/PIN caching).
+- `DELETE /v1/strata/sessions/{id}` also clears the independent character assignment and frozen workflow metadata. A list **pin to top** remains a UI action unrelated to the engine.
+- Global chat-image preferences currently permit only the placeholder `default` profile with valid local sizes and **no LoRA**; user-facing image-model catalog and Image Worker are not implemented. The Gateway deliberately rejects unavailable model names rather than falsely advertising image generation.
+- `characters.js` already composes character identity, worldbook snippets and workflow instructions into the **full system prompt sent to official PolyStrata**. This does not turn external `/v1/chat/completions` calls into a server-side role injector; separate non-browser callers must still construct their own context.
+- Character module unit tests were carried forward and adapted as native Gateway tests; HTTP tests now cover locked-after-first-message role assignment, Markdown lookup, workflow first-turn initialization/version freeze and protected reference images. The one-command official-process smoke test also verifies a character + Markdown + workflow through the Gateway.
 
 ## One-time setup in a new worktree
 
@@ -75,7 +91,7 @@ An isolated Python **3.12** environment with the official pinned Python requirem
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-native-transport.ps1
 ```
 
-This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240` and the standalone Gateway on `127.0.0.1:15249`, using two freshly generated API keys inherited as environment variables. It verifies `/health`, `/v1/models`, Chat Completions, SSE streaming, the fresh session CRUD path, and HTTP 501 for unported answer-budget semantics. Both children are stopped and disposable conversation data deleted when the script exits. The original stable port **15239 is neither opened nor restarted**. A successful mock test does not demonstrate GPU throughput or KV cache speed.
+This starts the **unmodified official** `python -m serve.server --engine mock` on `127.0.0.1:15240` and the standalone Gateway on `127.0.0.1:15249`, using two freshly generated API keys inherited as environment variables. It verifies `/health`, `/v1/models`, Chat Completions, SSE streaming, fresh session CRUD, role assignment and immutability, character Markdown retrieval, one-time workflow initialization, and HTTP 501 for unported answer-budget semantics. Both children are stopped and disposable conversation data deleted when the script exits. The original stable port **15239 is neither opened nor restarted**. A successful mock test does not demonstrate GPU throughput or KV cache speed.
 
 For an isolated Gateway smoke test after official engine setup:
 
@@ -89,7 +105,7 @@ Never hard-code real keys in scripts, commit them, or copy existing Mikuchin sec
 
 ## Current Gateway contract (first milestone)
 
-Supported: authorized `GET /health`, `GET /v1/models`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session and global sampling APIs are handled by Mikuchin's own SQLite store and **never** forwarded upstream.
+Supported: authorized `GET /health`, `GET /v1/models`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session, character, Markdown/workflow, role reference and global sampling APIs are handled by Mikuchin's own stores and **never** forwarded upstream.
 
 Explicitly blocked (HTTP 501): `strata_image_tool`, `answer_budget_tokens`. The UI-only `strata_session_id` and `mikuchin_stateless` are validated and stripped from otherwise full-context inference requests. The old `lock_kv` API returns HTTP 410 (retired). No `/slots`, `/config`, direct model control or other private application endpoints are exposed to remote clients.
 
@@ -110,7 +126,7 @@ Run the engine model/KV/tool/SSE compatibility suite **before** committing the n
 ## Planned work (not yet implemented)
 
 1. Native PolyStrata bootstrapping + real model smoke test (chat, visuals, automatic checkpoints and parked-conversation cache; optional Warm Start and official PIN in isolation).
-2. Extend the **newly implemented** Gateway session store to character/worldbook/workflow and other UI state (old chat/KV history need not migrate; no manual KV lock feature). Serve the full new Web UI only when all required endpoints and access-control checks exist.
+2. Extend the **newly implemented** session/character/worldbook/workflow APIs to all remaining UI state, then serve the full new Web UI only when all required endpoints, image hooks and access-control checks exist. Old chat/KV history need not migrate and no manual KV lock feature returns.
 3. Chat tool orchestration, answer token budget, `strata_mcp` events, image-worker scheduling and GPU mutual exclusion.
 4. Desktop launcher to supervise *both* Gateway and official PolyStrata, mobile/gallery parity, authentication and upgrade rollbacks.
 5. Replace the original single-repo release packager: its current `.gitmodules` restriction belongs to v0.3.0, and cannot be used unmodified for this development branch. Packaging must include a separately versioned official engine with verifiable commit and license.

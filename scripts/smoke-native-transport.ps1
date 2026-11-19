@@ -99,6 +99,34 @@ try {
   # Native conversation CRUD happens entirely inside Gateway's own isolated
   # SQLite file. It must not reach official PolyStrata or touch existing chats.
   $testId = [Guid]::NewGuid().ToString('N')
+  $charApi = "http://127.0.0.1:$GatewayPort/v1/strata/characters"
+  $world = Join-Path $smokeData 'smoke-world.md'
+  $workflow = Join-Path $smokeData 'smoke-workflow.md'
+  [IO.File]::WriteAllText($world, "# Starlight`nStarlight lessons are at night.")
+  [IO.File]::WriteAllText($workflow, "## Initialization`nGreet once`n## Persistent rules`nBe concise")
+  $newCard = @{action='save';card=@{
+    name=('Native role ' + $testId.Substring(0,8));
+    sources=@(@{kind='file';path=$world;recursive=$false});
+    workflow_path=$workflow
+  }} | ConvertTo-Json -Depth 8 -Compress
+  $card = (Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $newCard -TimeoutSec 5).card
+  if (-not $card.id) {throw 'Cannot save native role card'}
+  $assign = @{action='assign';session_id=$testId;card_id=$card.id}|ConvertTo-Json -Compress
+  $assigned=Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $assign -TimeoutSec 5
+  if (-not $assigned.saved) {throw 'Cannot assign role to new empty session'}
+  $retrieval = @{action='retrieve';session_id=$testId;query='Starlight lessons'}|ConvertTo-Json -Compress
+  $hits=Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $retrieval -TimeoutSec 5
+  if (-not $hits.snippets -or $hits.snippets[0].content -notmatch 'night') {
+    throw 'Independent Markdown worldbook retrieval failed'
+  }
+  $flowPrepare=@{action='prepare_workflow';session_id=$testId;first_user_turn=$true}|ConvertTo-Json -Compress
+  $prepared=Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $flowPrepare -TimeoutSec 5
+  if (-not $prepared.initial_pending) {throw 'First-turn workflow was not prepared'}
+  $flowCommit=@{action='commit_workflow';session_id=$testId}|ConvertTo-Json -Compress
+  $committed=Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $flowCommit -TimeoutSec 5
+  if (-not $committed.committed) {throw 'Workflow first-turn commit failed'}
+  Write-Output 'GATEWAY_CHARACTER_WORLD_WORKFLOW_OK'
+
   $sessionBody = @{id=$testId;web_messages=@(@{role='user';text='Native smoke turn'})} | ConvertTo-Json -Depth 6 -Compress
   $saved = Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$GatewayPort/v1/strata/sessions" `
     -Headers $headers -Body $sessionBody -TimeoutSec 5
@@ -106,9 +134,20 @@ try {
   $loaded = Invoke-RestMethod -Uri "http://127.0.0.1:$GatewayPort/v1/strata/sessions/$testId" `
     -Headers $headers -TimeoutSec 5
   if ($loaded.web_messages[0].text -ne 'Native smoke turn') {throw 'Native conversation read failed'}
+  try {
+    $move=@{action='assign';session_id=$testId;card_id='ordinary'}|ConvertTo-Json -Compress
+    Invoke-RestMethod -Method POST -Uri $charApi -Headers $headers -Body $move -TimeoutSec 5|Out-Null
+    throw 'Role changed after first turn, expected HTTP 400'
+  } catch {
+    if ($_.Exception.Response.StatusCode.value__ -ne 400) {throw}
+  }
   $deleted = Invoke-RestMethod -Method DELETE -Uri "http://127.0.0.1:$GatewayPort/v1/strata/sessions/$testId" `
     -Headers $headers -TimeoutSec 5
   if (-not $deleted.deleted) {throw 'Native conversation delete failed'}
+  $roles=Invoke-RestMethod -Uri $charApi -Headers $headers -TimeoutSec 5
+  if ($roles.assignments.PSObject.Properties.Name -contains $testId) {
+    throw 'Deleted conversation still holds a character assignment'
+  }
   Write-Output 'GATEWAY_NATIVE_SESSIONS_OK'
 
   $sseBody = '{"model":"mock","messages":[{"role":"user","content":"ping"}],"stream":true,"max_tokens":32}'
