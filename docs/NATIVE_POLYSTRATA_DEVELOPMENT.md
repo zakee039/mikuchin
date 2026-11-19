@@ -8,6 +8,17 @@
 - **Local development Gateway:** `backend/gateway/app.py` is a standalone, dependency-free minimal transport adapter. It has **not** yet ported Mikuchin sessions, character cards, KV management, workflows, image tools, gallery or launcher supervision. The existing Web/Android clients are retained for incremental porting but are not presently end-to-end usable against this Gateway.
 - **Original stable installation:** `E:\LLM\deploy\mikuchin` (main, v0.3.0); running service remains on its established ports and data. Do not point it at this worktree before acceptance testing.
 
+### Shared image-resolution UI (ported from main)
+
+The `frontend/web` Image Studio and global chat settings share `image-resolution.js`:
+standard 8 exact `WIDTHxHEIGHT` presets, local recommended 384/512/768/1024,
+and separate custom width/height snapped to 16-pixel steps (256–4096).
+The server-side validation contract for the *future* Gateway Image Worker is
+`backend/gateway/image_resolution.py`; it intentionally lives **outside the
+official PolyStrata submodule**. The native Gateway prototype does not yet
+implement image service management or generation, so the new UI is synchronized
+but is not yet fully functional on this experimental branch.
+
 ## Simplified KV policy (2026-11-19 design decision)
 
 - **No migration of existing chats or `POLYKV1!` snapshots** into the new Gateway. The new application starts a clean chat store for chats created there. The stable v0.3.0 data directory is not deleted.

@@ -3,8 +3,19 @@
 "use strict";
 (() => {
   const get = (id) => document.getElementById(id);
-  const fields = ["positive", "negative", "height", "width", "upscale", "steps", "seed"];
-  const ids = Object.fromEntries(fields.map(k => [k, `img-${k}`]));
+  const imageSizes = window.MikuchinImageSizes;
+  const fields = ["positive", "negative", "width", "height", "standard_size", "custom_width", "custom_height", "upscale", "steps", "seed"];
+  const ids = Object.fromEntries(fields.map(k => [k, `img-${k.replaceAll("_", "-")}`]));
+  const standardPicker = get("img-standard-size");
+  for (const item of imageSizes.standard)
+    standardPicker.add(new Option(`${item.size.replace("x", "×")} · ${item.ratio} · ${item.note}`, item.size));
+  function currentSize() {
+    return imageSizes.dimensions(model(), {
+      width:get("img-width").value, height:get("img-height").value,
+      standard:get("img-standard-size").value,
+      customWidth:get("img-custom-width").value, customHeight:get("img-custom-height").value,
+    });
+  }
   const language = () => document.documentElement.lang || "zh-CN";
   const tr = (zh, en, ja) => language() === "en-US" ? en : language() === "ja-JP" ? ja : zh;
   const draftKey = "image-drafts-v2";
@@ -74,20 +85,35 @@
     const values = existing ? cleanDraft(existing) : {
       positive: inherited.positive || "", negative: inherited.negative || "",
       height: inherited.height || "768", width: inherited.width || "768",
+      standard_size: inherited.standard_size || "", custom_width: inherited.custom_width || "",
+      custom_height: inherited.custom_height || "",
       upscale: selected?.family === "api" ? "off" : inherited.upscale || "auto",
       steps: String(defaultSteps(selected)), seed: inherited.seed || "",
     };
-    const dims = selected?.family === "api" ?
-      selected.sizes === "square" ? ["1024"] : selected.sizes === "standard" ? ["1024","1536"] : ["384","512","768","1024","1536"] : ["384","512","768","1024"];
+    const pack = imageSizes.pack(selected);
+    const dims = pack === "square" ? ["1024"] : imageSizes.local.map(String);
+    // Preserve the original persisted WIDTHxHEIGHT before narrowing the
+    // now-hidden local dropdowns. Older API drafts used those two fields.
+    const legacySize = `${values.width}x${values.height}`;
+    const previousWidth = values.width, previousHeight = values.height;
     // Older drafts without independent dimensions (or an invalid selection)
     // should not leave either dimension blank and submit an invalid size.
     for (const dim of ["height","width"]) {
-      if (!dims.includes(values[dim])) values[dim] = selected?.family === "api" ? "1024" : "768";
+      if (!dims.includes(values[dim])) values[dim] = pack === "square" || pack === "standard" || pack === "custom" ? "1024" : "768";
     }
+    if (!imageSizes.isStandard(values.standard_size))
+      values.standard_size = imageSizes.isStandard(legacySize) ? legacySize : "1024x1024";
+    values.custom_width = String(imageSizes.nearest16(values.custom_width || previousWidth || inherited.width || 1024));
+    values.custom_height = String(imageSizes.nearest16(values.custom_height || previousHeight || inherited.height || 1024));
     if (!["auto","off","4x"].includes(values.upscale)) values.upscale = "auto";
     if (selected?.family === "api" && (values.upscale !== "4x" || selected.upscale_available === false)) values.upscale = "off";
     if (!values.steps) values.steps = String(defaultSteps(selected));
     for (const k of fields) get(ids[k]).value = values[k];
+    for (const dim of ["width","height"])
+      get(`img-${dim}`).closest(`.img-${dim}-field`).hidden = pack === "standard" || pack === "custom";
+    get("img-standard-size").closest(".img-standard-field").hidden = pack !== "standard";
+    for (const dim of ["width","height"])
+      get(`img-custom-${dim}`).closest(".img-custom-field").hidden = pack !== "custom";
     for (const dim of ["height","width"]) {
       const select = get(ids[dim]);
       for (const opt of select.options) opt.disabled = !dims.includes(opt.value) || Number(opt.value) > Number(selected?.max_side || 2048);
@@ -233,16 +259,15 @@
     get(ids[k]).addEventListener("input", saveDraft);
     get(ids[k]).addEventListener("change", saveDraft);
   }
-  function adjustApiAspect(changed) {
-    const chosen = model();
-    if (chosen?.family === "api" && chosen.sizes === "standard" &&
-        get("img-width").value === "1536" && get("img-height").value === "1536") {
-      get(changed === "width" ? "img-height" : "img-width").value = "1024";
-      saveDraft();
-    }
+  for (const dim of ["width","height"]) {
+    const input = get(`img-custom-${dim}`);
+    const snap = () => {
+      const corrected = String(imageSizes.nearest16(input.value));
+      if (input.value !== corrected) {input.value = corrected; saveDraft();}
+    };
+    input.addEventListener("change", snap);
+    input.addEventListener("blur", snap);
   }
-  get("img-width").addEventListener("change", () => adjustApiAspect("width"));
-  get("img-height").addEventListener("change", () => adjustApiAspect("height"));
   get("img-natural").value = store.get("image-natural", "");
   get("img-natural").addEventListener("input", () => {
     store.set("image-natural", get("img-natural").value); saveDraft();
@@ -416,7 +441,7 @@
       positive_prompt: positive,
       natural_prompt: natural,
       negative_prompt: get("img-negative").value,
-      size: `${get("img-width").value}x${get("img-height").value}`,
+      size: currentSize().size,
       steps: Number(get("img-steps").value) || defaultSteps(selected),
       strata_upscale: get("img-upscale").value,
       strata_image_profile: current,
@@ -448,7 +473,7 @@
       taskRecords.set(provisionalDraftId, {id:provisionalDraftId,kind:"generate",
         state:"draft",phase:"正在保存草稿…",created:now,updated:now,
         prompt_summary:(get("img-positive").value || get("img-natural").value).slice(0,180),
-        profile_id:current,requested_size:`${get("img-width").value}x${get("img-height").value}`});
+        profile_id:current,requested_size:currentSize().size});
       renderTaskRows();
     }
     if (draftTimer !== null) clearTimeout(draftTimer);
@@ -540,6 +565,8 @@
       drafts[current] = {
         positive:req.positive_prompt ?? req.prompt ?? "", negative:req.negative_prompt || "",
         width:match?.[1] || "768", height:match?.[2] || "768",
+        standard_size:imageSizes.isStandard(req.size) ? req.size : "1024x1024",
+        custom_width:match?.[1] || "1024", custom_height:match?.[2] || "1024",
         upscale:req.strata_upscale || "off",steps:String(req.steps ?? defaultSteps(model())),
         seed:req.seed == null ? "" : String(req.seed),
       };
