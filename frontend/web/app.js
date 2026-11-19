@@ -105,7 +105,9 @@ $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); 
 let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
   try {
-    health = await (await fetch("health")).json();
+    const response = await fetch("health", {headers: headers(), cache: "no-store"});
+    if (!response.ok) throw Error("Health check HTTP " + response.status);
+    health = await response.json();
     $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
     $("chat-empty-sub").dataset.model = health.model;

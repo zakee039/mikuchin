@@ -114,6 +114,65 @@ be owned by the native launcher.
 - An image provider request that succeeds but fails at **gallery indexing** is recorded as a successful generation with a recoverable `gallery_warning`, not as an unsuccessful paid request requiring another chargeable retry.
 - Local tests use a **localhost fake OpenAI Images server** to exercise actual HTTP, base64 response decoding, PNG writing, gallery registration and task/gallery deletion separately. The smoke script only creates a disposable service and an **offline draft**; it never activates a paid request. Real third-party image APIs have not been contacted.
 
+## Three-process Native supervisor (development CLI implemented)
+
+`backend/gateway/supervisor.py` and `managed_child.py` now own the lifecycle
+of three independent services: **unmodified official PolyStrata**, detached
+Image Worker, and authenticated Mikuchin Gateway. No upstream source edits are
+needed. This is currently a **developer CLI**, not the finished Tauri Launcher.
+
+```powershell
+cd E:\LLM\deploy\mikuchin-native
+$env:MIKUCHIN_GATEWAY_API_KEY = '<new-private-key-of-at-least-12-characters>'
+
+# No GPU or billable requests:
+.\scripts\start-native-stack.ps1 -Engine mock
+
+# Verified local RTX 3070 Ti / official Gemma 4 GGUF:
+.\scripts\start-native-stack.ps1 -Engine strata `
+  -ConfigPath 'E:\LLM\deploy\mikuchin-native-runtime\config\official-sm86-model-test.json'
+```
+
+Gateway serves the browser shell at `http://127.0.0.1:15249/`, and the
+official engine remains restricted to `127.0.0.1:15240`. Press Ctrl+C to
+stop the stack gracefully. A future desktop Launcher may start the Python
+supervisor with `--control-stdin` and send a private `STOP` line. The public
+Gateway key is supplied by the user; a **different** internal-only upstream
+key is generated on every startup, never logged or persisted. Default storage
+is `mikuchin-native-runtime/native-user-data` rather than the old chat folder.
+
+- Startup waits for official `/health`, Worker SQLite heartbeat, then Gateway
+  `/health`. A stale Worker heartbeat cannot satisfy this readiness test.
+- Startup refuses occupied ports, **15239**, and any data folder beneath
+  the stable Mikuchin repository. The stable Launcher is never stopped.
+- Unexpected child exits are restarted at most three times per role in a
+  sliding 60-second window; crash loops stop the stack. Worker restart marks
+  uncertain paid jobs as failed **without automatically retrying them**.
+- Shutdown stops Gateway intake first, lets the Worker finish active provider
+  requests, and asks the official service to execute its normal cleanup via
+  a private stdin control pipe. `supervisor-status.json` exposes only phase,
+  PIDs and ports; logs are contained within the Native runtime data folder.
+- On Windows some virtual-environment `python.exe` executables are redirector
+  processes, so Worker readiness uses a new heartbeat since startup rather
+  than assuming `subprocess.Popen.pid == os.getpid()` inside the worker.
+- Public static routes are allowlisted (`/`, `/index.html`, `/monitor.html`,
+  `/web/*.js|css|svg`). **All private APIs and images still require Bearer
+  authorization.** Safe authenticated `GET /api/models` and `/metrics` are
+  forwarded. `/config` and arbitrary raw upstream control remain blocked.
+
+**Real unified-stack validation (2026-11-20):** Three processes all became
+healthy; the browser HTML loaded without API credentials while `/v1/models`
+returned HTTP 401 unauthenticated. A real Gemma 4 26B-A4B chat request via
+Gateway returned `2` for `1+1` (1.34s). Repeating a 1,221-token prompt with
+12-token answer limits reported 0 then **1,220** cached tokens (1.95s then
+0.16s). Sending `STOP` ended the manager and freed both development ports.
+These are individual local timings, not a general throughput benchmark.
+
+**Still unfinished:** Tauri tray/installer supervision, interactive browser
+settings and model lifecycle controls, Android integration, local Qwen-Image,
+LoRA, 4× upscaling and GPU arbitration. A usable HTML entrypoint is not yet
+equivalent to a complete stable-client replacement.
+
 ## One-time setup in a new worktree
 
 ```powershell
@@ -125,9 +184,9 @@ python -m unittest discover -s backend/gateway -v
 
 On Windows enable `core.longpaths=true` for checkout. Official PolyStrata's tracked benchmark paths can exceed Windows' traditional short-path limit. Its source, license and tests remain **unmodified**.
 
-To actually serve a real GPU model, set up a separate official engine through its upstream instructions in `backend/polystrata/README.md`. Prepare an official model config outside user data directories, bind official HTTP only to `127.0.0.1:15240`, and assign it an API key. A real CUDA engine/model launch is **not yet automated or verified**; only the official Mock Engine has been started as a transport test.
+To serve a real GPU model, prepare a separate official model configuration outside both Git worktrees and bind upstream HTTP only to loopback. The Native supervisor above has now **successfully launched the actual official CUDA Gemma 4 engine**, not just the Mock Engine.
 
-An isolated Python **3.12** environment with the official pinned Python requirements was installed at `E:\LLM\deploy\mikuchin-native-runtime\.venv` for testing. The smoke script automatically finds a sibling `mikuchin-native-runtime` directory, or accepts `-RuntimeRoot` and `-Python` parameters. It lives outside either Git worktree and never shares the stable application's chat database. The official CUDA executable has **not** been installed or model-loaded here yet; it must be obtained from a verified official release or compiled from the pinned source. The original stable application's patched `strata-poly.exe` must not be used as if it were official.
+An isolated Python **3.12** environment with official pinned Python requirements is installed at `E:\LLM\deploy\mikuchin-native-runtime\.venv`. The original Mock smoke script finds the sibling runtime directory or accepts `-RuntimeRoot` and `-Python`; private data remains outside both Git worktrees. The **official CUDA executable has been compiled and loaded with the existing GGUF** from `mikuchin-native-runtime\build-cuda86`, without changing the official submodule. Never substitute the old stable application's patched `strata-poly.exe` for this official binary.
 
 ### Verified official-process transport smoke test (Mock Engine, no real GPU)
 
@@ -165,9 +224,9 @@ Never hard-code real keys in scripts, commit them, or copy existing Mikuchin sec
 
 ## Current Gateway contract (first milestone)
 
-Supported: authorized `GET /health`, `GET /v1/models`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session, character, Markdown/workflow, role reference, online image services/jobs/gallery, and global sampling APIs are handled by Mikuchin's own stores and **never** forwarded upstream. Generated image URLs under `/v1/images/files/{id}.png` are served from the Native gallery when indexed there, with the official server as fallback.
+Supported: authorized `GET /health`, `GET /v1/models`, `GET /api/models`, `GET /metrics`, standard inference `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/images/generations`, and generated-image reads. It forwards directly to official localhost PolyStrata with an **independent upstream key** and streams response bytes without buffering the full response. New-session, character, Markdown/workflow, role reference, online image services/jobs/gallery, and global sampling APIs are handled by Mikuchin's own stores and **never** forwarded upstream. Generated image URLs under `/v1/images/files/{id}.png` are served from the Native gallery when indexed there, with the official server as fallback.
 
-Explicitly blocked (HTTP 501): `strata_image_tool`, `answer_budget_tokens`. The UI-only `strata_session_id` and `mikuchin_stateless` are validated and stripped from otherwise full-context inference requests. The old `lock_kv` API returns HTTP 410 (retired). No `/slots`, `/config`, direct model control or other private application endpoints are exposed to remote clients.
+Explicitly blocked (HTTP 501): `strata_image_tool`, `answer_budget_tokens`. The UI-only `strata_session_id` and `mikuchin_stateless` are validated and stripped from otherwise full-context inference requests. The old `lock_kv` API returns HTTP 410 (retired). No `/slots`, `/config`, direct model control or other private application endpoints are exposed to remote clients. The browser's other settings/model management endpoints remain incomplete; serving HTML does **not** imply every UI control is functional.
 
 The transport deliberately does **not** automatically retry POST requests, particularly paid image calls. Client requests require a Bearer key; cross-origin access is denied unless the origin matches the Host or is allowlisted.
 
@@ -188,7 +247,7 @@ Run the engine model/KV/tool/SSE compatibility suite **before** committing the n
 1. **Text-only CUDA smoke complete** for Gemma 4, including actual automatic KV reuse; continue with mixed prompts, short/long context, multi-session cache eviction, restart and vision. Official Warm Start/PIN remain optional and are not needed for the initial native architecture.
 2. Extend the **newly implemented** session/character/worldbook/workflow APIs to all remaining UI state, then serve the full new Web UI only when all required endpoints, image hooks and access-control checks exist. Old chat/KV history need not migrate and no manual KV lock feature returns.
 3. Chat tool orchestration, answer token budget, `strata_mcp` events, image-worker scheduling and GPU mutual exclusion.
-4. Desktop launcher to supervise *both* Gateway and official PolyStrata, mobile/gallery parity, authentication and upgrade rollbacks.
+4. Development three-process supervisor is completed and tested with Mock and real CUDA; next integrate its process lifecycle into the actual Tauri Launcher, finish settings/mobile parity, native packaging and rollback tests.
 5. Replace the original single-repo release packager: its current `.gitmodules` restriction belongs to v0.3.0, and cannot be used unmodified for this development branch. Packaging must include a separately versioned official engine with verifiable commit and license.
 
 The detailed migration design is in `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`.

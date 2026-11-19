@@ -73,6 +73,16 @@ class ImageJobStore:
             row = db.execute("SELECT updated FROM worker_status WHERE singleton=1").fetchone()
         return bool(row and time.time() - row["updated"] < 4)
 
+    def worker_pid(self):
+        with self._db() as db:
+            row = db.execute("SELECT pid FROM worker_status WHERE singleton=1").fetchone()
+        return row["pid"] if row else None
+
+    def worker_last_heartbeat(self):
+        with self._db() as db:
+            row = db.execute("SELECT updated FROM worker_status WHERE singleton=1").fetchone()
+        return row["updated"] if row else 0.0
+
     def heartbeat(self):
         import os
         with self._db() as db:

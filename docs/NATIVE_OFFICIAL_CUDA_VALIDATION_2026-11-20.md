@@ -36,6 +36,27 @@
 - Gemma 4 默认长思考时，`max_tokens=128` 的测试仅有 reasoning，没有正文；要测用户可见的正文，可用官方支持的 `reasoning_budget_tokens` 或 `chat_template_kwargs.enable_thinking=false`。这不是 KV 缺陷，不能把截断的 reasoning 错记为模型无法推理。
 - 本次测试配置、日志、复制的 profile、模型构建和进程均属于单独的 `mikuchin-native-runtime`，不可提交到仓库或复用为正式用户配置。
 
+## 三进程统一守护复验（2026-11-20）
+
+在此前独立的官方 CUDA/Gateway 验证基础上，又使用新版
+`backend.gateway.supervisor` 同时启动官方引擎、Image Worker 与 Gateway。
+真实模型配置继续使用独立的 `official-sm86-model-test.json`，开发端口为
+15440（官方）和 15449（Gateway），没有占用稳定版的 15239。
+
+- 三个子进程的健康检查均通过；无密钥可以加载静态首页，但未授权
+  `/v1/models` 返回 HTTP 401；带密钥的 `/health` 和模型列表正常。
+- Gateway → 官方 CUDA 模型的 `1+1` 测试返回 `2`，端到端约 1.34 秒。
+- 1,221 Token 合成重复提示词，首次缓存命中 0，第二次为 **1,220**；
+  两次约 1.95 秒与 0.16 秒，均限制生成 12 个 Token。这是同机单次测试，
+  不应视为普遍吞吐结论。
+- 通过私有 stdin `STOP` 退出守护器后，三进程均结束，两个开发端口释放，
+  `supervisor-status.json` 的最终状态为 `stopped`。
+- 单独的 Mock 回归验证了 Worker 异常退出后自动恢复、已占端口拒绝接管、
+  稳定版 15239 及旧聊天目录保护、浏览器静态资源白名单。
+
+本次仍未完成 Tauri 正式 Launcher 整合、Android 打包、本地 Qwen-Image、
+LoRA、4× 超分与 8 GB GPU 的多进程资源仲裁；以上测试也没有联系收费生图 API。
+
 ## 编译指令摘要
 
 ```powershell

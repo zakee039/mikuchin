@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import sqlite3
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -43,7 +44,7 @@ INFERENCE_POSTS = frozenset((
     "/v1/chat/completions", "/v1/messages", "/v1/responses",
     "/v1/images/generations",
 ))
-INFERENCE_GETS = frozenset(("/v1/models", "/models"))
+INFERENCE_GETS = frozenset(("/v1/models", "/models", "/api/models", "/metrics"))
 UNPORTED_FIELDS = frozenset((
     "strata_image_tool", "answer_budget_tokens",
 ))
@@ -59,6 +60,10 @@ IMAGE_REFERENCE = "/v1/mikuchin/image-job-reference/"
 GALLERY = "/v1/mikuchin/gallery"
 GALLERY_THUMB = GALLERY + "/thumb/"
 GALLERY_ITEM = GALLERY + "/item"
+WEB_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "web"
+STATIC_FILE = re.compile(r"^/web/([a-z][a-z0-9_-]{0,80}\.(?:js|css|svg))$")
+STATIC_MIME = {"js":"text/javascript; charset=utf-8", "css":"text/css; charset=utf-8",
+               "svg":"image/svg+xml", "html":"text/html; charset=utf-8"}
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -165,6 +170,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(403, "Cross-origin requests are disabled by default", "forbidden")
 
     def do_GET(self):
+        # Public browser shell; all APIs, generated images and session data
+        # remain behind the existing Bearer/Origin gate below.
+        static_path = urlsplit(self.path).path
+        if static_path in ("/", "/index.html", "/monitor.html") or STATIC_FILE.fullmatch(static_path):
+            self._serve_static(static_path)
+            return
         if not self._authorized():
             return
         if not self.path.startswith("/") or self.path.startswith("//"):
@@ -184,6 +195,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._handle_private("GET", path)
             return
         if path == "/health":
+            upstream_health = {}
             try:
                 conn = http.client.HTTPConnection(self.server.upstream_host,
                                                   self.server.upstream_port, timeout=2)
@@ -192,14 +204,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "Authorization": "Bearer " + self.server.upstream_key})
                     response = conn.getresponse()
                     reachable = response.status == 200
-                    response.read()
+                    body = response.read(32768)
+                    if reachable:
+                        upstream_health = json.loads(body)
                 finally:
                     conn.close()
-            except (OSError, TimeoutError, http.client.HTTPException):
+            except (OSError, TimeoutError, http.client.HTTPException, ValueError):
                 reachable = False
+            image_catalog = (image_providers.catalog(self.server.image_jobs)
+                             if self.server.image_jobs is not None else [])
             self._json(200 if reachable else 503, {
                 "status": "ok" if reachable else "degraded",
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
+                "model": str(upstream_health.get("model") or "official-polystrata")[:180],
+                "max_context": upstream_health.get("max_context") or 0,
+                "images": bool(upstream_health.get("images")),
+                "image_generation": any(x.get("available") for x in image_catalog),
                 "image_worker_ready": bool(self.server.image_jobs and
                                            self.server.image_jobs.worker_healthy()),
             })
@@ -218,6 +238,39 @@ class GatewayHandler(BaseHTTPRequestHandler):
             except (gallery.GalleryError,ValueError,OSError):
                 pass
         self._proxy("GET")
+
+    def _serve_static(self, path):
+        if path in ("/", "/index.html"):
+            name = "index.html"
+        elif path == "/monitor.html":
+            name = "monitor.html"
+        else:
+            match = STATIC_FILE.fullmatch(path)
+            if match is None:
+                self._error(404, "Unknown static asset", "not_found")
+                return
+            name = match.group(1)
+        file = WEB_ROOT / name
+        if not file.is_file() or file.is_symlink():
+            self._error(404, "Static asset not found", "not_found")
+            return
+        try:
+            if file.stat().st_size > 2 * 1024 * 1024:
+                self._error(413, "Static asset too large", "invalid_asset")
+                return
+            data = file.read_bytes()
+        except OSError:
+            self._error(503, "Static asset unavailable", "unavailable")
+            return
+        content_type = STATIC_MIME[file.suffix.lstrip(".")]
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         if not self._authorized():

@@ -56,6 +56,8 @@ class FakeOfficial(BaseHTTPRequestHandler):
             self.send_bytes(200, b'{"status":"ok"}')
         elif self.path == "/v1/models":
             self.send_bytes(200, b'{"data":[{"id":"official-model"}]}')
+        elif self.path == "/api/models":
+            self.send_bytes(200, b'{"models":[{"id":"official-model","current":true}]}')
         else:
             self.send_bytes(404, b'{"error":"not found"}')
 
@@ -136,9 +138,36 @@ class GatewayContract(unittest.TestCase):
         status, data = self.request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(data)["official_polystrata_reachable"])
+        self.assertEqual(json.loads(data)["model"], "official-polystrata")
+        self.assertFalse(json.loads(data)["image_generation"])
         status, data = self.request("GET", "/v1/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["data"][0]["id"], "official-model")
+        status, data = self.request("GET", "/api/models")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["models"][0]["id"], "official-model")
+
+    def test_public_web_assets_but_no_public_api_or_private_files(self):
+        for path, kind in (("/", b"<!doctype html>"),
+                           ("/index.html",b"Mikuchin"),
+                           ("/web/app.js?v=cache",b"headers"),
+                           ("/web/auth-images.js",b"MikuchinSecureImages"),
+                           ("/web/app.css",b".st-"),
+                           ("/web/sprite.svg",b"<svg"),
+                           ("/monitor.html",b"<html")):
+            with self.subTest(path=path):
+                status, raw=self.request("GET",path,key=None)
+                self.assertEqual(status,200,path)
+                self.assertIn(kind,raw[:100000])
+        for private in ("/health","/v1/models","/api/models","/v1/strata/sessions",
+                        "/v1/mikuchin/gallery",
+                        "/v1/images/files/"+"a"*32+".png"):
+            self.assertEqual(self.request("GET",private,key=None)[0],401,private)
+        for traversal in ("/web/../config/active.json", "/web/%2e%2e/config/active.json",
+                          "/web/missing.js", "/web/../../AGENTS.md"):
+            self.assertNotEqual(self.request("GET",traversal,key=None)[0],200,traversal)
+        self.assertEqual(self.request("GET","/config")[0],404,
+                         "Gateway must not expose upstream configuration files")
 
     def test_unauthorized_and_foreign_origin(self):
         self.assertEqual(self.request("GET", "/v1/models", key=None)[0], 401)
