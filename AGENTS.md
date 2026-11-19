@@ -1,5 +1,15 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## Native PolyStrata 重构分支（优先级高于下方旧版发布规则）
+
+当前目录 `E:\LLM\deploy\mikuchin-native` 对应 `refactor/official-polystrata-gateway`，是从正式 `v0.3.0` 基线创建的独立 Git Worktree。原始 `E:\LLM\deploy\mikuchin` 和其正在运行的 15239 后端**绝对不得被本分支的开发脚本、重启或清理操作影响**。
+
+- 本分支 `backend/polystrata` 是来自 `simplexai-labs/PolyStrata` 的**未修改官方 Git 子模块**，而非下文描述的旧 vendored Fork。不得修改/提交其 Python/C++ 内部源码；官方更新只能通过 `scripts/native-polystrata.ps1 pin -Tag ...` 更新 Git 子模块指针，再跑兼容性测试。
+- 新业务代码全部写入 `backend/gateway` 等 Mikuchin 自有目录；官方服务只允许绑定内部 loopback，预定内部端口 `15240`。当前 Gateway 开发端口 `15249`；在完成验收前**不得占用正式生产的 15239**。
+- 旧版 `scripts/package-main-release.py` 不支持 `.gitmodules`，因此本分支暂时**不得使用旧版主程序发布流程或以 v0.3.0 名义发布新架构**。`versions.json` 的 0.3.0 是开发起点，不是新架构完成版本。
+- 必做检查：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-polystrata.ps1 verify`、`python -m unittest discover -s backend/gateway -v`、`git submodule status`、`git status`。未来真实模型/显存/KV 测试须独立执行。
+- 迁移文档 `docs/NATIVE_POLYSTRATA_DEVELOPMENT.md`，总体计划 `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`。
+
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。
 
 每次开始版本相关工作（包括新对话、移植上游、Release、安装包构建），先执行：

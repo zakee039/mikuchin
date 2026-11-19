@@ -1,0 +1,33 @@
+name: Native PolyStrata Gateway contracts
+
+on:
+  push:
+    branches:
+      - refactor/official-polystrata-gateway
+  pull_request:
+    paths:
+      - 'backend/gateway/**'
+      - 'backend/polystrata'
+      - '.gitmodules'
+      - 'scripts/native-polystrata.ps1'
+      - '.github/workflows/native-polystrata-contract.yml'
+
+jobs:
+  gateway-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify official PolyStrata pin and clean upstream checkout
+        shell: bash
+        run: |
+          test "$(git ls-files -s -- backend/polystrata | cut -d ' ' -f 1)" = '160000'
+          test -z "$(git -C backend/polystrata status --porcelain)"
+          test "$(git -C backend/polystrata remote get-url origin)" = 'https://github.com/simplexai-labs/PolyStrata.git'
+          git submodule status
+      - name: Gateway contract tests (no actual models or paid API calls)
+        run: python -m unittest discover -s backend/gateway -v
