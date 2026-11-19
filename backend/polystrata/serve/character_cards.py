@@ -197,14 +197,15 @@ class CharacterStore:
         if value["upscale"] not in ("auto", "off", "4x"):
             raise ValueError("invalid chat image upscaling mode")
         max_side = int(config.get("max_side") or 2048) if config is not None else 2048
-        for field in ("height", "width"):
-            number = value[field]
-            if type(number) is not int or number not in (
-                (1024, 1536) if config and config.get("family") == "api" and config.get("sizes") == "standard"
-                else (1024,) if config and config.get("family") == "api" and config.get("sizes") == "square"
-                else (384, 512, 768, 1024, 1536) if config and config.get("family") == "api"
-                else (384, 512, 768, 1024)) or number > max_side:
-                raise ValueError(f"invalid chat image {field}")
+        width, height = value["width"], value["height"]
+        if type(width) is not int or type(height) is not int or max(width, height) > max_side:
+            raise ValueError("invalid chat image width/height")
+        if config and config.get("family") == "api":
+            from serve.image_api_services import allowed_image_size
+            if not allowed_image_size(config.get("sizes", "standard"), width, height):
+                raise ValueError("invalid chat image width/height for API preset")
+        elif width not in (384, 512, 768, 1024) or height not in (384, 512, 768, 1024):
+            raise ValueError("invalid local chat image width/height")
         steps = value["steps"]
         if steps is not None and (type(steps) is not int or not 1 <= steps <= 100):
             raise ValueError("chat image steps must be 1–100 or unset")

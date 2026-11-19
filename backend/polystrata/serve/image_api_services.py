@@ -29,6 +29,25 @@ _MAX_OUTPUT = 20 * 1024 * 1024
 _MAX_API_JSON = 40 * 1024 * 1024  # 20 MB image encoded as base64 plus JSON overhead
 _MAX_REFERENCES = 8
 _CONNECT_TIMEOUT = 15
+LOCAL_SIZES = (384, 512, 768, 1024)
+STANDARD_SIZES = (
+    (1024, 1024), (2048, 2048), (1536, 1024), (1024, 1536),
+    (1536, 864), (2560, 1440), (3840, 2160), (2160, 3840),
+)
+
+
+def allowed_image_size(mode: str, width: int, height: int) -> bool:
+    """Width x height, never height x width. Providers may impose tighter limits."""
+    if mode == "standard":
+        return (width, height) in STANDARD_SIZES
+    if mode == "all":  # Historic name; now the local-recommended preset pack.
+        return width in LOCAL_SIZES and height in LOCAL_SIZES
+    if mode == "square":  # Historic saved service: keep its existing capability.
+        return (width, height) == (1024, 1024)
+    if mode == "custom":
+        return all(256 <= value <= 4096 and value % 16 == 0
+                   for value in (width, height))
+    return False
 
 
 class ImageServiceError(ValueError):
@@ -132,7 +151,7 @@ def save_service(svc, payload):
         if ref not in ("multi", "single", "none"):
             raise ImageServiceError("reference mode must be multi, single or none")
         sizes = payload.get("sizes", "standard")
-        if sizes not in ("standard", "all", "square"):
+        if sizes not in ("standard", "all", "square", "custom"):
             raise ImageServiceError("invalid size preset")
         concurrency = payload.get("concurrency", 1)
         if type(concurrency) is not int or not 1 <= concurrency <= 20:
@@ -189,7 +208,7 @@ def catalog(svc):
         result.append({
             "id": s["id"], "name": f'{s["name"]}-[{s["model"]}]', "family": "api",
             "type": "api", "available": bool(s["has_key"]),
-            "steps": 8, "max_side": 1536,
+            "steps": 8, "max_side": 4096 if s["sizes"] in ("standard", "custom") else 1024,
             "sizes": s["sizes"], "reference_mode": s["reference_mode"],
             "negative": s["negative"], "seed": s["seed"],
             "supports_steps": s["steps"], "model": s["model"],
@@ -437,9 +456,7 @@ def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
     if not isinstance(size, str) or not re.fullmatch(r"\d{3,4}x\d{3,4}", size):
         raise ImageServiceError("invalid image size")
     w, h = map(int, size.split("x"))
-    allowed = {"standard": (1024,1536), "square": (1024,),
-               "all": (384,512,768,1024,1536)}[service["sizes"]]
-    if w not in allowed or h not in allowed or (service["sizes"] == "standard" and (w,h) not in ((1024,1024),(1536,1024),(1024,1536))):
+    if not allowed_image_size(service["sizes"], w, h):
         raise ImageServiceError("size is not available for this API service")
     refs = select_references(req, service["reference_mode"])
     params = {"model": service["model"], "prompt": prompt, "size": size, "n": 1}

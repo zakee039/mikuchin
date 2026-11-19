@@ -7,6 +7,9 @@
 .img-row--primary .img-upscale-local-field{flex:1.4 1 170px}
 .img-row--primary .img-upscale-api-field{flex:1.15 1 142px}
 .img-row--primary .st-field[hidden]{display:none!important}
+.img-row--primary .img-standard-field{flex:2.3 1 270px}
+.img-row--primary .img-custom-field{flex:1 1 120px}
+.chat-image-controls>label[hidden]{display:none!important}
 .img-api-upscale-control{display:flex;align-items:center;gap:8px;min-height:38px;padding:0 10px;border:1px solid var(--st-line);border-radius:var(--st-r-md);background:var(--st-surface);font-size:var(--st-fs-sm);white-space:nowrap;cursor:pointer}
 .img-api-upscale-control input{width:16px;height:16px;accent-color:var(--st-accent);flex:none;cursor:pointer}
 .img-task-details{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 270px}

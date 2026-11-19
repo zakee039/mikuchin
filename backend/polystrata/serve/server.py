@@ -6806,7 +6806,7 @@ def make_handler(svc: Service):
                         if MIKUCHIN_LANGUAGE_FILE:
                             for api in api_images.catalog(svc):
                                 image_ids.add(api["id"])
-                                image_configs[api["id"]] = {"family": "api", "max_side": 1536,
+                                image_configs[api["id"]] = {"family": "api", "max_side": api["max_side"],
                                     "sizes": api["sizes"]}
                         self._json(200, {"global": cards.set_global(
                             req.get("global"), allowed_image_profiles=image_ids,

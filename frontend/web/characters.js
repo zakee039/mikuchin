@@ -9,23 +9,42 @@ let chatImageCatalog = [], chatImageLoras = [];
 let lastChatImageModel = "";
 const CHAT_IMAGE_DEFAULTS = {lora_id:"none",height:768,width:768,upscale:"auto",steps:null};
 const chatImageModel = () => chatImageCatalog.find(m => m.id === $("global-chat-image-profile").value);
+const chatImageSizes = window.MikuchinImageSizes;
+for (const item of chatImageSizes.standard)
+  $("global-chat-image-standard-size").add(new Option(
+    `${item.size.replace("x", "×")} · ${item.ratio} · ${item.note}`, item.size));
+function chatImageDimensions() {
+  return chatImageSizes.dimensions(chatImageModel(), {
+    width:$("global-chat-image-width").value,
+    height:$("global-chat-image-height").value,
+    standard:$("global-chat-image-standard-size").value,
+    customWidth:$("global-chat-image-custom-width").value,
+    customHeight:$("global-chat-image-custom-height").value,
+  });
+}
 function syncChatImageControls() {
   const selected = chatImageModel();
   const max = Number(selected?.max_side || 2048);
+  const pack = chatImageSizes.pack(selected);
+  const visiblePair = pack !== "standard" && pack !== "custom";
+  for (const dim of ["width", "height"]) {
+    $("global-chat-image-" + dim).closest(".chat-image-" + dim + "-field").hidden = !visiblePair;
+    $("global-chat-image-custom-" + dim).closest(".chat-image-custom-field").hidden = pack !== "custom";
+  }
+  $("global-chat-image-standard-size").closest(".chat-image-standard-field").hidden = pack !== "standard";
+  $("global-chat-image-standard-size").disabled = !chatImageModelsReady;
+  for (const dim of ["width", "height"])
+    $("global-chat-image-custom-" + dim).disabled = !chatImageModelsReady;
   for (const dim of ["height","width"]) {
     const field = $("global-chat-image-" + dim);
-    const dims = selected?.family === "api" ?
-      selected.sizes === "square" ? [1024] : selected.sizes === "standard" ? [1024,1536] : [384,512,768,1024,1536] : [384,512,768,1024];
+    const dims = pack === "square" ? [1024] : chatImageSizes.local;
     for (const option of field.options) option.disabled = Number(option.value) > max || !dims.includes(Number(option.value));
     if (Number(field.value) > max || field.selectedOptions[0]?.disabled) {
       const supported = [...field.options].filter(option => !option.disabled);
       field.value = (supported.find(option => option.value === "768") || supported.at(-1))?.value || "768";
     }
-    field.disabled = !chatImageModelsReady;
+    field.disabled = !chatImageModelsReady || !visiblePair;
   }
-  if (selected?.family === "api" && selected.sizes === "standard" &&
-      $("global-chat-image-width").value === "1536" && $("global-chat-image-height").value === "1536")
-    $("global-chat-image-height").value = "1024";
   const lora = $("global-chat-image-lora");
   const old = lora.value || characterState.global.chat_image_settings?.lora_id || "none";
   lora.replaceChildren(new Option(ui("无"), "none"));
@@ -44,6 +63,10 @@ function syncChatImageControls() {
 function loadChatImageControls() {
   const saved = {...CHAT_IMAGE_DEFAULTS, ...(characterState.global.chat_image_settings || {})};
   for (const dim of ["height","width"]) $("global-chat-image-" + dim).value = String(saved[dim]);
+  const restoredSize = `${saved.width}x${saved.height}`;
+  $("global-chat-image-standard-size").value = chatImageSizes.isStandard(restoredSize) ? restoredSize : "1024x1024";
+  for (const dim of ["width","height"])
+    $("global-chat-image-custom-" + dim).value = String(chatImageSizes.nearest16(saved[dim]));
   $("global-chat-image-upscale").value = saved.upscale;
   $("global-chat-image-steps").value = String(saved.steps ?? chatImageModel()?.steps ?? 8);
   // The catalog arrives asynchronously; restore the saved LoRA after populating it.
@@ -57,8 +80,8 @@ function chatImageSettingsFromControls() {
   if (!Number.isInteger(steps) || steps < 1 || steps > 100)
     throw Error("聊天生图步数必须为 1–100 的整数");
   return {lora_id:$("global-chat-image-lora").value || "none",
-    height:Number($("global-chat-image-height").value),
-    width:Number($("global-chat-image-width").value),
+    height:chatImageDimensions().height,
+    width:chatImageDimensions().width,
     upscale:$("global-chat-image-upscale").value, steps};
 }
 async function refreshChatImageModels() {
@@ -852,7 +875,9 @@ function flushGlobalSave() {
 }
 for (const id of ["global-user-name","global-user-description","global-default-role",
   "global-chat-image-profile","global-chat-image-lora","global-chat-image-height",
-  "global-chat-image-width","global-chat-image-upscale","global-chat-image-steps"]) {
+  "global-chat-image-width","global-chat-image-standard-size",
+  "global-chat-image-custom-width","global-chat-image-custom-height",
+  "global-chat-image-upscale","global-chat-image-steps"]) {
   $(id).addEventListener("input",scheduleGlobalSave);
   $(id).addEventListener("change",scheduleGlobalSave);
   $(id).addEventListener("blur",()=>{if(globalDirty)void flushGlobalSave();});
@@ -865,13 +890,17 @@ $("global-chat-image-profile").addEventListener("change", () => {
   lastChatImageModel = $("global-chat-image-profile").value;
   syncChatImageControls();
 });
-for (const changed of ["width","height"]) {
-  $("global-chat-image-" + changed).addEventListener("change", () => {
-    const m = chatImageModel();
-    if (m?.family === "api" && m.sizes === "standard" &&
-        $("global-chat-image-width").value === "1536" && $("global-chat-image-height").value === "1536")
-      $("global-chat-image-" + (changed === "width" ? "height" : "width")).value = "1024";
-  }, true);
+for (const dim of ["width","height"]) {
+  const input = $("global-chat-image-custom-" + dim);
+  const snap = () => {
+    const normalized = String(chatImageSizes.nearest16(input.value));
+    if (input.value !== normalized) {
+      input.value = normalized;
+      scheduleGlobalSave();
+    }
+  };
+  input.addEventListener("change", snap);
+  input.addEventListener("blur", snap);
 }
 $("chat-character").onchange = async () => {
   if (busy || messages.length > 0) {
