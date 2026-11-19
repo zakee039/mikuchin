@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Mikuchin",
+  "productName": "Mikuchin Native Dev",
   "version": "0.3.0",
-  "identifier": "fun.zakee.mikuchin",
+  "identifier": "fun.zakee.mikuchin.native-dev",
   "build": {
     "beforeDevCommand": "npm run vite",
     "devUrl": "http://127.0.0.1:1420",

@@ -11,7 +11,7 @@
 - 如改动 Gateway 协议，可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native-transport.ps1`，它将官方 Mock Engine、Gateway 以及独立 Image Worker 临时运行在 15240/15249（或指定替代端口），结束时自动退出；使用临时随机密钥和新会话测试目录，不会影响 15239。不要把 Mock 测试误报为真实 GPU/KV 推理验证。
 - 独立在线生图 Worker：`scripts/start-native-image-worker.ps1`；Gateway 只写任务/草稿，不得自动在 HTTP 进程执行收费请求。独立 Worker 必须持有单例锁，持续心跳；任务进程重启后绝不能自动重复付费请求。受保护图片使用 `frontend/web/auth-images.js` 通过 Bearer `fetch`+Blob URL，绝不将 API Key 加到图片 URL。
 - 官方 SM86 CUDA 编译产物和测试 GGUF 配置放在 `E:\LLM\deploy\mikuchin-native-runtime`，绝不提交模型、密钥、缓存或编译产物。真实模型验证记录见 `docs/NATIVE_OFFICIAL_CUDA_VALIDATION_2026-11-20.md`；测试结束时关闭 15240/15249 的开发服务，不能误杀或更改正式 15239。
-- 新增 `scripts/start-native-stack.ps1` 与 `backend/gateway/supervisor.py`，统一启动官方引擎→独立 Worker→Gateway；默认使用 15240/15249、独立 Native 数据目录和私有 Gateway Key，禁止占用 15239。Tauri 正式 Launcher 尚未接入。守护器允许在父进程显式使用 `--control-stdin` 时收取私有 `STOP` 指令；普通交互式 PowerShell 使用 Ctrl+C。发生付费生图时须等待 Worker 完成，不得强杀或重复付费请求。
+- 新增 `scripts/start-native-stack.ps1` 与 `backend/gateway/supervisor.py`，统一启动官方引擎→独立 Worker→Gateway；默认使用 15240/15249、独立 Native 数据目录和私有 Gateway Key，禁止占用 15239。Tauri Native 开发版已经通过 `frontend/launcher/src-tauri/src/native.rs` 接入 Supervisor（不使用旧 15239 启动逻辑）；独立 App ID `fun.zakee.mikuchin.native-dev`、独立 DPAPI Key 和数据目录，真实窗口/托盘生命周期及 Mock/CUDA 已验证。未制作正式安装包或 Release。守护器允许在父进程显式使用 `--control-stdin` 时收取私有 `STOP` 指令；普通交互式 PowerShell 使用 Ctrl+C。发生付费生图时须等待 Worker 完成，不得强杀或重复付费请求。
 - 新的 Gateway GET `/` 与 `/web/*.js|css|svg` 是不含秘密的浏览器静态资源，`/health`、聊天、画廊及图片 API 仍需 Bearer Key，`/config` 等危险上游接口继续禁用。真实三进程的 CUDA 验证及自动缓存结果见上述日志文档，避免与 Mock 冒烟测试混淆。
 - 迁移文档 `docs/NATIVE_POLYSTRATA_DEVELOPMENT.md`，总体计划 `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`。
 

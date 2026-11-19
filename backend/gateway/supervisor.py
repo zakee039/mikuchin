@@ -265,7 +265,18 @@ class NativeSupervisor:
                 for role, seconds in (("gateway", 12), ("image-worker", 300), ("official", 30)):
                     self._stop_role(role, seconds)
                 leftovers = [role for role, child in self.children.items() if child.poll() is None]
-                self._write_status("stopped" if not leftovers else "waiting-for-active-jobs")
+                if leftovers:
+                    # A paid provider request can outlive the normal shutdown grace.
+                    # Keep the controlling parent and its private pipes alive until
+                    # the worker finishes: never orphan a charged request or claim
+                    # a clean STOP before the actual child has exited.
+                    LOG.warning("Waiting for active native jobs to finish: %s", leftovers)
+                    self._write_status("waiting-for-active-jobs")
+                    while leftovers:
+                        time.sleep(0.5)
+                        leftovers = [role for role, child in self.children.items()
+                                     if child.poll() is None]
+                self._write_status("stopped")
 
 
 def main():
