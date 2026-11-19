@@ -11,12 +11,12 @@ from serve.character_cards import CharacterStore
 class ImageSizePolicyTest(unittest.TestCase):
     def test_standard_presets_are_exact_and_directional(self):
         self.assertEqual(STANDARD_SIZES, (
-            (1024,1024), (2048,2048), (1536,1024), (1024,1536),
+            (1024,1024), (1536,1536), (2048,2048), (1536,1024), (1024,1536),
             (1536,864), (2560,1440), (3840,2160), (2160,3840)))
         for width,height in STANDARD_SIZES:
             with self.subTest(width=width,height=height):
                 self.assertTrue(allowed_image_size("standard",width,height))
-        for width,height in [(1024,864),(1536,1536),(864,1536),(3840,3840),(1440,2560)]:
+        for width,height in [(1024,864),(864,1536),(3840,3840),(1440,2560)]:
             self.assertFalse(allowed_image_size("standard",width,height))
 
     def test_local_and_legacy_square(self):
