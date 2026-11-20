@@ -222,6 +222,7 @@ class GatewayContract(unittest.TestCase):
         for path, kind in (("/", b"<!doctype html>"),
                            ("/index.html",b"Mikuchin"),
                            ("/web/app.js?v=cache",b"headers"),
+                           ("/web/chat-image-intent.js?v=router",b"MIKUCHIN_IMAGE_ROUTER_V1"),
                            ("/web/auth-images.js",b"MikuchinSecureImages"),
                            ("/web/app.css",b".st-"),
                            ("/web/sprite.svg",b"<svg"),
@@ -286,6 +287,11 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(len(jobs),1)
         self.assertEqual(jobs[0]["request_id"],request_id)
         self.assertEqual(json.loads(self.request("GET",endpoint+"?session_id="+"9"*32)[1])["jobs"],[])
+        with patch.object(self.images,"worker_healthy",return_value=True):
+            status,data=self.request("POST",endpoint,payload={
+                **payload,"request_id":"a"*32,"edit_previous":True})
+        self.assertEqual(status,400)
+        self.assertIn("尚无可编辑".encode(),data)
         self.assertEqual(self.request("GET",endpoint+"?session_id=../../")[0],400)
         status,data=self.request("POST",endpoint,payload={
             "action":"chat_cancel","session_id":session_id,"request_id":request_id})

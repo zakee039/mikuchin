@@ -103,6 +103,23 @@ $("api-key").value = store.get("apikey", "");
 $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
 
 let health = {model: "strata", images: false, max_context: 0};
+let intentRouting=false;
+let intentController=null;
+const autoImageEnabled=()=>store.get("auto-image-route",false) === true;
+function updateAutoImageToggle() {
+  const button=$("chat-auto-btn");
+  button.hidden=!health.chat_image_jobs;
+  const enabled=autoImageEnabled();
+  button.setAttribute("aria-checked",String(enabled));
+  button.textContent=enabled ? "自动：开" : "自动：关";
+}
+$("chat-auto-btn").onclick=()=>{
+  const enabled=!autoImageEnabled();
+  store.set("auto-image-route",enabled);
+  updateAutoImageToggle();
+  toast("info",enabled ? "智能识别已启用" : "智能识别已关闭",
+    enabled ? "发送消息时由本地 LLM 判断是否生图，仍需你确认后才会执行。" : "现在只有点击「生图」才会提交图像任务。");
+};
 async function loadHealth() {
   try {
     const response = await fetch("health", {headers: headers(), cache: "no-store"});
@@ -115,6 +132,7 @@ async function loadHealth() {
     $("chat-empty-sub").textContent = `${health.model} ${tail}`;
     $("tab-btn-images").hidden = !health.image_generation;
     $("chat-draw-btn").hidden = !health.chat_image_jobs;
+    updateAutoImageToggle();
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
     setTimeout(loadHealth, 2000);
@@ -1298,7 +1316,50 @@ function setBusy(on) {
 
 async function send() {
   const text = $("input").value.trim();
-  if ((!text && !attachments.length) || busy) return;
+  if ((!text && !attachments.length) || busy || intentRouting || chatImageSubmitting) return;
+  // Native-only optional local classification. This has no provider/image
+  // side effects: any proposed generate/edit still requires human confirmation.
+  if (autoImageEnabled() && health.chat_image_jobs && sessionV1 &&
+      text && !attachments.length && window.MikuchinImageIntent) {
+    const startingSession=sessionId;
+    const hasPreviousImage=messages.some(m => m.role==="assistant" &&
+      (m.tools || []).some(t => t.image_request_id && t.image_file && t.state==="done"));
+    const controller=new AbortController();
+    intentRouting=true;
+    intentController=controller;
+    $("send-btn").disabled=true;
+    $("composer-hint").textContent="本地模型正在判断生图意图…";
+    const stopMarkup=$("stop-btn").innerHTML;
+    $("stop-btn").innerHTML=icon("stop","st-icon st-icon--sm")+"跳过识别";
+    $("stop-btn").hidden=false;
+    const timeout=setTimeout(()=>controller.abort(),35000);
+    let decision="text";
+    try {
+      decision=await window.MikuchinImageIntent.classify({
+        text,model:health.model,hasPreviousImage,
+        headers:headers(),signal:controller.signal});
+    }catch(error) {
+      // A classification failure is never a reason to lose the user's text.
+      console.warn("Local image intent detection unavailable:",error.name || "error");
+    }finally {
+      clearTimeout(timeout);
+      intentRouting=false;
+      intentController=null;
+      $("send-btn").disabled=false;
+      $("stop-btn").hidden=true;
+      $("stop-btn").innerHTML=stopMarkup;
+      $("composer-hint").textContent="Shift+Enter: new line";
+    }
+    if (sessionId!==startingSession) {
+      toast("warn","聊天会话已切换","请确认当前会话后重新发送；消息仍保留在输入框中。");
+      return;
+    }
+    if ($("input").value.trim()!==text) return;
+    if (decision==="generate" || decision==="edit") {
+      await sendNativeChatImage({prompt:text,editPrevious:decision==="edit"});
+      return;
+    }
+  }
   messages.push({role: "user", text, images: attachments.filter((a) => a.kind !== "file"),
                  files: attachments.filter((a) => a.kind === "file"), time: Date.now()});
   attachments = [];
@@ -1329,7 +1390,10 @@ async function send() {
 }
 
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };
-$("stop-btn").onclick = () => { if (busy) busy.controller.abort(); };
+$("stop-btn").onclick = () => {
+  if (intentRouting && intentController) intentController.abort();
+  else if (busy) busy.controller.abort();
+};
 // Explicit user-requested chat image: one request ID persists with the
 // conversation BEFORE reaching the Worker. A lost HTTP reply is resolved by
 // GET session_id, never automatically re-submitted with a new ID.
@@ -1339,7 +1403,8 @@ function confirmNativeChatImage(cfg) {
     const dialog=$("chat-image-confirm");
     $("chat-image-confirm-info").textContent=
       `${cfg.modelName} · ${cfg.request.size} · ${cfg.online ? "在线提供商" : "本地 GPU"}` +
-      (cfg.localDefault ? " · 首次使用默认本地模型" : "");
+      (cfg.localDefault ? " · 首次使用默认本地模型" : "") +
+      (cfg.editPrevious ? " · 修改本会话上一张图片" : "");
     const close=()=>resolve(dialog.returnValue==="yes");
     dialog.addEventListener("close",close,{once:true});
     $("chat-image-confirm-yes").onclick=()=>dialog.close("yes");
@@ -1347,8 +1412,7 @@ function confirmNativeChatImage(cfg) {
     dialog.showModal();
   });
 }
-async function sendNativeChatImage() {
-  const prompt=$("input").value.trim();
+async function sendNativeChatImage({prompt=$("input").value.trim(),editPrevious=false}={}) {
   if (!health.chat_image_jobs || !sessionV1 || !sessionId) {
     toast("warn","无法提交聊天生图","请先连接 Native Gateway 并启用会话存储");return;
   }
@@ -1360,6 +1424,10 @@ async function sendNativeChatImage() {
   $("chat-draw-btn").disabled=true;
   try {
     const cfg=await window.polyNativeChatImageRequest(prompt);
+    if (editPrevious) {
+      cfg.editPrevious=true;
+      cfg.request.prompt="请根据上一张参考图片进行修改，保持未指定的主体特征和画面细节。修改要求："+prompt;
+    }
     const accepted=await confirmNativeChatImage(cfg);
     if (!accepted) return;
     const currentId=sessionId, requestId=makeSessionId();
@@ -1376,7 +1444,8 @@ async function sendNativeChatImage() {
       const response=await fetch("v1/mikuchin/image-jobs",{
         method:"POST",headers:headers(true),
         body:JSON.stringify({action:"chat_submit",session_id:currentId,
-                             request_id:requestId,request:cfg.request})});
+                             request_id:requestId,request:cfg.request,
+                             edit_previous:editPrevious})});
       if (!response.ok) {
         const data=await response.json().catch(() => ({}));
         const error=Error(data.error?.message || `HTTP ${response.status}`);
@@ -1468,7 +1537,7 @@ function autosize() { const t = $("input"); t.style.height = "auto"; t.style.hei
 $("input").addEventListener("input", autosize);
 
 $("new-btn").onclick = async () => {
-  if (busy) { toast("warn", "Still writing", "Stop the answer first."); return; }
+  if (busy || intentRouting || chatImageSubmitting) { toast("warn", "正在执行请求", "请先完成当前操作。"); return; }
   if (sessionV1) {
     const previous = sessionId;
     const previousSettings = settings;

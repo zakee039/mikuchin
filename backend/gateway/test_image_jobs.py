@@ -94,6 +94,41 @@ class ImageTaskTest(unittest.TestCase):
         self.assertEqual(record["session_id"],session)
         self.assertEqual(self.jobs.listing(session_id="3"*32)["jobs"],[])
 
+    def test_chat_edit_uses_only_last_successful_same_session_image(self):
+        first=self.jobs.chat_submit("1"*32,"2"*32,self.request)
+        self.jobs.queue.join()
+        with self.assertRaisesRegex(ValueError,"尚无可编辑"):
+            self.jobs.chat_submit("3"*32,"4"*32,{**self.request,"prompt":"Edit eyes"},
+                                  edit_previous=True)
+        edited=self.jobs.chat_submit("1"*32,"5"*32,{**self.request,"prompt":"Edit eyes"},
+                                    edit_previous=True)
+        self.assertEqual(edited["source_id"],first["id"])
+        self.assertEqual(len(edited["request"]["strata_reference_assets"]),1)
+        image_id=edited["request"]["strata_reference_assets"][0]["id"]
+        self.assertEqual(self.jobs.reference_bytes(image_id)[0],image_bytes())
+        self.jobs.queue.join()
+        self.assertEqual(self.jobs.listing(edited["id"])["state"],"success")
+        self.assertTrue(self.jobs.listing(edited["id"])["result"]["edited_previous"])
+        again=self.jobs.chat_submit("1"*32,"5"*32,self.request,edit_previous=False)
+        self.assertTrue(again["already_submitted"])
+        self.assertEqual(again["id"],edited["id"])
+        with self.assertRaisesRegex(ValueError,"server-side chat image"):
+            self.jobs.chat_submit("1"*32,"6"*32,{
+                **self.request,"strata_reference_assets":[{"id":image_id}]},
+                edit_previous=True)
+        with self.assertRaisesRegex(ValueError,"boolean"):
+            self.jobs.chat_submit("1"*32,"7"*32,self.request,edit_previous="true")
+
+    def test_chat_edit_deleted_previous_image_fails_without_submitting(self):
+        first=self.jobs.chat_submit("1"*32,"2"*32,self.request)
+        self.jobs.queue.join()
+        (self.root/"generated-images"/("a"*32+".png")).unlink()
+        with self.assertRaisesRegex(ValueError,"已删除或不可读取"):
+            self.jobs.chat_submit("1"*32,"3"*32,{**self.request,"prompt":"edit"},
+                                  edit_previous=True)
+        self.assertEqual(len(self.jobs.listing(session_id="1"*32)["jobs"]),1)
+        self.assertEqual(len(self.calls),1)
+
     def test_chat_cancel_only_before_worker_claim_and_no_resubmit(self):
         store=ImageJobStore(self.root)
         with mock.patch.object(store,"worker_healthy",return_value=True):

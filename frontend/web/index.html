@@ -7,7 +7,7 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261120-native-chat-image">
+<link rel="stylesheet" href="web/app.css?v=20261120-native-intent-p1">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <link rel="stylesheet" href="web/image-api.css?v=20261119-width-height-presets">
 <link rel="stylesheet" href="web/gallery.css?v=20261119-instant-swipe">
@@ -86,6 +86,10 @@
           <input type="file" id="file" multiple hidden>
           <button type="button" class="st-btn st-btn--secondary" id="chat-draw-btn"
             title="显式提交一张聊天图片；在线提供商可能收费" hidden>生图</button>
+          <button type="button" class="st-btn st-btn--secondary chat-auto-route" id="chat-auto-btn"
+            role="switch" aria-checked="false"
+            aria-label="智能识别生图意图（生成前仍需确认）"
+            title="关闭：只文字聊天；开启：本地模型判断是否生图，提交前仍需确认" hidden>自动：关</button>
             <select class="st-input" id="session-picker" title="Saved conversations" aria-label="Saved conversations" hidden></select>
           <button type="button" class="st-btn st-btn--icon" id="export-btn" title="Save this chat as Markdown" aria-label="Save this chat" hidden>
             <svg class="st-icon"><use href="web/sprite.svg#i-download"/></svg></button>
@@ -714,12 +718,13 @@
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/versions.js?v=0.3.1"></script>
 <script src="web/chat-capabilities.js?v=20261120-p0"></script>
-<script src="web/app.js?v=20261120-native-chat-image-explicit"></script>
+<script src="web/chat-image-intent.js?v=20261120-native-router-p1"></script>
+<script src="web/app.js?v=20261120-native-chat-image-intent-p1"></script>
 <script src="web/image-resolution.js?v=20261119-square-1536"></script>
 <script src="web/auth-images.js?v=20261120-secure-image-blob"></script>
 <script src="web/image-studio.js?v=20261119-failed-retry-replaces"></script>
-<script src="web/sessions.js?v=20261119-native-no-manual-kv"></script>
-<script src="web/characters.js?v=20261120-native-chat-image-settings"></script>
+<script src="web/sessions.js?v=20261120-native-intent-session-guard"></script>
+<script src="web/characters.js?v=20261120-native-chat-image-p1"></script>
 <script src="web/i18n-data.js?v=20261113-chat-image-controls"></script>
 <script src="web/gallery-i18n.js?v=20261119-mobile-viewer"></script>
 <script src="web/i18n.js"></script>

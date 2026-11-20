@@ -606,7 +606,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     if self.server.conversations is None:
                         raise ValueError("native conversation store not configured")
                     ident=valid_id(req.get("session_id"))
-                    result=jobs.chat_submit(ident,req.get("request_id"),req.get("request"))
+                    result=jobs.chat_submit(ident,req.get("request_id"),req.get("request"),
+                                            edit_previous=req.get("edit_previous",False))
                 elif action == "chat_cancel":
                     result=jobs.chat_cancel(valid_id(req.get("session_id")),req.get("request_id"))
                 elif action in ("delete","clear_completed"):

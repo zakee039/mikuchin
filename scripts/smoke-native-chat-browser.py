@@ -72,6 +72,15 @@ class FakeChatEngine(BaseHTTPRequestHandler):
                   "budget":body.get("answer_budget_tokens", "absent")}
         with self.recorded.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        chat=body.get("messages") or []
+        if chat and chat[0].get("role")=="system" and "MIKUCHIN_IMAGE_ROUTER_V1" in chat[0].get("content",""):
+            text=json.loads(chat[-1]["content"]).get("user_text","").lower()
+            action=("edit" if any(term in text for term in ("编辑","修改","change","edit","眼睛"))
+                    else "generate" if any(term in text for term in ("画","生成图片","draw","create an image"))
+                    else "text")
+            self.send_json({"choices":[{"message":{"role":"assistant",
+                "content":json.dumps({"action":action})},"finish_reason":"stop"}]})
+            return
         if body.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -110,7 +119,7 @@ def main():
             "base_url":"http://127.0.0.1:19999/v1",
             "model":"browser-fake-png",
             "api_key":"NO_NETWORK_TEST_KEY","sizes":"standard",
-            "reference_mode":"none"})
+            "reference_mode":"multi"})
         cards=CharacterStore(directory / "character")
         cards.set_global({"default_role":"ordinary",
             "chat_image_profile":fake_service["id"],
@@ -121,7 +130,8 @@ def main():
                                    "sizes":"standard","upscale_available":False}})
         fake_calls=[]
         def fake_image_provider(store, request, *, on_status, diagnostic_id, **kwargs):
-            fake_calls.append(diagnostic_id)
+            fake_calls.append({"job_id":diagnostic_id,
+                               "reference_count":len(request.get("strata_reference_images",[]))})
             on_status("Mock: local PNG only; no network or payment")
             folder=directory/"images"/"generated-images"
             folder.mkdir(exist_ok=True)
@@ -158,6 +168,8 @@ def main():
                 print("forwarded_requests=" + str(len(lines)), flush=True)
             jobs.queue.join()
             print("fake_image_provider_calls="+str(len(fake_calls)),flush=True)
+            print("fake_image_reference_counts="+",".join(str(c["reference_count"])
+                for c in fake_calls),flush=True)
 
 
 if __name__ == "__main__":

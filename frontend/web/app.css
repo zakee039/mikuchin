@@ -347,6 +347,8 @@ main { flex: 1; min-height: 0; display: flex; }
 .chat-image-confirm h3 {margin:0 0 12px;}
 .chat-image-confirm p {margin:8px 0;overflow-wrap:anywhere;}
 .chat-image-confirm-actions {display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
+.chat-auto-route {font-size:.77rem;padding-inline:.45rem;white-space:nowrap;min-width:0;}
+.chat-auto-route[aria-checked="true"] {border-color:#39c5bb;color:#15887e;background:#e4f8f4;}
 
 /* Compact About layout */
 .about { gap: 12px; }

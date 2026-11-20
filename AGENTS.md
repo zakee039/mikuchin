@@ -24,6 +24,7 @@
 - Native 手动卸载（2026-11-20）：用户允许复用原有**安全停止整个 Native 服务栈**的实现，但启动器按钮必须显示「卸载模型／加载模型」，不得显示「停止服务」。手动卸载时 Supervisor 的 `desired=false`，写入 Native `preferences.json.manual_unloaded=true`，阻止看门狗自动重启以及启动器重新打开时的自动拉起。手动加载清除持久标志，再启动 Native 三进程。**空闲 900 秒卸载是官方模型权重卸载，可由下次请求自动加载；手动卸载则 Gateway/API/Chat 也暂时不可用，直至用户再次点击加载。**普通托盘退出不写手动标志。代码和约束见 `docs/NATIVE_MANUAL_MODEL_UNLOAD_2026-11-20.md`；不更改 `main` 或 `15239`。
 
 - Native 显式聊天生图（2026-11-20）：在 Chat 输入纯文本后点击新增「生图」并于**页面内确认框**确认方会创建任务；普通聊天依旧不加 `strata_image_tool=true`，`health.chat_image_tool=false`。显式能力 `health.chat_image_jobs` 仅代表可使用独立 Worker。持久化 `chat_image_requests(session_id,request_id)` 唯一键保证重复点击、刷新或请求超时后不自动重复付费；只能取消未认领任务。成功后安全 Blob 图片显示并在 `health.images=true` 时用**一次** `reasoning_effort=none,max_tokens=256` 本地视觉摘要，不重复触发生图。Chat 作品画廊来源为 `chat` 并保存会话归属。旧版 LLM 自主调用的工具功能**仍未移植**，不要宣称自动识别任意生图意图。完整约束与 Mock 浏览器验收见 `docs/NATIVE_CHAT_IMAGE_ORCHESTRATION_2026-11-20.md`；实际收费 API 不得仅为测试而调用。
+- Native P1 智能生图意图（2026-11-20）：Chat「自动：关／开」默认关闭（浏览器本地偏好），开时使用**本地官方 LLM**短请求分类 `text/generate/edit`；异常回退正常聊天，仅 `generate/edit` 且人工确认后通过原 `chat_submit` 幂等单次提交。修改上一张时从**同会话**最近成功生成图提取私有参考图、保留 `source_id` 和 `edited_previous`，不允许跨会话任意引用；不支持参考图时明确失败而非降级为新图。旧版 `strata_image_tool=true` 仍未移植；独立 `answer_budget_tokens` 仍未得到精确等价官方接口，不能把 `max_tokens` 冒充正文限额。详见 `docs/NATIVE_P1_IMAGE_INTENT_2026-11-20.md`。
 
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。
 

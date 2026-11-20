@@ -329,7 +329,7 @@ class ImageJobStore:
                                 (min(max(limit,1),100),)).fetchall()
             return {"jobs":[self._public(row) for row in rows]}
 
-    def chat_submit(self, session_id, request_id, request):
+    def chat_submit(self, session_id, request_id, request, *, edit_previous=False):
         """One explicit button press => one paid job at most, including retries.
 
         The UNIQUE ledger and job record commit in one SQLite transaction. A
@@ -340,6 +340,8 @@ class ImageJobStore:
             raise ValueError("invalid chat session ID")
         if not isinstance(request_id,str) or not CHAT_ID.fullmatch(request_id):
             raise ValueError("invalid chat request ID")
+        if type(edit_previous) is not bool:
+            raise ValueError("edit_previous must be a boolean")
         with self.lock,self._db() as db:
             existing=db.execute("""SELECT job_id FROM chat_image_requests
                 WHERE session_id=? AND request_id=?""",(session_id,request_id)).fetchone()
@@ -353,11 +355,41 @@ class ImageJobStore:
                 raise ValueError("独立 Image Worker 尚未就绪，无法提交图像任务")
             if db.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0] >= MAX_PENDING:
                 raise ValueError("image request queue is full")
+            source_id=""
+            if edit_previous:
+                if not isinstance(request,dict) or request.get("strata_reference_assets"):
+                    raise ValueError("edit previous must use only the server-side chat image")
+                candidates=db.execute("""SELECT jobs.id,jobs.result_json FROM jobs
+                    JOIN chat_image_requests c ON c.job_id=jobs.id
+                    WHERE c.session_id=? AND jobs.state='success'
+                    ORDER BY jobs.created DESC LIMIT 30""",(session_id,)).fetchall()
+                image_file=None
+                for previous in candidates:
+                    output=json.loads(previous["result_json"])
+                    image_file=(output.get("upscale_original_id") or "")
+                    if image_file:
+                        image_file += ".png"
+                    else:
+                        image_file=output.get("image_file")
+                    if isinstance(image_file,str) and re.fullmatch(r"[a-f0-9]{32}\.png",image_file):
+                        source_id=previous["id"]
+                        break
+                if not source_id:
+                    raise ValueError("本会话尚无可编辑的已生成图片")
+                try:
+                    raw=gallery._file(self,image_file.removesuffix(".png")).read_bytes()
+                except (OSError, gallery.GalleryError) as exc:
+                    raise ValueError("上张生成图已删除或不可读取，无法作为参考") from exc
+                if not 0 < len(raw) <= 5*1024*1024:
+                    raise ValueError("上张图片过大，不能用作图生图参考")
+                reference="data:image/png;base64,"+base64.b64encode(raw).decode("ascii")
+                request={**request,"strata_reference_assets":[{
+                    "name":"previous-chat-image.png","data_url":reference}]}
             prepared=self._prepare(request)
             if not (prepared.get("prompt") or "").strip():
                 raise ValueError("image prompt is required")
             self._require_provider(prepared)
-            created=self._insert(db,prepared,"running",time.time())
+            created=self._insert(db,prepared,"running",time.time(),source_id=source_id)
             db.execute("""INSERT INTO chat_image_requests(session_id,request_id,job_id,created)
                 VALUES(?,?,?,?)""",(session_id,request_id,created["id"],time.time()))
         if self.embedded_worker:
@@ -505,10 +537,12 @@ class ImageJobStore:
                 result={"image_ids":[name.removesuffix(".png")],"image_file":name,
                         "model":response.get("model"),"size":response.get("size"),
                         "seconds":extra.get("seconds"),"provider":"local" if local else "api"}
+                with self._db() as db:
+                    chat=db.execute("""SELECT c.session_id,j.source_id FROM chat_image_requests c
+                        JOIN jobs j ON j.id=c.job_id WHERE c.job_id=?""",(ident,)).fetchone()
+                if chat and chat["source_id"]:
+                    result["edited_previous"]=True
                 try:
-                    with self._db() as db:
-                        chat=db.execute("""SELECT session_id FROM chat_image_requests
-                            WHERE job_id=?""",(ident,)).fetchone()
                     gallery.register(self,name,source="chat" if chat else "studio",
                                      session_id=chat["session_id"] if chat else "",
                                      provider=result["provider"],model=response.get("model", ""),
