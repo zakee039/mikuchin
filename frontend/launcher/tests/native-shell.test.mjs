@@ -59,6 +59,12 @@ test("Native services are real, no pretend LAN or CF controls", () => {
   assert.match(source, /data-action="copy-key"/);
   assert.match(source, /data-action="open-chat"/);
   assert.match(source, /<input type="checkbox" disabled>/);
+  assert.match(source, /<h3>从其它设备访问/);
+  assert.match(source, /局域网 HTTP/);
+  assert.match(source, /Cloudflare Tunnel/);
+  assert.match(source, /待接入/);
+  assert.doesNotMatch(source, /<h3>服务控制<\/h3>/);
+  assert.doesNotMatch(source, /安全停止会等待正在执行的图像任务/);
   assert.match(nativeStyle, /overscroll-behavior:contain/);
   assert.match(rust, /fn gpu_snapshot\(/);
   assert.match(rust, /fn gateway_metrics\(/);

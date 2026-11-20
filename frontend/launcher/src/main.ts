@@ -129,35 +129,22 @@ function apiPage(): string {
         <input class="field native-readonly" value="••••••••••••••••" type="text" readonly aria-label="已隐藏 API Key">
         <button class="outline-small" data-action="copy-key">复制</button></div></div>
       <div class="native-line"><label>引擎内部端口</label><input class="field native-readonly" readonly value="127.0.0.1:${s?.official_port || 15240}"></div>
-      <p class="hint">Gateway 使用独立鉴权；官方引擎端口只供 Native 内部使用。生产端口 15239 不受影响。</p>
     </div>
     <div class="setting-card">
-      <h3>从其它设备访问</h3>
+      <h3>从其它设备访问 <span class="native-coming-soon">待接入</span></h3>
       <div class="toggle-row native-disabled"><b>局域网 HTTP</b><input type="checkbox" disabled><span class="switch"></span></div>
       <div class="toggle-row native-disabled"><b>Cloudflare Tunnel</b><input type="checkbox" disabled><span class="switch"></span></div>
-      <p class="native-hint">这两个入口正在按新 Gateway 的独立鉴权与安全边界重新接入，暂不提供不可用的开关。</p>
     </div>
   </section>`;
 }
 function settingsPage(): string {
-  const s = status;
   return `<section class="setting-page compact-settings native-settings">
     <div class="setting-card"><h3>启动与守护</h3>
       <label class="toggle-row native-disabled"><b>启动器启动后自动拉起服务</b><input type="checkbox" checked disabled><span class="switch"></span></label>
       <label class="toggle-row native-disabled"><b>服务异常自动恢复</b><input type="checkbox" checked disabled><span class="switch"></span></label>
-      <label class="toggle-row native-disabled"><b>开机自启动</b><input type="checkbox" disabled><span class="switch"></span></label>
-      <p class="native-hint">Native 服务守护已内置；其余设置待持久化管理接口完成后再开放修改。关闭窗口会隐藏至托盘。</p>
-    </div>
-    <div class="setting-card"><h3>服务控制</h3>
-      <div class="native-line"><label>当前状态</label><strong>${esc((phases[s?.phase || "starting"] || phases.error)[0])}</strong></div>
-      <div class="actions">
-        <button class="primary" data-action="start" ${busy || s?.managed || s?.stopping ? "disabled" : ""}>启动服务</button>
-        <button class="secondary" data-action="stop" ${busy || !s?.managed || s.stopping ? "disabled" : ""}>安全停止</button>
-      </div>
-      <p class="native-hint">安全停止会等待正在执行的图像任务收尾，不会强制重发可能收费的请求。</p>
     </div>
     <div class="setting-card"><h3>独立数据目录</h3>
-      <div class="native-hint" style="overflow-wrap:anywhere">${esc(s?.data_dir || "正在读取")}</div>
+      <div class="native-hint" style="overflow-wrap:anywhere">${esc(status?.data_dir || "正在读取")}</div>
     </div>
   </section>`;
 }
@@ -170,7 +157,6 @@ function nativePage(): string {
   const s = status;
   const restarts = Object.values(s?.child_restarts || {}).reduce((sum, v) => sum + (Number(v) || 0), 0);
   return `<section class="native-status-page">
-    <div class="native-banner">原生三进程架构 · 官方源码零改动<br>图像任务与 LLM 通过 GPU 独占锁安全交接。</div>
     <div class="setting-card native-card">
       <div class="native-title"><h3>进程守护</h3><small>Supervisor ${s?.supervisor_pid ? "PID " + s.supervisor_pid : "未启动"}</small></div>
       ${processRow("Official Engine", "official")}
@@ -189,9 +175,8 @@ function nativePage(): string {
       <div class="metric-row"><span>Real-ESRGAN 4×</span><strong>${s?.upscaler_ready ? "已配置" : "尚未配置"}</strong></div>
     </div>
     <div class="setting-card native-card">
-      <div class="native-title"><h3>开发隔离</h3><small>仅本机</small></div>
+      <div class="native-title"><h3>服务端口</h3></div>
       <div class="metric-row"><span>Gateway / Official</span><strong>${s?.gateway_port || 15249} / ${s?.official_port || 15240}</strong></div>
-      <div class="metric-row"><span>正式端口</span><strong>15239 · 不接管</strong></div>
       <div class="actions"><button class="secondary" data-action="show-log">查看运行日志</button>
         <button class="secondary" data-action="open-chat" ${s?.gateway_ready ? "" : "disabled"}>打开 Chat</button></div>
     </div>

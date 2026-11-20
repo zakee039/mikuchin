@@ -40,6 +40,7 @@
 .native-line .native-buttons input{flex:1}
 .native-line .native-buttons button{white-space:nowrap}
 .native-disabled .switch{opacity:.4}
+.native-coming-soon{float:right;color:#8a9e9f;font-size:10px;font-weight:500}
 .native-settings .setting-card{margin-bottom:10px}
 .native-log-dialog .modal{height:min(520px,82vh)}
 .native-log-dialog pre{font-size:10px;line-height:1.6;color:#cfebdf;background:#183034;white-space:pre-wrap;word-break:break-all}

@@ -17,6 +17,12 @@
 - 用 `renderBody` 只替换内容容器，并保存与恢复 `scrollTop`；2 秒轮询不再整体覆写 `root.innerHTML`，不会将当前标签或滚动位置重置为顶端。
 - **150% DPI 修复**：Windows WebView 原生已经处理屏幕缩放，禁止再为整个 `documentElement` 设置 `zoom = 1/devicePixelRatio`。此前手动缩放使 UI 只占窗口约 2/3，底部形成大片空白。现已移除全局 zoom，以 Per-Monitor DPI aware 方式抓取真实桌面窗口（682×1031 物理像素），验证 440×650 逻辑窗口内界面从顶部至底部完整填充，四个标签正常显示。追加 1 项测试防止回归。
 
+## 页面精简与待移植功能（后续反馈）
+
+- API 页保留「从其它设备访问」入口，局域网 HTTP 与 Cloudflare Tunnel 都**尚未在 Native 接入**，标注「待接入」且禁用开关；不能把用户指出的功能缺失理解为要求删除入口。
+- 删除 API 页独立鉴权/正式端口长说明；设置页删除重复的「服务控制」卡片（总览已有启动/安全停止操作）、未实现的开机自启开关及冗长的行为解释；原生状态页删除宣传式说明和重复的正式端口提醒。
+- 后续真正接入局域网/Cloudflare 时，需要在 Gateway/Supervisor/Tauri 三层实现并测试，仅恢复 UI 不等于功能完成。
+
 ## 无黑色命令行窗口
 
 `src-tauri/src/main.rs` Windows GUI 子系统改成 **debug/release 均启用**（`cfg_attr(target_os = "windows", windows_subsystem = "windows")`）。以前 `cargo build` 直接启动 Debug EXE 会带可见控制台，并且 Debug 模式默认走 Vite `1420`，无法独立运行。
