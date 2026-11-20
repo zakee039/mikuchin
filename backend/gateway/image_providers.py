@@ -435,8 +435,6 @@ def _network_trace(job_id, route, phase, elapsed, *, status=None, received=None,
 
 def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
     """Call standard /images/generations or /images/edits; return Mikuchin's PNG response shape."""
-    if req.get("strata_upscale") == "4x":
-        raise ImageServiceError("native image upscaling is not available yet")
     ident = ident or req.get("strata_image_profile")
     service = get(svc, ident)
     if not service:

@@ -10,6 +10,7 @@ uploads use Pillow in the isolated official Python environment.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hmac
 import http.client
 import json
@@ -29,6 +30,8 @@ try:
     from .image_jobs import ImageJobStore
     from . import image_providers
     from . import gallery
+    from . import local_images
+    from .gpu_gate import gpu_turn, GPUUnavailable
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
     from characters import CharacterStore, card_from_tavern
@@ -37,6 +40,8 @@ except ImportError:  # unittest discover -s backend/gateway imports app as a top
     from image_jobs import ImageJobStore
     import image_providers
     import gallery
+    import local_images
+    from gpu_gate import gpu_turn, GPUUnavailable
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -211,7 +216,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     conn.close()
             except (OSError, TimeoutError, http.client.HTTPException, ValueError):
                 reachable = False
-            image_catalog = (image_providers.catalog(self.server.image_jobs)
+            image_catalog = ((image_providers.catalog(self.server.image_jobs) +
+                              local_images.catalog(self.server.image_jobs)[0])
                              if self.server.image_jobs is not None else [])
             self._json(200 if reachable else 503, {
                 "status": "ok" if reachable else "degraded",
@@ -460,11 +466,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
             elif action == "reference_remove":
                 result = {"card": cards.remove_reference(req.get("id"))}
             elif action == "global":
-                # Image-worker configuration is intentionally not available
-                # yet: do not accept nonfunctional model or LoRA selections.
+                api = image_providers.catalog(self.server.image_jobs)
+                models, loras = local_images.catalog(self.server.image_jobs)
+                choices = {item["id"]: item for item in (api + models) if item["available"]}
+                # Character/persona settings remain editable even when no
+                # image provider has been configured on this fresh device.
+                if not choices:
+                    choices["default"] = {"family":"qwen_turbo","max_side":1024,
+                                          "upscale_available":False,"available":True}
                 result = {"global": cards.set_global(req.get("global"),
-                    allowed_image_profiles={"default"},
-                    image_profile_configs={"default": {"family":"qwen_turbo","max_side":1024}})}
+                    allowed_image_profiles=set(choices),
+                    image_profile_configs={item_id: {
+                        "family": item["family"], "max_side": item["max_side"],
+                        "sizes": item.get("sizes","all"),
+                        "available_loras": {l["id"] for l in loras if l["available"]},
+                        "upscale_available": item.get("upscale_available",False)}
+                        for item_id,item in choices.items()})}
             elif action in ("inspect_workflow", "prepare_workflow", "commit_workflow"):
                 workflow = WorkflowRuntime(cards)
                 if action == "inspect_workflow":
@@ -511,9 +528,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if path == IMAGE_SERVICES:
                 self._json(200,{"services":image_providers.list_services(jobs)})
             elif path == IMAGE_MODELS:
-                # No local image models are advertised until a real Image
-                # Worker exists. Saved online providers are the only options.
-                self._json(200,{"models":image_providers.catalog(jobs),"loras":[]})
+                models, loras = local_images.catalog(jobs)
+                api = image_providers.catalog(jobs)
+                for item in api:
+                    item["upscale_available"] = local_images.upscaler_ready(jobs)
+                self._json(200,{"models":models + api,"loras":loras})
             elif path == IMAGE_JOBS:
                 from urllib.parse import parse_qs
                 query=parse_qs(urlsplit(self.path).query)
@@ -621,6 +640,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(503,"Native gallery storage unavailable","unavailable")
 
     def _proxy(self, method: str, body: bytes | None = None):
+        root = self.server.image_jobs.root.parent if self.server.image_jobs else None
+        try:
+            with gpu_turn(root, timeout=1) if root else contextlib.nullcontext():
+                self._proxy_unguarded(method, body)
+        except GPUUnavailable:
+            self._error(503, "Native GPU is reserved for an image task", "gpu_busy")
+
+    def _proxy_unguarded(self, method: str, body: bytes | None = None):
         conn = http.client.HTTPConnection(self.server.upstream_host,
                                           self.server.upstream_port, timeout=1800)
         sent_headers = False

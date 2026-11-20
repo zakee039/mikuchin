@@ -447,7 +447,7 @@
       strata_image_profile: current,
       strata_reference_mode: referenceMode(),
       response_format:"url",
-      strata_reference_assets: references.map(item => item.assetId ?
+      strata_reference_assets: activeReferences().map(item => item.assetId ?
         {id:item.assetId,name:item.name} : {data_url:item.url,name:item.name}),
     };
     if (chosenLora !== "none" && selected?.family === "qwen_turbo")

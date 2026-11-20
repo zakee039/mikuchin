@@ -1,5 +1,14 @@
 # Native PolyStrata integration branch
 
+> **2026-11-20 status note:** Sections further down this page are a chronological
+> migration journal and may describe earlier missing features. Native
+> three-process Tauri supervision and Gateway static serving have since been
+> implemented and tested. The isolated local Qwen-Image Official/Uncensored,
+> three LoRAs, Real-ESRGAN 4× and cross-process GPU arbitration are implemented
+> and verified with real RTX 3070 Ti/CUDA/Vulkan runs; see
+> `docs/NATIVE_LOCAL_IMAGE_GPU_2026-11-20.md` for current behavior, tests and
+> limitations. No installer/Tag/Release has been created for this architecture.
+
 ## Current state
 
 - **Working tree:** `E:\LLM\deploy\mikuchin-native`

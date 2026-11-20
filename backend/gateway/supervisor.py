@@ -112,6 +112,7 @@ class NativeSupervisor:
         env["MIKUCHIN_UPSTREAM_API_KEY"] = self.upstream_key
         env["STRATA_API_KEY"] = self.upstream_key
         env["MIKUCHIN_NATIVE_DATA_DIR"] = str(self.data_dir)
+        env["MIKUCHIN_NATIVE_OFFICIAL_PORT"] = str(self.upstream_port)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
         if self.config:

@@ -24,9 +24,11 @@ from PIL import Image
 try:
     from . import image_providers as providers
     from . import gallery
+    from . import local_images
 except ImportError:  # standalone python -m unittest discover -s backend/gateway
     import image_providers as providers
     import gallery
+    import local_images
 
 JOB_ID = re.compile(r"img-[a-f0-9]{24}\Z")
 REF_ID = re.compile(r"[a-f0-9]{64}\Z")
@@ -34,7 +36,8 @@ SIZE = re.compile(r"\d{3,4}x\d{3,4}\Z")
 MAX_PENDING = 80
 FIELDS = frozenset(("prompt", "positive_prompt", "natural_prompt", "negative_prompt",
                    "size", "steps", "seed", "strata_upscale", "strata_image_profile",
-                   "strata_reference_mode", "strata_reference_assets", "response_format"))
+                   "strata_reference_mode", "strata_reference_assets", "response_format",
+                   "strata_lora_id", "strata_denoise_strength"))
 
 
 class ImageJobStore:
@@ -205,8 +208,18 @@ class ImageJobStore:
             raise ValueError("invalid image profile")
         result["strata_image_profile"] = profile
         mode = result.get("strata_upscale","auto")
-        if mode not in ("off","auto",None):
-            raise ValueError("native upscaling not implemented; set upscale to off")
+        if mode not in ("off","auto","4x",None):
+            raise ValueError("invalid native upscale mode")
+        if mode == "4x" and not local_images.upscaler_ready(self):
+            raise ValueError("native 4x upscaler is not configured")
+        if result.get("strata_lora_id") not in (None,"","none"):
+            ident = result["strata_lora_id"]
+            if not isinstance(ident,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",ident):
+                raise ValueError("invalid image LoRA id")
+        if result.get("strata_denoise_strength") is not None:
+            strength = result["strata_denoise_strength"]
+            if type(strength) not in (int,float) or not 0.05 <= strength <= 1:
+                raise ValueError("invalid image denoise strength")
         if result.get("strata_reference_mode", "none") not in ("none","single","multi"):
             raise ValueError("invalid image reference mode")
         if result.get("response_format", "url") not in ("url",):
@@ -237,6 +250,8 @@ class ImageJobStore:
 
     def _require_provider(self, request):
         profile=request["strata_image_profile"]
+        if profile.startswith("local-"):
+            return local_images.validate(self, request)
         service=providers.get(self,profile)
         if not service:
             raise ValueError("native version currently supports configured online API models only")
@@ -247,6 +262,12 @@ class ImageJobStore:
             raise ValueError("resolution is unavailable for the selected API model")
         if request["strata_reference_assets"] and service["reference_mode"] == "none":
             raise ValueError("this image API does not accept reference images")
+        if request.get("strata_lora_id") not in (None,"","none"):
+            raise ValueError("LoRA requires a local Qwen-Image model")
+        if request.get("strata_upscale") == "4x":
+            max_side = int(local_images._settings(self)["upscaler"].get("max_output_side",3072))
+            if max(w,h)*4 > max_side:
+                raise ValueError("4x output exceeds configured size limit")
         return service
 
     def _insert(self,db,request,state,started_at=None,source_id=""):
@@ -380,16 +401,20 @@ class ImageJobStore:
                     with self.lock,self._db() as db:
                         db.execute("UPDATE jobs SET phase=?,updated=? WHERE id=? AND state='running'",
                                    (str(phase)[:200],time.time(),ident))
-                response=self._provider(self,payload,on_status=status,diagnostic_id=ident)
+                local = request["strata_image_profile"].startswith("local-")
+                if local:
+                    response=local_images.generate(self,payload,on_status=status,diagnostic_id=ident)
+                else:
+                    response=self._provider(self,payload,on_status=status,diagnostic_id=ident)
                 extra=response.get("strata") or {}
                 name=extra.get("image_file")
                 if not isinstance(name,str) or not re.fullmatch(r"[a-f0-9]{32}\.png",name):
                     raise ValueError("provider image was not saved in native storage")
                 result={"image_ids":[name.removesuffix(".png")],"image_file":name,
                         "model":response.get("model"),"size":response.get("size"),
-                        "seconds":extra.get("seconds"),"provider":"api"}
+                        "seconds":extra.get("seconds"),"provider":"local" if local else "api"}
                 try:
-                    gallery.register(self,name,source="studio",provider="api",
+                    gallery.register(self,name,source="studio",provider=result["provider"],
                                      model=response.get("model", ""),prompt=request.get("prompt", ""))
                 except Exception as exc:
                     # The provider has already returned and the PNG exists.
@@ -397,6 +422,22 @@ class ImageJobStore:
                     # potentially billable retry just because indexing failed.
                     result["gallery_warning"] = "画廊索引暂不可用，请使用画廊刷新恢复"
                     result["gallery_error_type"] = type(exc).__name__
+                if local_images.should_upscale(self, request):
+                    try:
+                        status("Running Real-ESRGAN 4x")
+                        original = gallery._file(self, name.removesuffix(".png")).read_bytes()
+                        enhanced = local_images.upscale(self, original, on_status=status)
+                        cover = gallery.attach_upscaled(self, name.removesuffix(".png"), enhanced)
+                        result["image_ids"] = [cover]
+                        result["image_file"] = cover + ".png"
+                        result["size"] = f"{int(request['size'].split('x')[0])*4}x{int(request['size'].split('x')[1])*4}"
+                        result["upscale_applied"] = True
+                        result["upscale_original_id"] = name.removesuffix(".png")
+                    except Exception as exc:
+                        # The original can already have been charged for or
+                        # generated successfully. Never suggest replaying it.
+                        result["upscale_applied"] = False
+                        result["upscale_warning"] = type(exc).__name__
                 with self.lock,self._db() as db:
                     db.execute("""UPDATE jobs SET state='success',phase='生成完成',result_json=?,
                                   updated=?,finished_at=? WHERE id=?""",

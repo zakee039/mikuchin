@@ -197,11 +197,13 @@ class CharacterStore:
         if not isinstance(value, dict) or set(value) != set(cls.default_chat_image_settings()):
             raise ValueError("chat image settings have incomplete or unknown fields")
         if value["lora_id"] != "none":
-            # The image worker / LoRA catalog has not been ported yet.
-            # Do not accept a selection that the native runtime cannot honor.
-            raise ValueError("image LoRA is unavailable until the native image worker is ready")
+            if config is None or config.get("family") != "qwen_turbo" or (
+                    value["lora_id"] not in config.get("available_loras", set())):
+                raise ValueError("selected image LoRA is unavailable for this profile")
         if value["upscale"] not in ("auto", "off", "4x"):
             raise ValueError("invalid chat image upscaling mode")
+        if value["upscale"] == "4x" and config is not None and config.get("upscale_available", True) is False:
+            raise ValueError("4x upscaling is not configured")
         max_side = int(config.get("max_side") or 2048) if config is not None else 2048
         width, height = value["width"], value["height"]
         if type(width) is not int or type(height) is not int or max(width, height) > max_side:
