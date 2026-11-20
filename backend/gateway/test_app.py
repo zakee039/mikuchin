@@ -254,6 +254,46 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.request("GET", "/v1/strata/sessions")[0], 200)
         self.assertEqual(self.request("GET", "/v1/mikuchin/image-jobs")[0], 200)
 
+    def test_chat_image_submit_is_explicit_session_scoped_and_cancelable_before_claim(self):
+        from backend.gateway import image_providers
+        service=image_providers.save_service(self.images,{
+            "name":"Chat image contract fixture",
+            "base_url":"http://127.0.0.1:19001/v1",
+            "model":"mock-image","api_key":"MOCK_SECRET_NOT_USED",
+            "sizes":"standard","reference_mode":"none"})
+        self.addCleanup(image_providers.delete_service,self.images,service["id"])
+        session_id="7"*32; request_id="8"*32
+        req={"prompt":"A small turquoise star","strata_image_profile":service["id"],
+             "size":"1024x1024","strata_upscale":"off"}
+        endpoint="/v1/mikuchin/image-jobs"
+        payload={"action":"chat_submit","session_id":session_id,
+                 "request_id":request_id,"request":req}
+        self.assertEqual(self.request("POST",endpoint,payload=payload,key=None)[0],401)
+        self.assertEqual(self.request("POST",endpoint,payload=payload,
+                                      origin="https://evil.invalid")[0],403)
+        with patch.object(self.images,"worker_healthy",return_value=True):
+            status,data=self.request("POST",endpoint,payload=payload)
+            self.assertEqual(status,200)
+            first=json.loads(data)
+            self.assertFalse(first["already_submitted"])
+            again=json.loads(self.request("POST",endpoint,payload={
+                **payload,"request":{**req,"prompt":"DIFFERENT"}})[1])
+        self.assertTrue(again["already_submitted"])
+        self.assertEqual(again["id"],first["id"])
+        status,data=self.request("GET",endpoint+"?session_id="+session_id)
+        self.assertEqual(status,200)
+        jobs=json.loads(data)["jobs"]
+        self.assertEqual(len(jobs),1)
+        self.assertEqual(jobs[0]["request_id"],request_id)
+        self.assertEqual(json.loads(self.request("GET",endpoint+"?session_id="+"9"*32)[1])["jobs"],[])
+        self.assertEqual(self.request("GET",endpoint+"?session_id=../../")[0],400)
+        status,data=self.request("POST",endpoint,payload={
+            "action":"chat_cancel","session_id":session_id,"request_id":request_id})
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(data)["state"],"failed")
+        self.assertEqual(self.request("POST",endpoint,payload={
+            "action":"chat_cancel","session_id":session_id,"request_id":request_id})[0],400)
+
     def test_unported_mikuchin_semantics_fail_explicitly(self):
         before=len(FakeOfficial.seen)
         for key in ("strata_image_tool", "answer_budget_tokens"):

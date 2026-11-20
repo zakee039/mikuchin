@@ -23,6 +23,8 @@
 - Native MCP 后续接入（2026-11-20）：官方引擎的 `GET /mcp` 已通过 Native Gateway 独立 Bearer/Origin 安全门，仅加入精确 allowlist；`strata_mcp:true` 及官方 SSE `strata_mcp` call/result 直接代理，由**官方** run_with_mcp 执行工具。授权 health 的 `chat_mcp` 随官方引擎健康状态启用，但网页仍严格要求从 `/mcp` 读取到工具数 >0 并且用户允许 MCP 时才将工具传入；零工具不会启用。不要导入旧版的第三方服务密钥，也不要在 Gateway 自动执行本地程序。FakeOfficial Mock 已测完整 SSE，真实工具仍需单独配置与实测。详情见 `docs/NATIVE_P0_CHAT_2026-11-20.md`。
 - Native 手动卸载（2026-11-20）：用户允许复用原有**安全停止整个 Native 服务栈**的实现，但启动器按钮必须显示「卸载模型／加载模型」，不得显示「停止服务」。手动卸载时 Supervisor 的 `desired=false`，写入 Native `preferences.json.manual_unloaded=true`，阻止看门狗自动重启以及启动器重新打开时的自动拉起。手动加载清除持久标志，再启动 Native 三进程。**空闲 900 秒卸载是官方模型权重卸载，可由下次请求自动加载；手动卸载则 Gateway/API/Chat 也暂时不可用，直至用户再次点击加载。**普通托盘退出不写手动标志。代码和约束见 `docs/NATIVE_MANUAL_MODEL_UNLOAD_2026-11-20.md`；不更改 `main` 或 `15239`。
 
+- Native 显式聊天生图（2026-11-20）：在 Chat 输入纯文本后点击新增「生图」并于**页面内确认框**确认方会创建任务；普通聊天依旧不加 `strata_image_tool=true`，`health.chat_image_tool=false`。显式能力 `health.chat_image_jobs` 仅代表可使用独立 Worker。持久化 `chat_image_requests(session_id,request_id)` 唯一键保证重复点击、刷新或请求超时后不自动重复付费；只能取消未认领任务。成功后安全 Blob 图片显示并在 `health.images=true` 时用**一次** `reasoning_effort=none,max_tokens=256` 本地视觉摘要，不重复触发生图。Chat 作品画廊来源为 `chat` 并保存会话归属。旧版 LLM 自主调用的工具功能**仍未移植**，不要宣称自动识别任意生图意图。完整约束与 Mock 浏览器验收见 `docs/NATIVE_CHAT_IMAGE_ORCHESTRATION_2026-11-20.md`；实际收费 API 不得仅为测试而调用。
+
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。
 
 每次开始版本相关工作（包括新对话、移植上游、Release、安装包构建），先执行：

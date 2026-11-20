@@ -55,6 +55,69 @@ class ImageTaskTest(unittest.TestCase):
         self.jobs.queue.join()
         self.temp.cleanup()
 
+    def test_chat_image_idempotency_survives_restart_without_paid_replay(self):
+        """A lost HTTP response cannot create a second chargeable request."""
+        session="a"*32
+        request_id="b"*32
+        # Disable the embedded worker: this is a pure SQLite/protocol test.
+        store=ImageJobStore(self.root)
+        with mock.patch.object(store,"worker_healthy",return_value=True):
+            first=store.chat_submit(session,request_id,self.request)
+            retry=store.chat_submit(session,request_id,{**self.request,
+                                                       "prompt":"DIFFERENT PROMPT"})
+        self.assertFalse(first["already_submitted"])
+        self.assertTrue(retry["already_submitted"])
+        self.assertEqual(first["id"],retry["id"])
+        self.assertEqual(retry["request"]["prompt"],self.request["prompt"])
+        self.assertEqual(len(store.listing(session_id=session)["jobs"]),1)
+        self.assertEqual(store.listing(session_id="c"*32)["jobs"],[])
+        self.assertEqual(self.calls,[])
+        reopened=ImageJobStore(self.root)
+        reopened.fail_uncertain_on_worker_restart()
+        again=reopened.chat_submit(session,request_id,self.request)
+        self.assertTrue(again["already_submitted"])
+        self.assertEqual(again["id"],first["id"])
+        self.assertEqual(again["state"],"failed")
+        self.assertEqual(self.calls,[])
+
+    def test_chat_image_success_is_indexed_as_chat_and_linked_to_session(self):
+        session="1"*32
+        submitted=self.jobs.chat_submit(session,"2"*32,self.request)
+        self.jobs.queue.join()
+        job=self.jobs.listing(submitted["id"],session_id=session)
+        self.assertEqual(job["state"],"success")
+        self.assertEqual(len(self.calls),1)
+        images=gallery.listing(self.jobs,source="chat")
+        entries=images["items"]
+        record=next(x for x in entries if x["id"]=="a"*32)
+        self.assertEqual(record["source"],"chat")
+        self.assertEqual(record["session_id"],session)
+        self.assertEqual(self.jobs.listing(session_id="3"*32)["jobs"],[])
+
+    def test_chat_cancel_only_before_worker_claim_and_no_resubmit(self):
+        store=ImageJobStore(self.root)
+        with mock.patch.object(store,"worker_healthy",return_value=True):
+            first=store.chat_submit("a"*32,"d"*32,self.request)
+        canceled=store.chat_cancel("a"*32,"d"*32)
+        self.assertEqual(canceled["state"],"failed")
+        self.assertIn("取消",canceled["phase"])
+        with self.assertRaises(ValueError):
+            store.chat_cancel("a"*32,"d"*32)
+        again=store.chat_submit("a"*32,"d"*32,self.request)
+        self.assertTrue(again["already_submitted"])
+        self.assertEqual(again["id"],first["id"])
+        self.assertEqual(again["state"],"failed")
+        with mock.patch.object(store,"worker_healthy",return_value=True):
+            second=store.chat_submit("a"*32,"e"*32,self.request)
+        with store._db() as db:
+            db.execute("UPDATE jobs SET phase='准备请求提供商' WHERE id=?",
+                       (second["id"],))
+        with self.assertRaisesRegex(ValueError,"无法撤回"):
+            store.chat_cancel("a"*32,"e"*32)
+        with self.assertRaises(ValueError):
+            store.chat_submit("../invalid", "f"*32, self.request)
+        self.assertEqual(self.calls,[])
+
     def test_draft_never_calls_a_paid_provider(self):
         draft = self.jobs.submit({"action": "draft", "request": self.request})
         self.assertEqual(draft["state"], "draft")

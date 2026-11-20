@@ -121,6 +121,33 @@ async function refreshChatImageModels() {
   }
 }
 
+// Explicit Native chat image action. User click authorizes one job;
+// ordinary LLM text cannot silently submit chargeable image requests.
+window.polyNativeChatImageRequest = async (prompt) => {
+  if (!characterState.available) await charactersLoad();
+  if (globalDirty) await flushGlobalSave();
+  if (!chatImageModelsReady) await refreshChatImageModels();
+  const selected=characterState.global.chat_image_profile;
+  let model=chatImageCatalog.find(m => m.id === selected && m.available);
+  // A brand-new Native profile still contains "default". Pick an available
+  // *local* model only as a preview; the user must approve its name in the
+  // confirmation dialog. Never silently fall back to a chargeable API.
+  const localDefault=selected === "default" && !model;
+  if (localDefault)
+    model=chatImageCatalog.find(m => m.available && m.family === "qwen_turbo");
+  if (!model) throw Error("请先在全局设置中选择可用的聊天生图模型并保存");
+  const config={...CHAT_IMAGE_DEFAULTS,...characterState.global.chat_image_settings};
+  const w=Number(config.width),h=Number(config.height);
+  if (!Number.isInteger(w) || !Number.isInteger(h) ||
+      w < 256 || h < 256 || w > 2048 || h > 2048)
+    throw Error("聊天生图分辨率无效，请在全局设置中重新选择");
+  const req={prompt,strata_image_profile:model.id,size:`${w}x${h}`,
+    strata_upscale:config.upscale || "off"};
+  if (config.steps != null) req.steps=Number(config.steps);
+  if (config.lora_id && config.lora_id !== "none") req.strata_lora_id=config.lora_id;
+  return {request:req,modelName:model.name || model.id,online:model.family === "api",
+          localDefault};
+};
 function isStatelessRole(){return characterState.stateless;}
 window.polyIsStateless = isStatelessRole;
 function globalUserIdentity(card) {

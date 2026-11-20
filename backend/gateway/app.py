@@ -236,6 +236,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # advertise it until the Gateway can orchestrate the tool and
                 # send its generated image back to the LLM for follow-up.
                 "chat_image_tool": False,
+                # Explicit per-user-action chat image jobs (not an LLM tool).
+                # No hidden paid submissions during ordinary text responses.
+                "chat_image_jobs": bool(self.server.image_jobs),
                 # The official engine counts thinking and answer together in
                 # max_tokens. The previous Mikuchin answer_budget_tokens cap
                 # applies to visible answer tokens alone; substituting
@@ -568,7 +571,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 query=parse_qs(urlsplit(self.path).query)
                 ident=query.get("id",[None])[0]
                 kind=query.get("kind",[None])[0]
-                self._json(200,jobs.listing(ident,kind=kind))
+                session_id=query.get("session_id",[None])[0]
+                self._json(200,jobs.listing(ident,kind=kind,session_id=session_id))
             elif path.startswith(IMAGE_REFERENCE):
                 data,mime=jobs.reference_bytes(path[len(IMAGE_REFERENCE):])
                 self._binary(mime,data)
@@ -598,7 +602,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 else:
                     raise ValueError("unknown image API service action")
             elif path == IMAGE_JOBS:
-                if action in ("delete","clear_completed"):
+                if action == "chat_submit":
+                    if self.server.conversations is None:
+                        raise ValueError("native conversation store not configured")
+                    ident=valid_id(req.get("session_id"))
+                    result=jobs.chat_submit(ident,req.get("request_id"),req.get("request"))
+                elif action == "chat_cancel":
+                    result=jobs.chat_cancel(valid_id(req.get("session_id")),req.get("request_id"))
+                elif action in ("delete","clear_completed"):
                     result=jobs.delete(req.get("id"),clear=action=="clear_completed")
                 else:
                     result=jobs.submit(req)

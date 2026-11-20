@@ -114,6 +114,7 @@ async function loadHealth() {
     const tail = window.MikuchinI18n?.translate("runs on this PC. Nothing leaves it.") || "runs on this PC. Nothing leaves it.";
     $("chat-empty-sub").textContent = `${health.model} ${tail}`;
     $("tab-btn-images").hidden = !health.image_generation;
+    $("chat-draw-btn").hidden = !health.chat_image_jobs;
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
     setTimeout(loadHealth, 2000);
@@ -1002,6 +1003,9 @@ function toolHtml(t, k) {
               `${t.truncated ? ", cut for the model" : ""}</div><pre class="tool-call__pre">${esc(t.result)}</pre>`;
     }
   }
+  if (t.image_request_id && t.state === "running" && t.open)
+    body += `<button type="button" class="st-btn st-btn--secondary"
+      data-chat-image-cancel="${esc(t.image_request_id)}">仅取消尚未执行的排队任务</button>`;
   return `<details class="st-collapse tool-call" data-tool="${k}" data-state="${esc(t.state)}"${t.open ? " open" : ""}>` +
     `<summary>${icon("tool", "st-icon st-icon--sm")}<span class="tool-call__name" title="${esc(t.name || "")}">${esc(t.tool || t.name || "tool")}</span>` +
     (t.server ? `<span class="muted small">${esc(t.server)}</span>` : "") +
@@ -1022,10 +1026,15 @@ function answerHtml(m) {
       const path = "v1/images/files/" + t.image_file;
       const original = t.image_original_file && /^[a-f0-9]{32}\.png$/.test(t.image_original_file)
         ? "v1/images/files/" + t.image_original_file : "";
-      html += `<figure class="st-generated-image"><a href="${path}" target="_blank" rel="noopener noreferrer">` +
-              `<img src="${path}" alt="${esc(t.image_prompt || "Generated image")}" loading="lazy"></a>` +
+      // Session history can render before the async /health probe finishes.
+      // The persisted job marker is sufficient to enforce private Blob fetch.
+      const nativeSecure=!!health.chat_image_jobs || !!t.image_request_id;
+      html += `<figure class="st-generated-image"><a href="${nativeSecure ? "#" : path}"
+                ${nativeSecure ? `data-native-image-download="${path}"` : 'target="_blank" rel="noopener noreferrer"'}>` +
+              `<img ${nativeSecure ? `data-native-image-src="${path}"` : `src="${path}"`} alt="${esc(t.image_prompt || "Generated image")}" loading="lazy"></a>` +
               `<figcaption>${t.upscale_applied ? "Anime 4× · " : ""}${((window.MIKUCHIN_TRANSLATIONS || {})[$("ui-language")?.value] || {})[t.edited_previous ? "Edited image" : "Generated image"] || (t.edited_previous ? "Edited image" : "Generated image")}` +
-              (original ? ` · <a href="${original}" target="_blank" rel="noopener noreferrer">Original 768px</a>` : "") +
+              (original ? ` · <a href="${nativeSecure ? "#" : original}"
+                  ${nativeSecure ? `data-native-image-download="${original}"` : 'target="_blank" rel="noopener noreferrer"'}>Original</a>` : "") +
               (t.upscale_fallback ? " · Upscale failed; showing original" : "") + `</figcaption></figure>`;
     }
   });
@@ -1061,7 +1070,7 @@ let chatImageJobPolling = false;
 async function refreshChatImageJobs() {
   if (!sessionV1 || !sessionId || chatImageJobPolling || document.hidden) return;
   const pending = messages.some(m => m.role === "assistant" &&
-    (m.tools || []).some(t => t.image_job_id && t.state === "running"));
+    (m.tools || []).some(t => (t.image_job_id || t.image_request_id) && t.state === "running"));
   if (!pending) return;
   const currentId = sessionId;
   chatImageJobPolling = true;
@@ -1072,23 +1081,55 @@ async function refreshChatImageJobs() {
     const result = await r.json();
     if (sessionId !== currentId) return;
     const jobs = new Map((result.jobs || []).map(job => [job.id,job]));
+    const requests = new Map((result.jobs || []).filter(job => job.request_id).map(job => [job.request_id,job]));
     let changed = false;
     for (const m of messages) {
       if (m.role !== "assistant") continue;
       for (const t of m.tools || []) {
-        const job = jobs.get(t.image_job_id);
-        if (!job || !["done","error","interrupted"].includes(job.state) || t.state !== "running") continue;
-        if (job.state === "done") {
+        const job = jobs.get(t.image_job_id) || requests.get(t.image_request_id);
+        if (!job && t.image_request_id && !t.image_job_id &&
+            Date.now()-(t.created_at || m.time || Date.now()) > 30_000 &&
+            t.state === "running") {
+          // No matching task after repeated readbacks. Never auto-submit a
+          // second paid request to 'fix' a network timeout.
+          t.state="error";t.ok=false;
+          t.result="后台未找到此次提交记录；如提供商可能计费，请先检查任务中心再决定是否重试。";
+          m.text="提交状态未得到确认，未自动重复提交。";
+          changed=true;
+          continue;
+        }
+        if (!job || t.state !== "running") continue;
+        if (!t.image_job_id) t.image_job_id=job.id;
+        if (job.state === "running") {
+          const progress=job.phase || "等待图像任务";
+          if (t.result !== progress) {t.result=progress;changed=true;}
+          continue;
+        }
+        if (!["done","error","interrupted","success","failed"].includes(job.state)) continue;
+        if (job.state === "done" || job.state === "success") {
           const picture = job.result || {};
           Object.assign(t, {state:"done",ok:true,result:picture.text || "图片已生成。",
-            image_file:picture.image_file || "",image_original_file:picture.image_original_file || "",
-            image_prompt:picture.image_prompt || "",image_model:picture.image_model || "",
+            image_file:picture.image_file || "",
+            image_original_file:picture.image_original_file ||
+              (picture.upscale_original_id ? picture.upscale_original_id + ".png" : ""),
+            image_prompt:picture.image_prompt || job.request?.prompt || "",
+            image_model:picture.image_model || picture.model || "",
             edited_previous:picture.edited_previous===true,
             upscale_applied:picture.upscale_applied===true,upscale_fallback:picture.upscale_fallback===true});
           if (picture.reply_text && (!m.text || m.text.includes("已提交桌面端后台生图任务")))
             m.text = picture.reply_text;
+          else if (health.chat_image_jobs) {
+            m.text="图片已生成。";
+            // Mark before the request to prevent re-running local vision on
+            // refresh or after a lost connection. Never retry paid generation.
+            if (health.images && !t.vision_state) {
+              t.vision_state="requested";
+              queueMicrotask(() => void describeNativeChatImage(m,t,currentId));
+            }
+          }
         } else {
           Object.assign(t,{state:"error",ok:false,result:job.error || "桌面端生图任务未完成"});
+          if (health.chat_image_jobs) m.text="图像任务未完成；如需重新生成，请显式再次提交。";
         }
         if (Array.isArray(m.swipes)) swipeSave(m);
         changed = true;
@@ -1118,6 +1159,8 @@ function updateAssistant(el, m, streaming) {
     if (!thinkingNow && det.open && !det.dataset.touched) { det._auto = true; det.open = false; }
   }
   const bubble = el.querySelector(".st-bubble");
+  if (window.MikuchinSecureImages)
+    window.MikuchinSecureImages.clearWithin(bubble);
   if (m.error) {
     bubble.innerHTML = `<div class="msg-error"></div>`;
     bubble.firstChild.textContent = m.error;
@@ -1126,6 +1169,9 @@ function updateAssistant(el, m, streaming) {
   } else {
     bubble.innerHTML = answerHtml(m);
     if (streaming) bubble.classList.add("cursor"); else bubble.classList.remove("cursor");
+    if (window.MikuchinSecureImages)
+      for (const im of bubble.querySelectorAll("img[data-native-image-src]"))
+        void window.MikuchinSecureImages.load(im,im.dataset.nativeImageSrc).catch(console.warn);
   }
   el.querySelector(".meta-text").textContent = m.meta || (streaming ? "" : m.stopped ? "Stopped" : "");
   el.querySelector("[data-msg-copy]").hidden = streaming || !m.text;
@@ -1153,6 +1199,25 @@ function nearBottom() { const s = $("chat-scroll"); return s.scrollHeight - s.sc
 function scrollDown(force) { const s = $("chat-scroll"); if (force || nearBottom()) s.scrollTop = s.scrollHeight; }
 
 $("chat").addEventListener("click", (e) => {
+  const download=e.target.closest("[data-native-image-download]");
+  if (download) {
+    e.preventDefault();
+    const path=download.dataset.nativeImageDownload;
+    if (!window.MikuchinSecureImages) return;
+    void window.MikuchinSecureImages.prefetch(path).then(blob => {
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");a.href=url;a.download=path.split("/").at(-1);
+      a.click();setTimeout(() => URL.revokeObjectURL(url),3000);
+    }).catch(error => toast("error","图片下载失败",String(error)));
+    return;
+  }
+  const cancel=e.target.closest("[data-chat-image-cancel]");
+  if (cancel) {
+    const m=messages[+cancel.closest(".st-msg").dataset.i];
+    const t=(m?.tools || []).find(x => x.image_request_id === cancel.dataset.chatImageCancel);
+    if (t) void cancelNativeChatImage(t);
+    return;
+  }
   const rg = e.target.closest("[data-msg-regen]");
   if (rg) { regenerateMessage(+rg.closest(".st-msg").dataset.i); return; }
   const pv = e.target.closest("[data-msg-prev]");
@@ -1265,6 +1330,137 @@ async function send() {
 
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };
 $("stop-btn").onclick = () => { if (busy) busy.controller.abort(); };
+// Explicit user-requested chat image: one request ID persists with the
+// conversation BEFORE reaching the Worker. A lost HTTP reply is resolved by
+// GET session_id, never automatically re-submitted with a new ID.
+let chatImageSubmitting=false;
+function confirmNativeChatImage(cfg) {
+  return new Promise(resolve => {
+    const dialog=$("chat-image-confirm");
+    $("chat-image-confirm-info").textContent=
+      `${cfg.modelName} · ${cfg.request.size} · ${cfg.online ? "在线提供商" : "本地 GPU"}` +
+      (cfg.localDefault ? " · 首次使用默认本地模型" : "");
+    const close=()=>resolve(dialog.returnValue==="yes");
+    dialog.addEventListener("close",close,{once:true});
+    $("chat-image-confirm-yes").onclick=()=>dialog.close("yes");
+    $("chat-image-confirm-no").onclick=()=>dialog.close("no");
+    dialog.showModal();
+  });
+}
+async function sendNativeChatImage() {
+  const prompt=$("input").value.trim();
+  if (!health.chat_image_jobs || !sessionV1 || !sessionId) {
+    toast("warn","无法提交聊天生图","请先连接 Native Gateway 并启用会话存储");return;
+  }
+  if (chatImageSubmitting || busy) return;
+  if (!prompt || prompt.length > 16000 || attachments.length) {
+    toast("warn","生图提示词无效","填写 1–16000 字的纯文本生图描述，不要附加文件");return;
+  }
+  chatImageSubmitting=true;
+  $("chat-draw-btn").disabled=true;
+  try {
+    const cfg=await window.polyNativeChatImageRequest(prompt);
+    const accepted=await confirmNativeChatImage(cfg);
+    if (!accepted) return;
+    const currentId=sessionId, requestId=makeSessionId();
+    const m={role:"assistant",text:"已提交桌面端后台生图任务，等待 Worker 执行。",
+      reasoning:"",time:Date.now(),tools:[{
+        id:requestId,name:"native_image",tool:"generate_image",
+        at:0,rat:0,arguments:{prompt,size:cfg.request.size,model:cfg.modelName},
+        image_request_id:requestId,created_at:Date.now(),
+        state:"running",result:"正在提交任务"}]};
+    messages.push({role:"user",text:prompt,time:Date.now()});
+    messages.push(m);
+    $("input").value="";autosize();saveChat();renderChat();
+    try {
+      const response=await fetch("v1/mikuchin/image-jobs",{
+        method:"POST",headers:headers(true),
+        body:JSON.stringify({action:"chat_submit",session_id:currentId,
+                             request_id:requestId,request:cfg.request})});
+      if (!response.ok) {
+        const data=await response.json().catch(() => ({}));
+        const error=Error(data.error?.message || `HTTP ${response.status}`);
+        error.definitelyRejected=response.status>=400 && response.status<500;
+        throw error;
+      }
+      const job=await response.json();
+      m.tools[0].image_job_id=job.id;
+      m.tools[0].result=job.phase || "已进入执行队列";
+      toast("success","图像任务已入队",cfg.modelName);
+    }catch(error) {
+      // A timeout may happen AFTER the Worker accepted a paid request.
+      // Keep request_id active and poll; never enqueue a second job here.
+      if (error.definitelyRejected) {
+        m.tools[0].state="error";m.tools[0].ok=false;
+        m.tools[0].result="服务器拒绝任务：" + String(error);
+        m.text="没有创建新的生图任务。";
+        toast("error","未创建生图任务",String(error));
+      } else {
+        m.tools[0].result="提交结果待核实：" + String(error);
+        m.text="正在查询后台任务状态；不会自动重复提交。";
+        toast("warn","任务状态待确认","请查看会话中的状态；不要立即再次付费提交");
+      }
+    }
+    if (sessionId === currentId) {saveChat();renderChat();}
+  }catch(error) {
+    toast("error","未开始生图",String(error));
+  }finally{chatImageSubmitting=false;$("chat-draw-btn").disabled=false;}
+}
+$("chat-draw-btn").onclick=()=>void sendNativeChatImage();
+
+async function cancelNativeChatImage(tool) {
+  if (!sessionId || !tool?.image_request_id || tool.state !== "running") return;
+  if (!confirm("仅能取消 Worker 尚未认领的排队任务。已经发送至在线服务的请求无法保证撤回，确认尝试取消？"))
+    return;
+  try {
+    const response=await fetch("v1/mikuchin/image-jobs",{method:"POST",
+      headers:headers(true),body:JSON.stringify({action:"chat_cancel",session_id:sessionId,
+                                                 request_id:tool.image_request_id})});
+    const payload=await response.json();
+    if (!response.ok) throw Error(payload.error?.message || `HTTP ${response.status}`);
+    tool.state="error";tool.ok=false;tool.result="已取消尚未执行的排队任务";
+    saveChat();renderChat();
+  }catch(error){toast("warn","无法取消",String(error));}
+}
+
+async function describeNativeChatImage(message, tool, currentId) {
+  // Local vision only, one bounded follow-up, with all image tools disabled.
+  // Persist the 'requested' marker before this async operation to avoid
+  // repeating it after a reload. A failed vision call never retries generation.
+  if (!health.images || !tool.image_file || !window.MikuchinSecureImages) return;
+  try {
+    const path="v1/images/files/"+tool.image_file;
+    const blob=await window.MikuchinSecureImages.prefetch(path);
+    const image=await createImageBitmap(blob);
+    const scale=Math.min(1,768/Math.max(image.width,image.height));
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(image.width*scale));
+    canvas.height=Math.max(1,Math.round(image.height*scale));
+    canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);
+    image.close?.();
+    const dataUrl=canvas.toDataURL("image/jpeg",0.8);
+    const response=await fetch("v1/chat/completions",{method:"POST",headers:headers(true),
+      body:JSON.stringify({model:health.model,stream:false,reasoning_effort:"none",
+        reasoning_budget_tokens:0,max_tokens:256,
+        mikuchin_stateless:true,strata_image_tool:false,strata_mcp:false,
+        messages:[{role:"user",content:[
+          {type:"text",text:"这张图片是刚生成的，请用不超过 120 字的自然语言描述实际可见的主体、服装、动作、色彩和背景。不要虚构看不见的细节。"},
+          {type:"image_url",image_url:{url:dataUrl}}]}]})});
+    if (!response.ok) throw Error("视觉理解 HTTP "+response.status);
+    const data=await response.json();
+    const caption=String(data.choices?.[0]?.message?.content || "").trim();
+    if (!caption) throw Error("视觉理解没有返回正文");
+    tool.vision_state="done";
+    if (sessionId===currentId) {
+      message.text=caption.slice(0,1200);
+      saveChat();renderChat();
+    }
+  }catch(error) {
+    tool.vision_state="failed";
+    tool.vision_error=String(error).slice(0,140);
+    if(sessionId===currentId){message.text="图片已生成；本次视觉理解未完成。";saveChat();renderChat();}
+  }
+}
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });

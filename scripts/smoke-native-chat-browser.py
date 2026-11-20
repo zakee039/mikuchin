@@ -7,12 +7,15 @@ Prints a JSON port, then runs until the printed stop-file is created.
 from __future__ import annotations
 
 import json
+import io
+import secrets
 import sys
 import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -21,6 +24,7 @@ from backend.gateway.app import GatewayServer
 from backend.gateway.characters import CharacterStore
 from backend.gateway.conversations import ConversationStore
 from backend.gateway.image_jobs import ImageJobStore
+from backend.gateway import image_providers
 
 TEST_KEY = "native-p0-browser-test-key"
 OFFICIAL_KEY = "native-p0-browser-upstream-test-key"
@@ -47,7 +51,7 @@ class FakeChatEngine(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             self.send_json({"status": "ok", "model": "browser-e2e-mock",
-                            "loaded": True, "images": False})
+                            "loaded": True, "images": True})
         elif self.path == "/api/models":
             self.send_json({"models": [{"id": "browser-e2e-mock", "current": True}]})
         elif self.path == "/v1/models":
@@ -100,11 +104,37 @@ def main():
         # Image Studio is available, but the in-chat tool is NOT.
         original_catalog = gateway_app.local_images.catalog
         gateway_app.local_images.catalog = lambda _jobs: ([{"id":"local-mock","available":True}], [])
+        jobs=ImageJobStore(directory / "images",embedded_worker=True)
+        fake_service=image_providers.save_service(jobs,{
+            "name":"Disposable fixture (no paid calls)",
+            "base_url":"http://127.0.0.1:19999/v1",
+            "model":"browser-fake-png",
+            "api_key":"NO_NETWORK_TEST_KEY","sizes":"standard",
+            "reference_mode":"none"})
+        cards=CharacterStore(directory / "character")
+        cards.set_global({"default_role":"ordinary",
+            "chat_image_profile":fake_service["id"],
+            "chat_image_settings":{"lora_id":"none","width":1024,"height":1024,
+                                   "upscale":"off","steps":None}},
+            allowed_image_profiles={fake_service["id"]},
+            image_profile_configs={fake_service["id"]:{"family":"api","max_side":2048,
+                                   "sizes":"standard","upscale_available":False}})
+        fake_calls=[]
+        def fake_image_provider(store, request, *, on_status, diagnostic_id, **kwargs):
+            fake_calls.append(diagnostic_id)
+            on_status("Mock: local PNG only; no network or payment")
+            folder=directory/"images"/"generated-images"
+            folder.mkdir(exist_ok=True)
+            name=secrets.token_hex(16)+".png"
+            image=Image.new("RGB",(64,64),(46,185,172))
+            image.save(folder/name)
+            return {"model":"mock-png","size":request["size"],
+                    "strata":{"image_file":name,"seconds":.01}}
+        jobs._provider=fake_image_provider
         gateway = GatewayServer(("127.0.0.1", 0), api_key=TEST_KEY, upstream_key=OFFICIAL_KEY,
                                 upstream_host="127.0.0.1", upstream_port=official.server_address[1],
                                 conversations=ConversationStore(directory),
-                                characters=CharacterStore(directory / "character"),
-                                image_jobs=ImageJobStore(directory / "images"))
+                                characters=cards,image_jobs=jobs)
         threads = [threading.Thread(target=x.serve_forever,daemon=True)
                    for x in (official,gateway)]
         for thread in threads:
@@ -126,6 +156,8 @@ def main():
             if recorded.exists():
                 lines = recorded.read_text(encoding="utf-8").splitlines()
                 print("forwarded_requests=" + str(len(lines)), flush=True)
+            jobs.queue.join()
+            print("fake_image_provider_calls="+str(len(fake_calls)),flush=True)
 
 
 if __name__ == "__main__":

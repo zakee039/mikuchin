@@ -340,6 +340,13 @@ main { flex: 1; min-height: 0; display: flex; }
 .st-generated-image { margin: .7rem 0 1rem; max-width: 560px; }
 .st-generated-image img { display: block; max-width: 100%; height: auto; border-radius: 12px; }
 .st-generated-image figcaption { margin-top: .3rem; font-size: .8rem; opacity: .7; }
+.chat-image-confirm { width:min(420px,calc(100vw - 32px));border:1px solid var(--st-border, #d9e6e4);
+  border-radius:16px;padding:22px;background:var(--st-surface,#fff);color:var(--st-text,#173b3f);
+  box-shadow:0 14px 50px #0002; }
+.chat-image-confirm::backdrop {background:#091b1b80;}
+.chat-image-confirm h3 {margin:0 0 12px;}
+.chat-image-confirm p {margin:8px 0;overflow-wrap:anywhere;}
+.chat-image-confirm-actions {display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
 
 /* Compact About layout */
 .about { gap: 12px; }

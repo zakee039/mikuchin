@@ -31,6 +31,7 @@ except ImportError:  # standalone python -m unittest discover -s backend/gateway
     import local_images
 
 JOB_ID = re.compile(r"img-[a-f0-9]{24}\Z")
+CHAT_ID = re.compile(r"[a-f0-9]{32}\Z")
 REF_ID = re.compile(r"[a-f0-9]{64}\Z")
 SIZE = re.compile(r"\d{3,4}x\d{3,4}\Z")
 MAX_PENDING = 80
@@ -64,6 +65,15 @@ class ImageJobStore:
                 started_at REAL,finished_at REAL,source_id TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created DESC);
+            -- Stable idempotency keys for explicit user-initiated chat images.
+            -- A browser refresh/timeout must never trigger a second paid job.
+            CREATE TABLE IF NOT EXISTS chat_image_requests(
+                session_id TEXT NOT NULL, request_id TEXT NOT NULL,
+                job_id TEXT NOT NULL UNIQUE, created REAL NOT NULL,
+                PRIMARY KEY(session_id, request_id)
+            );
+            CREATE INDEX IF NOT EXISTS chat_image_session
+              ON chat_image_requests(session_id, created);
             CREATE TABLE IF NOT EXISTS worker_status(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 pid INTEGER NOT NULL, updated REAL NOT NULL
@@ -295,16 +305,85 @@ class ImageJobStore:
                     request.get("size",""),now,now,started_at,source_id))
         return self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
 
-    def listing(self,ident=None,kind=None,limit=100):
+    def listing(self,ident=None,kind=None,limit=100,session_id=None):
         if kind not in (None,"generate"):
             raise ValueError("native image worker supports generate jobs only")
+        if session_id is not None and (not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id)):
+            raise ValueError("invalid chat session ID")
         with self.lock,self._db() as db:
             if ident:
                 self._check_id(ident)
-                row=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
+                if session_id:
+                    row=db.execute("""SELECT jobs.* FROM jobs JOIN chat_image_requests c
+                        ON c.job_id=jobs.id WHERE jobs.id=? AND c.session_id=?""",
+                        (ident,session_id)).fetchone()
+                else:
+                    row=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
                 return self._public(row) if row else {"id":ident,"state":"unknown"}
-            rows=db.execute("SELECT * FROM jobs ORDER BY created DESC LIMIT ?",(min(max(limit,1),100),)).fetchall()
+            if session_id:
+                rows=db.execute("""SELECT jobs.*, c.request_id FROM chat_image_requests c
+                    JOIN jobs ON jobs.id=c.job_id WHERE c.session_id=?
+                    ORDER BY c.created DESC LIMIT ?""",(session_id,min(max(limit,1),100))).fetchall()
+            else:
+                rows=db.execute("SELECT * FROM jobs ORDER BY created DESC LIMIT ?",
+                                (min(max(limit,1),100),)).fetchall()
             return {"jobs":[self._public(row) for row in rows]}
+
+    def chat_submit(self, session_id, request_id, request):
+        """One explicit button press => one paid job at most, including retries.
+
+        The UNIQUE ledger and job record commit in one SQLite transaction. A
+        crash before HTTP reply does not create an orphaned second billable job.
+        Never submits automatically when reopening a conversation.
+        """
+        if not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id):
+            raise ValueError("invalid chat session ID")
+        if not isinstance(request_id,str) or not CHAT_ID.fullmatch(request_id):
+            raise ValueError("invalid chat request ID")
+        with self.lock,self._db() as db:
+            existing=db.execute("""SELECT job_id FROM chat_image_requests
+                WHERE session_id=? AND request_id=?""",(session_id,request_id)).fetchone()
+            if existing:
+                row=db.execute("SELECT * FROM jobs WHERE id=?",(existing["job_id"],)).fetchone()
+                if row is None:
+                    return {"id":existing["job_id"],"state":"unknown","request_id":request_id,
+                            "already_submitted":True}
+                return {**self._public(row),"request_id":request_id,"already_submitted":True}
+            if not self.embedded_worker and not self.worker_healthy():
+                raise ValueError("独立 Image Worker 尚未就绪，无法提交图像任务")
+            if db.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0] >= MAX_PENDING:
+                raise ValueError("image request queue is full")
+            prepared=self._prepare(request)
+            if not (prepared.get("prompt") or "").strip():
+                raise ValueError("image prompt is required")
+            self._require_provider(prepared)
+            created=self._insert(db,prepared,"running",time.time())
+            db.execute("""INSERT INTO chat_image_requests(session_id,request_id,job_id,created)
+                VALUES(?,?,?,?)""",(session_id,request_id,created["id"],time.time()))
+        if self.embedded_worker:
+            self.queue.put((created["id"],prepared))
+            self._start_worker()
+        return {**created,"request_id":request_id,"already_submitted":False}
+
+    def chat_cancel(self, session_id, request_id):
+        if not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id):
+            raise ValueError("invalid chat session ID")
+        if not isinstance(request_id,str) or not CHAT_ID.fullmatch(request_id):
+            raise ValueError("invalid chat request ID")
+        with self.lock,self._db() as db:
+            row=db.execute("""SELECT jobs.* FROM jobs JOIN chat_image_requests c
+                ON c.job_id=jobs.id WHERE c.session_id=? AND c.request_id=?""",
+                (session_id,request_id)).fetchone()
+            if not row: raise ValueError("chat image request not found")
+            # Never cancel in-flight provider work: it may have been billed.
+            updated=db.execute("""UPDATE jobs SET state='failed',phase='用户取消排队任务',
+                error='仅取消尚未执行的生图任务',updated=?,finished_at=?
+                WHERE id=? AND state='running' AND phase='排队等待执行'""",
+                (time.time(),time.time(),row["id"]))
+            if updated.rowcount != 1:
+                raise ValueError("任务已执行或结束，无法撤回本次可能收费的请求")
+            return {**self._public(db.execute("SELECT * FROM jobs WHERE id=?",
+                        (row["id"],)).fetchone()),"request_id":request_id}
 
     def submit(self,req):
         if not isinstance(req,dict): raise ValueError("expected image task object")
@@ -427,8 +506,13 @@ class ImageJobStore:
                         "model":response.get("model"),"size":response.get("size"),
                         "seconds":extra.get("seconds"),"provider":"local" if local else "api"}
                 try:
-                    gallery.register(self,name,source="studio",provider=result["provider"],
-                                     model=response.get("model", ""),prompt=request.get("prompt", ""))
+                    with self._db() as db:
+                        chat=db.execute("""SELECT session_id FROM chat_image_requests
+                            WHERE job_id=?""",(ident,)).fetchone()
+                    gallery.register(self,name,source="chat" if chat else "studio",
+                                     session_id=chat["session_id"] if chat else "",
+                                     provider=result["provider"],model=response.get("model", ""),
+                                     prompt=request.get("prompt", ""))
                 except Exception as exc:
                     # The provider has already returned and the PNG exists.
                     # Never label this as a failed generation and invite a
