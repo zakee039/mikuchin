@@ -57,3 +57,27 @@
   Tauri 命令对应、监听开关、页面轮询保留输入焦点/滚动位置。
 - 未修改上游 PolyStrata Git 子模块、正式主分支、正式 15239。
 - **不制作安装包/Release，不自动创建 Cloudflare 远程配置，也不修改 Windows 防火墙。**
+
+## 2026-11-20 后续修复：局域网地址预览、模型空闲卸载状态
+
+- 旧版界面会在开启局域网开关后立刻列出各个网卡的 IPv4 地址。Native 的
+  `native_network::addresses()` 实际已能枚举无线网卡、Tailscale 等地址，
+  之前 API 前端却加了 `lan_effective` 条件，导致「监听变更已保存，安全重启服务后生效」
+  时整个地址列表消失。现在只要用户勾选 `lan_access`，列表就按原版的
+  `lan-address-list / lan-address-entry` 样式呈现，并按照 Wi-Fi、以太网、
+  Tailscale 或其它网络标记。**未生效时仅显示不可点击地址和提示；
+  实际生效后才显示可点击链接**。未检测到网卡时显示明确提示。
+- 新 Gateway 的 `/health` 在原有 Bearer 鉴权后透传官方 PolyStrata
+  `/health` 的 `loaded` 布尔值到 `official_model_loaded`，缺失时为 null，
+  不臆测。Tauri `get_status` 据此在 **Gateway 在线、模型 loaded=false、
+  且不处于 GPU 图像独占时** 返回 `phase=unloaded`；
+  顶部徽标与正式版一致显示「空闲卸载」。正常 loaded=true 返回「运行正常」，
+  未提供该字段时不误判。图像生图过程临时卸载 LLM 不显示「空闲卸载」。
+  同时从官方 `/metrics.live.state` 显示正式版的「Prefill」「生成中」，
+  避免执行请求时因瞬间 loaded=false 被误标为闲置卸载。
+- 加入 Gateway 真实 Mock 测试，验证 loaded=false、true、null 的完整转发；
+  Tauri Rust 单元测试覆盖 idle / loaded / unknown / GPU-handoff / stop；
+  启动器契约测试覆盖完整网卡列表和只读 pending 地址。
+- 本机 `preferences.json` 已经存储 `lan_access=true`，但在旧界面截图时
+  Supervisor 的 `lan_access=false`，说明当前会话的监听参数**尚未应用**。
+  本次更新的预览重启会加载用户已保存的监听设置，但仍不创建防火墙规则。

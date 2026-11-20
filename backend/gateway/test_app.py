@@ -38,6 +38,7 @@ class FakeOfficial(BaseHTTPRequestHandler):
     hold_second_event = False
     release_second_event = threading.Event()
     second_event_sent = threading.Event()
+    loaded_state = None
     def log_message(self, *_args):
         pass
 
@@ -53,7 +54,10 @@ class FakeOfficial(BaseHTTPRequestHandler):
             self.send_bytes(401, b'{"error":"wrong upstream key"}')
             return
         if self.path == "/health":
-            self.send_bytes(200, b'{"status":"ok"}')
+            value = {"status": "ok"}
+            if self.loaded_state is not None:
+                value["loaded"] = self.loaded_state
+            self.send_bytes(200, json.dumps(value).encode())
         elif self.path == "/v1/models":
             self.send_bytes(200, b'{"data":[{"id":"official-model"}]}')
         elif self.path == "/api/models":
@@ -140,6 +144,7 @@ class GatewayContract(unittest.TestCase):
         health = json.loads(data)
         self.assertTrue(health["official_polystrata_reachable"])
         self.assertEqual(health["model"], "official-polystrata")
+        self.assertIsNone(health["official_model_loaded"])
         self.assertFalse(health["image_generation"])
         self.assertEqual(health["native_gpu"], {"busy": False, "phase": "idle"})
         self.assertEqual(health["native_image_jobs"]["running"], 0)
@@ -150,6 +155,16 @@ class GatewayContract(unittest.TestCase):
         status, data = self.request("GET", "/api/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["models"][0]["id"], "official-model")
+
+    def test_health_forwards_exact_model_loaded_state_without_guessing(self):
+        try:
+            for value in (False, True, None):
+                FakeOfficial.loaded_state = value
+                status, body = self.request("GET", "/health")
+                self.assertEqual(status, 200)
+                self.assertIs(json.loads(body)["official_model_loaded"], value)
+        finally:
+            FakeOfficial.loaded_state = None
 
     def test_native_gpu_handoff_is_visible_and_prevents_new_inference(self):
         from backend.gateway.gpu_gate import gpu_turn, publish_state

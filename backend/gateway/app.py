@@ -223,6 +223,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "status": "ok" if reachable else "degraded",
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
                 "model": str(upstream_health.get("model") or "official-polystrata")[:180],
+                # None is intentional when the upstream lacks a loaded flag:
+                # never misreport an unknown model as idle-unloaded.
+                "official_model_loaded": (upstream_health.get("loaded")
+                                         if isinstance(upstream_health.get("loaded"), bool)
+                                         else None),
                 "max_context": upstream_health.get("max_context") or 0,
                 "images": bool(upstream_health.get("images")),
                 "image_generation": any(x.get("available") for x in image_catalog),

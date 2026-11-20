@@ -347,6 +347,7 @@ struct NativeStatus {
     gateway_port: u16,
     official_port: u16,
     gateway_ready: bool,
+    model_loaded: Option<bool>,
     api_key_present: bool,
     model: String,
     config_name: String,
@@ -389,6 +390,25 @@ fn trusted_supervisor_status(raw: &Value, parent_pid: Option<u32>,
     managed && ports_match && (pid_matches || authenticated_health)
 }
 
+fn runtime_phase(stopping: bool, managed: bool, gateway_ready: bool,
+                 model_loaded: Option<bool>, live_state: Option<&str>, gpu_busy: bool,
+                 desired: bool, has_error: bool) -> &'static str {
+    if stopping { "stopping" }
+    else if managed && gateway_ready && live_state == Some("reading") { "reading" }
+    else if managed && gateway_ready && live_state == Some("generating") { "generating" }
+    else if managed && gateway_ready && model_loaded == Some(false) && !gpu_busy {
+        // Gateway continues serving API requests; only the LLM weights left
+        // VRAM. An active image job may also unload LLM temporarily and must
+        // not be labeled as an idle timeout.
+        "unloaded"
+    } else if managed && gateway_ready { "running" }
+    else if managed { "starting" }
+    else if desired && has_error { "error" }
+    else if desired { "starting" }
+    else if has_error { "error" }
+    else { "stopped" }
+}
+
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let (managed, desired, stopping, error, restarts, pid, prefs, cf_running, cf_error) = {
@@ -403,6 +423,8 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let raw = spec.as_ref().ok().and_then(supervisor_status);
     let health_value = if managed { spec.as_ref().ok().and_then(health) } else {None};
     let gateway_ready = health_value.is_some();
+    let model_loaded = health_value.as_ref()
+        .and_then(|h| h["official_model_loaded"].as_bool());
     let metrics = if gateway_ready { spec.as_ref().ok().and_then(gateway_metrics) } else { None };
     let host_gpu = gpu_snapshot();
     let model = health_value.as_ref().and_then(|h| h["model"].as_str())
@@ -430,17 +452,15 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let upscaler_ready = health_value.as_ref().and_then(|v| v["native_upscaler_ready"].as_bool())
         .unwrap_or(false);
     let error = if error.is_empty() { spec.as_ref().err().cloned().unwrap_or_default() } else { error };
-    let phase = if stopping { "stopping" }
-        else if managed && gateway_ready { "running" }
-        else if managed { "starting" }
-        else if desired && !error.is_empty() { "error" }
-        else if desired { "starting" }
-        else if !error.is_empty() { "error" }
-        else { "stopped" };
+    let live_state = metrics.as_ref().and_then(|v| v["live"]["state"].as_str());
+    let phase = runtime_phase(stopping, managed, gateway_ready,
+                              model_loaded, live_state, gpu_busy, desired, !error.is_empty());
+    let lan_effective = gateway_ready && supervisor_phase != "unknown" && raw.as_ref()
+        .and_then(|r| r["lan_access"].as_bool()).unwrap_or(false);
     Ok(NativeStatus {
         phase: phase.into(), desired, managed, stopping, error, restarts,
         gateway_port: GATEWAY_PORT, official_port: OFFICIAL_PORT,
-        gateway_ready, api_key_present: security::read("api-key")?.is_some(),
+        gateway_ready, model_loaded, api_key_present: security::read("api-key")?.is_some(),
         model, config_name: spec.as_ref().ok().and_then(|s| s.config.as_ref())
             .and_then(|p| p.file_name()).map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "未配置".into()),
@@ -449,8 +469,7 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),
         data_dir: spec.map(|s| s.data_dir.to_string_lossy().to_string()).unwrap_or_default(),
-        lan_effective: gateway_ready && raw.as_ref()
-            .and_then(|r| r["lan_access"].as_bool()).unwrap_or(false),
+        lan_effective,
         cf_token_present: security::read("native-cf-tunnel-token")?.is_some(),
         cf_binary_ready: native_network::binary_path().is_ok_and(|p| p.is_file()),
         lan_addresses: if prefs.lan_access { native_network::addresses() } else { Vec::new() },
@@ -834,6 +853,26 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phase_reflects_idle_unload_not_gateway_shutdown_or_image_handoff() {
+        assert_eq!(runtime_phase(false, true, true, Some(false), Some("unloaded"), false, true, false),
+                   "unloaded");
+        assert_eq!(runtime_phase(false, true, true, Some(true), Some("idle"), false, true, false),
+                   "running");
+        assert_eq!(runtime_phase(false, true, true, None, None, false, true, false),
+                   "running");
+        assert_eq!(runtime_phase(false, true, true, Some(false), Some("unloaded"), true, true, false),
+                   "running");
+        assert_eq!(runtime_phase(false, true, true, Some(false), Some("reading"), false, true, false),
+                   "reading");
+        assert_eq!(runtime_phase(false, true, true, Some(true), Some("generating"), false, true, false),
+                   "generating");
+        assert_eq!(runtime_phase(true, true, true, Some(false), Some("unloaded"), false, false, false),
+                   "stopping");
+        assert_eq!(runtime_phase(false, false, false, Some(false), Some("unloaded"), false, false, false),
+                   "stopped");
+    }
 
     #[test]
     fn uv_python_redirector_status_requires_live_authenticated_gateway() {

@@ -77,3 +77,23 @@ test("Native LAN, Tunnel and startup actions map to real commands", () => {
   assert.match(rust, /fn gateway_metrics\(/);
   assert.match(rust, /fn save_native_preferences\(/);
 });
+
+test("LAN shows each IPv4 adapter before restart without claiming unreachable links work", () => {
+  assert.match(source, /const lanEntries = settings\?\.lan_access/);
+  assert.match(source, /lan-address-list/);
+  assert.match(source, /lan-address-name/);
+  assert.match(source, /lan-chat-inactive/);
+  assert.match(source, /lanReady\s*\?/);
+  assert.match(source, /监听尚未生效/);
+  assert.match(source, /Tailscale/);
+  assert.match(source, /Wi-Fi/);
+  assert.match(source, /其他网络/);
+});
+
+test("header distinguishes official model idle unload from online Gateway", () => {
+  assert.match(source, /unloaded:\s*\["空闲卸载",\s*"warn"\]/);
+  assert.match(source, /model_loaded: boolean \| null/);
+  assert.match(rust, /official_model_loaded/);
+  assert.match(rust, /fn runtime_phase\(/);
+  assert.match(rust, /model_loaded == Some\(false\)/);
+});

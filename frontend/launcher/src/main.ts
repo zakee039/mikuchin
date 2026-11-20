@@ -18,7 +18,7 @@ type LanAddress = {address: string; interface: string; description: string};
 type Status = {
   phase: string; desired: boolean; managed: boolean; stopping: boolean;
   error: string; restarts: number; gateway_port: number; official_port: number;
-  gateway_ready: boolean; api_key_present: boolean; model: string; config_name: string;
+  gateway_ready: boolean; model_loaded: boolean | null; api_key_present: boolean; model: string; config_name: string;
   metrics: Metrics | null; host_gpu: Record<string, number> | null;
   supervisor_pid: number | null; children: Record<string, number>;
   supervisor_phase: string; child_restarts: Record<string, number>;
@@ -38,6 +38,8 @@ const names: Record<Tab, string> = {
 const phases: Record<string, [string, string]> = {
   stopped: ["已停止", "dim"], starting: ["启动中", "warn"],
   running: ["运行正常", "good"], stopping: ["安全停止中", "warn"],
+  unloaded: ["空闲卸载", "warn"],
+  reading: ["Prefill", "good"], generating: ["生成中", "good"],
   degraded: ["服务异常", "bad"], error: ["启动失败", "bad"],
 };
 const handoff: Record<string, string> = {
@@ -138,9 +140,26 @@ function apiPage(): string {
   const cfOn = Boolean(settings?.cf_enabled);
   const cfActive = cfOn && s?.cf_running && (s.cf_connections || 0) > 0;
   const cfState = !cfOn ? "未启用" : cfActive ? "已连接" : s?.cf_running ? "连接中" : "未连接";
-  const lanEntries = s?.lan_effective ? (s?.lan_addresses || []).map(item =>
-    `<div class="lan-address-entry"><span class="lan-address-name"><strong>${esc(item.interface)}</strong></span>
-      <a class="lan-chat-link" href="http://${esc(item.address)}:${s?.gateway_port || 15249}/" target="_blank" rel="noopener noreferrer">http://${esc(item.address)}:${s?.gateway_port || 15249}</a></div>`).join("") : "";
+  const lanReady = Boolean(s?.gateway_ready && s?.lan_effective);
+  const lanEntries = settings?.lan_access ? `<div class="lan-address-list" aria-label="局域网访问地址">
+      ${!lanReady ? '<span class="lan-address-note">以下为本机网卡地址，监听尚未生效</span>' : ""}
+      ${(s?.lan_addresses || []).map(item => {
+        const adapter = (item.interface + " " + item.description).toLowerCase();
+        const kind = /tailscale/.test(adapter) ? "Tailscale" :
+          /wi-fi|wireless|wlan|802\.11/.test(adapter) ? "Wi-Fi" :
+          /ethernet|以太网/.test(adapter) ? "以太网" : "其他网络";
+        const url = `http://${item.address}:${s?.gateway_port || 15249}/`;
+        return `<div class="lan-address-entry">
+          <span class="lan-address-name" title="${esc(item.interface + " · " + item.description)}">
+            <strong>${esc(kind)}</strong><small>${esc(item.interface)}</small>
+          </span>
+          ${lanReady
+            ? `<a class="lan-chat-link" href="${esc(url)}" title="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`
+            : `<span class="lan-chat-inactive" title="监听尚未生效">${esc(url)}</span>`}
+        </div>`;
+      }).join("")}
+      ${!(s?.lan_addresses || []).length ? '<span class="lan-chat-pending">未检测到可用的 IPv4 网卡地址</span>' : ""}
+    </div>` : "";
   return `<section class="api-compact">
     <div class="setting-card api-panel">
       <div class="api-line"><strong>端口</strong><input class="field port-field native-readonly" readonly value="${s?.gateway_port || 15249}"><span class="native-inline-note">Native Gateway</span></div>
