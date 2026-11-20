@@ -8,7 +8,7 @@ use std::{
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -189,6 +189,33 @@ fn health(spec: &LaunchSpec) -> Option<Value> {
     if status == 200 {serde_json::from_slice(&body).ok()} else {None}
 }
 
+fn gateway_metrics(spec: &LaunchSpec) -> Option<Value> {
+    let (status, body) = local_http(spec.gateway_port, "/metrics", Some(&spec.key)).ok()?;
+    if status == 200 { serde_json::from_slice(&body).ok() } else { None }
+}
+
+fn gpu_snapshot() -> Option<Value> {
+    // Cache NVidia queries: the panel polls frequently, but system utilities
+    // should not be spawned for every individual status request.
+    static CACHE: OnceLock<Mutex<Option<(Instant, Value)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().ok()?;
+    if let Some((time, data)) = guard.as_ref() {
+        if time.elapsed() < Duration::from_secs(5) { return Some(data.clone()); }
+    }
+    let output = Command::new("nvidia-smi.exe")
+        .args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"])
+        .creation_flags(CREATE_NO_WINDOW).output().ok()?;
+    if !output.status.success() { return None; }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let mut cells = line.lines().next()?.split(',').map(str::trim);
+    let used = cells.next()?.parse::<u64>().ok()?;
+    let total = cells.next()?.parse::<u64>().ok()?;
+    let data = json!({"gpu_mem_used":used * 1_048_576_u64, "gpu_mem_total":total * 1_048_576_u64});
+    *guard = Some((Instant::now(), data.clone()));
+    Some(data)
+}
+
 fn supervisor_status(spec: &LaunchSpec) -> Option<Value> {
     let path = spec.data_dir.join("supervisor-status.json");
     let bytes = fs::read(path).ok()?;
@@ -296,6 +323,9 @@ struct NativeStatus {
     gateway_ready: bool,
     api_key_present: bool,
     model: String,
+    config_name: String,
+    metrics: Option<Value>,
+    host_gpu: Option<Value>,
     supervisor_pid: Option<u32>,
     children: Value,
     supervisor_phase: String,
@@ -310,6 +340,21 @@ struct NativeStatus {
     log_path: String,
     data_dir: String,
 }
+
+// uv's Windows venv python.exe can be a redirector: the launcher owns the
+// wrapper PID, while Python's os.getpid() in supervisor-status.json reports
+// the wrapper's child PID. After the Gateway authenticates using this
+// launcher's private key, its reserved ports and running managed child are
+// sufficient to trust the matching supervisor status. Do not trust stale
+// status files when health has not authenticated.
+fn trusted_supervisor_status(raw: &Value, parent_pid: Option<u32>,
+                             managed: bool, authenticated_health: bool) -> bool {
+    let pid_matches = raw["supervisor_pid"].as_u64() == parent_pid.map(u64::from);
+    let ports_match = raw["gateway_port"].as_u64() == Some(u64::from(GATEWAY_PORT))
+        && raw["official_port"].as_u64() == Some(u64::from(OFFICIAL_PORT));
+    managed && ports_match && (pid_matches || authenticated_health)
+}
+
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let (managed, desired, stopping, error, restarts, pid) = {
@@ -322,10 +367,12 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let raw = spec.as_ref().ok().and_then(supervisor_status);
     let health_value = if managed { spec.as_ref().ok().and_then(health) } else {None};
     let gateway_ready = health_value.is_some();
+    let metrics = if gateway_ready { spec.as_ref().ok().and_then(gateway_metrics) } else { None };
+    let host_gpu = gpu_snapshot();
     let model = health_value.as_ref().and_then(|h| h["model"].as_str())
         .unwrap_or("—").to_string();
-    let supervisor_phase = if raw.as_ref().and_then(|v| v["supervisor_pid"].as_u64())
-        == pid.map(u64::from) {
+    let supervisor_phase = if raw.as_ref().is_some_and(|v|
+        trusted_supervisor_status(v, pid, managed, gateway_ready)) {
         raw.as_ref().and_then(|v| v["phase"].as_str()).unwrap_or("unknown")
     } else { "unknown" }.to_string();
     let children = if supervisor_phase == "unknown" { json!({}) }
@@ -358,7 +405,10 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         phase: phase.into(), desired, managed, stopping, error, restarts,
         gateway_port: GATEWAY_PORT, official_port: OFFICIAL_PORT,
         gateway_ready, api_key_present: security::read("api-key")?.is_some(),
-        model, supervisor_pid: pid, children, supervisor_phase,
+        model, config_name: spec.as_ref().ok().and_then(|s| s.config.as_ref())
+            .and_then(|p| p.file_name()).map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "未配置".into()),
+        metrics, host_gpu, supervisor_pid: pid, children, supervisor_phase,
         child_restarts, last_recovery, gpu_busy, gpu_phase,
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),
@@ -632,6 +682,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uv_python_redirector_status_requires_live_authenticated_gateway() {
+        let actual_supervisor = json!({
+            "supervisor_pid": 3333,
+            "gateway_port": GATEWAY_PORT,
+            "official_port": OFFICIAL_PORT,
+            "phase": "running"
+        });
+        assert!(trusted_supervisor_status(&actual_supervisor, Some(3333), true, false));
+        assert!(trusted_supervisor_status(&actual_supervisor, Some(2222), true, true));
+        assert!(!trusted_supervisor_status(&actual_supervisor, Some(2222), true, false));
+        assert!(!trusted_supervisor_status(&actual_supervisor, Some(2222), false, true));
+        let unrelated = json!({"supervisor_pid": 3333,
+            "gateway_port": 15239, "official_port": OFFICIAL_PORT});
+        assert!(!trusted_supervisor_status(&unrelated, Some(3333), true, true));
+    }
 
     #[test]
     fn reserved_stable_port_never_allowed() {

@@ -1,0 +1,65 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+
+const source = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const mainStyle = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
+const nativeStyle = readFileSync(new URL("../src/native.css", import.meta.url), "utf8");
+const rust = readFileSync(new URL("../src-tauri/src/native.rs", import.meta.url), "utf8");
+const windows = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const tauri = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+
+test("Native preview matches main launcher's compact window, brand and navigation", () => {
+  const view = tauri.app.windows[0];
+  assert.equal(view.width, 440);
+  assert.equal(view.height, 650);
+  assert.equal(view.minWidth, 420);
+  assert.equal(view.minHeight, 650);
+  assert.match(mainStyle, /\.head\{height:76px/);
+  assert.match(mainStyle, /\.tabs\{/);
+  assert.match(mainStyle, /\.model-card\{/);
+  for (const tab of ['overview: "总览"', 'api: "API"', 'settings: "设置"', 'native: "原生状态"']) {
+    assert.ok(source.includes(tab), tab);
+  }
+  assert.doesNotMatch(source, /workflows:|workflowPage\(/);
+});
+
+test("150% DPI uses WebView's native scaling, never shrinking the whole document", () => {
+  assert.doesNotMatch(source, /document\.documentElement\.style\.zoom/);
+  assert.doesNotMatch(source, /fitWindowsScale/);
+  assert.doesNotMatch(nativeStyle, /zoom\s*:/);
+  assert.equal(tauri.app.windows[0].width, 440);
+  assert.equal(tauri.app.windows[0].height, 650);
+});
+
+test("status polling never remounts the root or erases tab and scroll state", () => {
+  assert.match(source, /const savedScroll = el\.scrollTop/);
+  assert.match(source, /if \(el\.innerHTML !== page\) el\.innerHTML = page/);
+  assert.match(source, /el\.scrollTop = savedScroll/);
+  assert.match(source, /if \(polling\) return/);
+  assert.match(source, /if \(tab !== element\.dataset\.tab\)/);
+  const poll = source.split("async function poll()")[1].split("mount();")[0];
+  assert.doesNotMatch(poll, /root\.innerHTML/);
+  assert.match(poll, /renderBody\(\)/);
+});
+
+test("standalone debug app is GUI subsystem with no console; child logs remain accessible", () => {
+  assert.match(windows, /cfg_attr\(target_os = "windows", windows_subsystem = "windows"\)/);
+  assert.match(rust, /CREATE_NO_WINDOW \| CREATE_NEW_PROCESS_GROUP/);
+  assert.match(source, /get_log/);
+  assert.match(source, /data-action="show-log"/);
+});
+
+test("Native services are real, no pretend LAN or CF controls", () => {
+  assert.match(source, /gateway_port/);
+  assert.match(source, /host_gpu/);
+  assert.match(source, /conversation_cache/);
+  assert.match(source, /image_jobs_running/);
+  assert.match(source, /upscaler_ready/);
+  assert.match(source, /data-action="copy-key"/);
+  assert.match(source, /data-action="open-chat"/);
+  assert.match(source, /<input type="checkbox" disabled>/);
+  assert.match(nativeStyle, /overscroll-behavior:contain/);
+  assert.match(rust, /fn gpu_snapshot\(/);
+  assert.match(rust, /fn gateway_metrics\(/);
+});
