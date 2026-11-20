@@ -17,6 +17,15 @@ answer_budget_tokens 是 Mikuchin main 的**仅正文 Token 上限**，与官方
 - Gateway 接受 strata_image_tool=false 并从上游请求中剔除。图像工作室的 LLM Prompt 解析不再因此返回 501；true 和 answer_budget_tokens 的未实现请求依旧严格返回 501，防止静默降级。
 - Gateway 继续 Bearer 与 Origin 鉴权；独立 Image Worker 和 Image Studio 不受影响。
 
+### 后续增量：官方 MCP 原生复用（不另造 Agent）
+
+- 官方 PolyStrata 已提供受授权的 GET /mcp，列出其配置的 MCP 服务器、工具及就绪状态；Native Gateway 将其纳入**只读 GET allowlist**，仅对持有独立 Native Gateway API Key、且通过 Origin 安全检查的客户端透传。未经授权为 401，非信任来源为 403。
+- 授权 GET /health 的 chat_mcp 现在反映官方上游可用（bool），但**工具是否真的可调用**由浏览器向 /mcp 获取的 tools 数量决定；没有服务或 tools=0 则不发起 strata_mcp 请求。用户在采样设置关闭 MCP 时亦绝不会自动附加。
+- 真正的 MCP 工具执行仍由 **官方 PolyStrata 原生 run_with_mcp** 实现，Native Gateway 只转发符合授权的 strata_mcp:true 请求和原样 SSE 事件，不能在 Gateway HTTP 线程执行外部工具。原版 app.js 的 onTool 仍可接收官方返回的 strata_mcp call/result/limit。
+- 开启 MCP 工具可访问计算机与外部资源，必须按用户自己的官方 Engine run-config 配置受信工具；Native 不复制 main 的旧 MCP 服务器凭据，也不自动配置第三方工具。未设置任何 MCP 工具时仅显示空列表，**不能宣称工具调用已经实测执行成功**。
+- FakeOfficial 用模拟已配置的 test-mcp 工具验证 GET /mcp 401/403/200、strata_mcp:true 透传及 SSE 的 call/result/正文事件；实际 Native 官方引擎还须检查其返回的 tools 数量。
+- **本机真正的 Native 官方 Gemma 4 运行实例已验证：**安全重启 Native 启动器及三进程后，授权 GET /mcp 返回 HTTP 200 且当前 `servers=0,tools=0`；未授权请求返回 401，非法 Origin 返回 403。GET /health 的 `chat_mcp=true`（代表协议已支持），但由于当前未配置 MCP 服务器，网页默认不会将 `strata_mcp` 置 true。**本轮不添加、下载或启动任何外部 MCP 服务器，也不声称实际工具执行成功。**
+
 ## 验证
 
 - Python Gateway 的 FakeOfficial 真实 HTTP 测试验证 SSE、角色/工作流、HTTP 501、图像模型可用但聊天工具不可用、图像工作室 false 参数可转发。
@@ -34,6 +43,6 @@ answer_budget_tokens 是 Mikuchin main 的**仅正文 Token 上限**，与官方
 ## 未完成、不得误报
 
 1. 仅正文 Token 上限没有真正等价的官方内核控制，不能标称完整 P0。
-2. 聊天内生图、生成后视觉回喂与 MCP 工具编排，不能用独立 Image Studio 代替。
+2. 聊天内生图与生成后视觉回喂仍未实现；MCP 已复用官方接口，但实际第三方工具连接与执行取决于 Native 自己的官方 run-config，不能用 Mock 证明真实执行。
 3. 主版本的完整模型管理/监控和全局语言接口在后续 P1。
 4. 旧版手动 KV 快照管理是 Native 明确的设计取舍，不原样回迁。

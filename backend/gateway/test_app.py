@@ -65,6 +65,8 @@ class FakeOfficial(BaseHTTPRequestHandler):
             self.send_bytes(200, b'{"data":[{"id":"official-model"}]}')
         elif self.path == "/api/models":
             self.send_bytes(200, b'{"models":[{"id":"official-model","current":true}]}')
+        elif self.path == "/mcp":
+            self.send_bytes(200, b'{"servers":[{"name":"test-mcp","status":"ready","transport":"stdio","tools":[{"tool":"echo"}]}],"tools":1}')
         else:
             self.send_bytes(404, b'{"error":"not found"}')
 
@@ -82,6 +84,23 @@ class FakeOfficial(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
+            if payload.get("strata_mcp") is True:
+                events = (
+                    {"choices":[{"delta":{},"finish_reason":None}],
+                     "strata_mcp":{"event":"call","id":"tool-test-1",
+                                   "name":"mcp__test__echo","server":"test-mcp",
+                                   "tool":"echo","arguments":{"text":"ping"},"round":1}},
+                    {"choices":[{"delta":{},"finish_reason":None}],
+                     "strata_mcp":{"event":"result","id":"tool-test-1",
+                                   "ok":True,"text":"pong","chars":4,
+                                   "truncated":False,"ms":1}},
+                    {"choices":[{"delta":{"content":"MCP_OK"},"finish_reason":"stop"}]},
+                )
+                for event in events:
+                    self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+                    self.wfile.flush()
+                self.wfile.write(b"data: [DONE]\n\n")
+                return
             self.wfile.write(b'data: {"delta":"first"}\n\n')
             self.wfile.flush()
             if FakeOfficial.hold_second_event:
@@ -150,7 +169,7 @@ class GatewayContract(unittest.TestCase):
         self.assertIsNone(health["official_model_loaded"])
         self.assertIs(health["chat_image_tool"], False)
         self.assertIs(health["answer_budget_tokens"], False)
-        self.assertIs(health["chat_mcp"], False)
+        self.assertIs(health["chat_mcp"], True)
         self.assertFalse(health["image_generation"])
         self.assertEqual(health["native_gpu"], {"busy": False, "phase": "idle"})
         self.assertEqual(health["native_image_jobs"]["running"], 0)
@@ -257,6 +276,44 @@ class GatewayContract(unittest.TestCase):
         self.assertNotIn("mikuchin_stateless", forwarded)
         self.assertEqual(forwarded["messages"], request["messages"])
         self.assertEqual(forwarded["max_tokens"], 80)
+
+    def test_native_mcp_metadata_is_authenticated_and_opt_in_reaches_official(self):
+        self.assertEqual(self.request("GET", "/mcp", key=None)[0], 401)
+        self.assertEqual(self.request("GET", "/mcp", origin="https://evil.invalid")[0], 403)
+        status, data = self.request("GET", "/mcp")
+        self.assertEqual(status, 200)
+        tools = json.loads(data)
+        self.assertEqual(tools["tools"], 1)
+        self.assertEqual(tools["servers"][0]["tools"][0]["tool"], "echo")
+        request = {"messages":[{"role":"user","content":"Use authorized MCP"}],
+                   "stream":False,"strata_mcp":True}
+        status, data = self.request("POST","/v1/chat/completions",payload=request)
+        self.assertEqual(status,200)
+        forwarded = FakeOfficial.seen[-1]
+        self.assertEqual(forwarded[1]["strata_mcp"], True)
+        self.assertEqual(forwarded[2], "Bearer official-test-secret")
+
+    def test_native_stream_preserves_official_mcp_tool_call_and_result_events(self):
+        conn = http.client.HTTPConnection("127.0.0.1",self.gateway.server_address[1],timeout=5)
+        try:
+            payload=json.dumps({"stream":True,"strata_mcp":True,
+                                "messages":[{"role":"user","content":"Test tool"}]}).encode()
+            conn.request("POST","/v1/chat/completions",body=payload,
+                         headers={"Authorization":"Bearer client-test-secret",
+                                  "Content-Type":"application/json"})
+            response=conn.getresponse()
+            self.assertEqual(response.status,200)
+            self.assertEqual(response.getheader("Content-Type"),"text/event-stream")
+            data=response.read()
+            entries=[json.loads(line[6:]) for line in data.splitlines()
+                     if line.startswith(b"data: ") and line != b"data: [DONE]"]
+            self.assertIn(b"data: [DONE]",data)
+            self.assertEqual(entries[0]["strata_mcp"]["event"],"call")
+            self.assertEqual(entries[1]["strata_mcp"]["event"],"result")
+            self.assertEqual(entries[1]["strata_mcp"]["text"],"pong")
+            self.assertEqual(entries[2]["choices"][0]["delta"]["content"],"MCP_OK")
+        finally:
+            conn.close()
 
     def test_legacy_session_metadata_stripped_but_complete_history_forwarded(self):
         ident="a" * 32

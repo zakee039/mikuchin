@@ -54,6 +54,17 @@ test("Stateless and MCP-disabled requests never enable unrequested tools", () =>
   assert.equal(body.strata_image_tool,undefined);
 });
 
+test("Native official MCP tools activate only when advertised and opted in", () => {
+  const health = {image_generation:true,chat_image_tool:false,chat_mcp:true};
+  const enabled = compat.apply({},health,{max:"",mcp:true},{stateless:false,mcpTools:2});
+  assert.equal(enabled.strata_mcp,true);
+  assert.equal(enabled.strata_image_tool,undefined);
+  const empty = compat.apply({},health,{max:"",mcp:true},{stateless:false,mcpTools:0});
+  assert.equal(empty.strata_mcp,undefined);
+  const optedOut = compat.apply({},health,{max:"",mcp:false},{stateless:false,mcpTools:2});
+  assert.equal(optedOut.strata_mcp,undefined);
+});
+
 test("Capability shim is loaded before main app and Image Studio keeps explicit tool opt-out", () => {
   assert.ok(html.indexOf('web/chat-capabilities.js') < html.indexOf('web/app.js'));
   assert.match(app,/MikuchinChatCapabilities\.apply\(body, health, settings/);

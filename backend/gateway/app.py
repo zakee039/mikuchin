@@ -49,7 +49,7 @@ INFERENCE_POSTS = frozenset((
     "/v1/chat/completions", "/v1/messages", "/v1/responses",
     "/v1/images/generations",
 ))
-INFERENCE_GETS = frozenset(("/v1/models", "/models", "/api/models", "/metrics"))
+INFERENCE_GETS = frozenset(("/v1/models", "/models", "/api/models", "/metrics", "/mcp"))
 UNPORTED_FIELDS = frozenset((
     "strata_image_tool", "answer_budget_tokens",
 ))
@@ -241,7 +241,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # applies to visible answer tokens alone; substituting
                 # max_tokens would silently violate that contract.
                 "answer_budget_tokens": False,
-                "chat_mcp": False,
+                # Pinned official PolyStrata can execute opt-in strata_mcp
+                # tools. GET /mcp remains behind Gateway authentication.
+                "chat_mcp": reachable,
                 "image_worker_ready": bool(self.server.image_jobs and
                                            self.server.image_jobs.worker_healthy()),
                 "native_gpu": (read_state(self.server.image_jobs.root.parent)
