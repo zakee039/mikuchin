@@ -97,3 +97,17 @@ test("header distinguishes official model idle unload from online Gateway", () =
   assert.match(rust, /fn runtime_phase\(/);
   assert.match(rust, /model_loaded == Some\(false\)/);
 });
+
+test("overview manually unloads and loads models without calling service stop labels", () => {
+  assert.match(source, /s\?\.managed \? "卸载模型" : "加载模型"/);
+  assert.match(source, /manual_unloaded:\s*\["手动卸载",\s*"warn"\]/);
+  assert.match(source, /unloaded:\s*\["空闲卸载",\s*"warn"\]/);
+  assert.match(source, /status\?\.managed \? "stop_service" : "start_service"/);
+  assert.match(source, /手动卸载会安全暂停 Native 服务栈/);
+  assert.doesNotMatch(source, /安全停止服务/);
+  assert.match(rust, /stop_managed\(&state, true\)/);
+  assert.match(rust, /stop_managed\(&state, false\)/);
+  assert.match(rust, /prefs\.manual_unloaded = true/);
+  assert.match(rust, /prefs\.manual_unloaded = false/);
+  assert.match(rust, /should_auto_start\(/);
+});

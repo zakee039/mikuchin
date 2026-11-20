@@ -288,8 +288,14 @@ fn start_managed(state: &AppState) -> Result<(), String> {
     }
 }
 
-fn stop_managed(state: &AppState) -> Result<(), String> {
+fn stop_managed(state: &AppState, manual_unload: bool) -> Result<(), String> {
     let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
+    if manual_unload && !guard.prefs.manual_unloaded {
+        let mut prefs = guard.prefs.clone();
+        prefs.manual_unloaded = true;
+        native_prefs::save(&prefs)?;
+        guard.prefs = prefs;
+    }
     guard.desired = false; // Manual STOP never triggers watchdog restart.
     native_network::stop(&mut guard.tunnel_child);
     if !alive(&mut guard) {
@@ -324,6 +330,15 @@ fn refresh_child(inner: &mut Inner) {
 fn start_service(state: State<'_, AppState>) -> Result<(), String> {
     {
         let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        if inner.stopping {
+            return Err("模型正在安全卸载，请完成后再重新加载".into());
+        }
+        if inner.prefs.manual_unloaded {
+            let mut prefs = inner.prefs.clone();
+            prefs.manual_unloaded = false;
+            native_prefs::save(&prefs)?;
+            inner.prefs = prefs;
+        }
         inner.failures.clear();
         inner.last_restart = None;
         inner.restarts = 0;
@@ -333,7 +348,7 @@ fn start_service(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn stop_service(state: State<'_, AppState>) -> Result<(), String> {
-    stop_managed(&state)
+    stop_managed(&state, true)
 }
 
 #[derive(Serialize)]
@@ -453,8 +468,10 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         .unwrap_or(false);
     let error = if error.is_empty() { spec.as_ref().err().cloned().unwrap_or_default() } else { error };
     let live_state = metrics.as_ref().and_then(|v| v["live"]["state"].as_str());
-    let phase = runtime_phase(stopping, managed, gateway_ready,
-                              model_loaded, live_state, gpu_busy, desired, !error.is_empty());
+    let phase = if prefs.manual_unloaded && stopping { "unloading" }
+        else if prefs.manual_unloaded && !managed && !desired { "manual_unloaded" }
+        else { runtime_phase(stopping, managed, gateway_ready,
+                             model_loaded, live_state, gpu_busy, desired, !error.is_empty()) };
     let lan_effective = gateway_ready && supervisor_phase != "unknown" && raw.as_ref()
         .and_then(|r| r["lan_access"].as_bool()).unwrap_or(false);
     Ok(NativeStatus {
@@ -603,7 +620,7 @@ fn request_show(app: &tauri::AppHandle) {
 fn request_quit(app: tauri::AppHandle) {
     thread::spawn(move || {
         let state = app.state::<AppState>();
-        if let Err(err) = stop_managed(&state) { let _ = app.emit("manager-error", err); }
+        if let Err(err) = stop_managed(&state, false) { let _ = app.emit("manager-error", err); }
         // Wait for the private STOP protocol. Never taskkill a paid Image Worker.
         loop {
             thread::sleep(Duration::from_millis(500));
@@ -670,6 +687,10 @@ fn watchdog(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+fn should_auto_start(prefs: &NativePrefs, ui_smoke: bool) -> bool {
+    ui_smoke || (prefs.auto_start_service && !prefs.manual_unloaded)
 }
 
 fn reserve_test_port() -> Result<u16, String> {
@@ -809,7 +830,7 @@ pub fn run() {
             }
             let handle = app.handle().clone();
             watchdog(handle.clone());
-            if native_prefs::read().unwrap_or_default().auto_start_service || ui_smoke {
+            if should_auto_start(&native_prefs::read().unwrap_or_default(), ui_smoke) {
                 thread::spawn(move || {
                     if let Err(err) = start_managed(&handle.state::<AppState>()) {
                         let _ = handle.emit("manager-error", err);
@@ -853,6 +874,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_unload_survives_app_relaunch_and_overrides_automatic_start() {
+        let mut prefs = NativePrefs::default();
+        assert!(should_auto_start(&prefs, false));
+        prefs.manual_unloaded = true;
+        assert!(!should_auto_start(&prefs, false));
+        assert!(should_auto_start(&prefs, true)); // isolated UI-smoke override
+        prefs.auto_start_service = false;
+        assert!(!should_auto_start(&prefs, false));
+        prefs.manual_unloaded = false;
+        assert!(!should_auto_start(&prefs, false));
+        prefs.auto_start_service = true;
+        assert!(should_auto_start(&prefs, false));
+    }
 
     #[test]
     fn phase_reflects_idle_unload_not_gateway_shutdown_or_image_handoff() {
@@ -913,7 +949,7 @@ mod tests {
     #[test]
     fn stop_without_owned_child_is_idempotent() {
         let state = AppState::default();
-        stop_managed(&state).unwrap();
-        stop_managed(&state).unwrap();
+        stop_managed(&state, false).unwrap();
+        stop_managed(&state, false).unwrap();
     }
 }

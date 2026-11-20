@@ -21,6 +21,7 @@
 - 迁移文档 `docs/NATIVE_POLYSTRATA_DEVELOPMENT.md`，总体计划 `docs/PLAN_OFFICIAL_POLYSTRATA_GATEWAY_v0.3.0.md`。
 - Native P0 聊天兼容性（2026-11-20）：Native Gateway 的授权 `/health` 必须区分 `image_generation`（独立图像任务）与 `chat_image_tool=false`（聊天内图像工具尚未迁移）；还明确声明 `answer_budget_tokens=false`，`chat_mcp` 在官方引擎可用时为 true（但工具列表可能为空）。共享 Web UI 使用 `web/chat-capabilities.js` 协商，不能自动将有独立图像模型误判为聊天工具能力，且必须保留旧版无能力字段时的行为。Image Studio 的提示词解析携带 `strata_image_tool:false` 属于显式禁用，Gateway 必须剔除该字段后转发；`true` 继续 501。**官方 `max_tokens` 包含思考+正文，不等价于 main 的独立正文上限；在没有真正适配前 UI 显示不支持、已有非空限制先提示清空，不静默忽略/转化。** 完整测试和剩余 P0 事项见 `docs/NATIVE_P0_CHAT_2026-11-20.md`；正式 15239 与原版业务保持隔离。
 - Native MCP 后续接入（2026-11-20）：官方引擎的 `GET /mcp` 已通过 Native Gateway 独立 Bearer/Origin 安全门，仅加入精确 allowlist；`strata_mcp:true` 及官方 SSE `strata_mcp` call/result 直接代理，由**官方** run_with_mcp 执行工具。授权 health 的 `chat_mcp` 随官方引擎健康状态启用，但网页仍严格要求从 `/mcp` 读取到工具数 >0 并且用户允许 MCP 时才将工具传入；零工具不会启用。不要导入旧版的第三方服务密钥，也不要在 Gateway 自动执行本地程序。FakeOfficial Mock 已测完整 SSE，真实工具仍需单独配置与实测。详情见 `docs/NATIVE_P0_CHAT_2026-11-20.md`。
+- Native 手动卸载（2026-11-20）：用户允许复用原有**安全停止整个 Native 服务栈**的实现，但启动器按钮必须显示「卸载模型／加载模型」，不得显示「停止服务」。手动卸载时 Supervisor 的 `desired=false`，写入 Native `preferences.json.manual_unloaded=true`，阻止看门狗自动重启以及启动器重新打开时的自动拉起。手动加载清除持久标志，再启动 Native 三进程。**空闲 900 秒卸载是官方模型权重卸载，可由下次请求自动加载；手动卸载则 Gateway/API/Chat 也暂时不可用，直至用户再次点击加载。**普通托盘退出不写手动标志。代码和约束见 `docs/NATIVE_MANUAL_MODEL_UNLOAD_2026-11-20.md`；不更改 `main` 或 `15239`。
 
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。
 

@@ -12,6 +12,9 @@ pub struct NativePrefs {
     pub autostart: bool,
     pub auto_start_service: bool,
     pub watchdog: bool,
+    // A deliberate unload is persistent: restart/startup/watchdog must not
+    // silently bring the model (or its Native service stack) back.
+    pub manual_unloaded: bool,
     pub lan_access: bool,
     pub cf_enabled: bool,
     pub cf_hostname: String,
@@ -22,6 +25,7 @@ impl Default for NativePrefs {
             autostart: false,
             auto_start_service: true,
             watchdog: true,
+            manual_unloaded: false,
             lan_access: false,
             cf_enabled: false,
             cf_hostname: String::new(),
@@ -127,6 +131,18 @@ mod tests {
         let prefs = NativePrefs::default();
         assert!(!prefs.autostart && !prefs.lan_access && !prefs.cf_enabled);
         assert!(prefs.auto_start_service && prefs.watchdog);
+        assert!(!prefs.manual_unloaded);
+    }
+    #[test]
+    fn manual_unload_flag_serializes_and_defaults_for_existing_preferences() {
+        let old = r#"{"autostart":false,"auto_start_service":true,"watchdog":true}"#;
+        let mut prefs: NativePrefs = serde_json::from_str(old).unwrap();
+        assert!(!prefs.manual_unloaded);
+        prefs.manual_unloaded = true;
+        let encoded = serde_json::to_string(&prefs).unwrap();
+        let decoded: NativePrefs = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.manual_unloaded);
+        assert!(decoded.auto_start_service);
     }
     #[test]
     fn tunnel_hostname_validation_rejects_url_and_localhost() {

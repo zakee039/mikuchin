@@ -12,6 +12,7 @@ type Metrics = {
 };
 type NativePrefs = {
   autostart: boolean; auto_start_service: boolean; watchdog: boolean;
+  manual_unloaded: boolean;
   lan_access: boolean; cf_enabled: boolean; cf_hostname: string;
 };
 type LanAddress = {address: string; interface: string; description: string};
@@ -39,6 +40,7 @@ const phases: Record<string, [string, string]> = {
   stopped: ["已停止", "dim"], starting: ["启动中", "warn"],
   running: ["运行正常", "good"], stopping: ["安全停止中", "warn"],
   unloaded: ["空闲卸载", "warn"],
+  manual_unloaded: ["手动卸载", "warn"], unloading: ["正在卸载", "warn"],
   reading: ["Prefill", "good"], generating: ["生成中", "good"],
   degraded: ["服务异常", "bad"], error: ["启动失败", "bad"],
 };
@@ -129,7 +131,9 @@ function overview(): string {
       </div>
     </div>
     <div class="overview-actions">
-      <button class="primary" data-action="toggle" ${busy || s?.stopping ? "disabled" : ""}>${s?.managed ? "安全停止服务" : "启动服务"}</button>
+      <button class="primary" data-action="toggle"
+        title="手动卸载会安全暂停 Native 服务栈（包括 API 与图像任务入口），下次需点击加载模型才能恢复"
+        ${busy || s?.stopping ? "disabled" : ""}>${s?.stopping ? "正在卸载" : s?.managed ? "卸载模型" : "加载模型"}</button>
       <button class="secondary" data-action="open-chat" ${!s?.gateway_ready || busy ? "disabled" : ""}>打开 Chat →</button>
     </div>
   </section>`;
@@ -440,9 +444,9 @@ root.addEventListener("click", event => {
   else if (action === "test-tunnel") void tunnelAction("test_native_tunnel");
   else if (action === "restart-tunnel") void tunnelAction("restart_native_tunnel");
   else if (action === "toggle") void task(status?.managed ? "stop_service" : "start_service",
-    status?.managed ? "已发送安全停止指令" : "已请求启动 Native 服务");
-  else if (action === "start") void task("start_service", "已请求启动 Native 服务");
-  else if (action === "stop") void task("stop_service", "已发送安全停止指令");
+    status?.managed ? "正在安全卸载模型；服务将暂停，之后不会自动恢复" : "已请求加载模型并恢复 Native 服务");
+  else if (action === "start") void task("start_service", "已请求加载模型并恢复 Native 服务");
+  else if (action === "stop") void task("stop_service", "正在安全卸载模型；服务将暂停，之后不会自动恢复");
 });
 async function poll() {
   if (polling) return;
