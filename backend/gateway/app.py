@@ -231,6 +231,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "max_context": upstream_health.get("max_context") or 0,
                 "images": bool(upstream_health.get("images")),
                 "image_generation": any(x.get("available") for x in image_catalog),
+                # Image Studio can submit jobs to the independent Worker, but
+                # chat-triggered generation is a *different* contract. Never
+                # advertise it until the Gateway can orchestrate the tool and
+                # send its generated image back to the LLM for follow-up.
+                "chat_image_tool": False,
+                # The official engine counts thinking and answer together in
+                # max_tokens. The previous Mikuchin answer_budget_tokens cap
+                # applies to visible answer tokens alone; substituting
+                # max_tokens would silently violate that contract.
+                "answer_budget_tokens": False,
+                "chat_mcp": False,
                 "image_worker_ready": bool(self.server.image_jobs and
                                            self.server.image_jobs.worker_healthy()),
                 "native_gpu": (read_state(self.server.image_jobs.root.parent)
@@ -337,6 +348,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             else:
                 self._handle_private("POST", path, request)
             return
+        # The Image Studio's prompt editor explicitly sends
+        # strata_image_tool:false to opt OUT of a tool call. That is safe and
+        # must not be confused with requesting an unported image tool.
+        # Strip this Mikuchin-only hint rather than passing it upstream.
+        if request.get("strata_image_tool") is False:
+            request.pop("strata_image_tool")
         unsupported = sorted(UNPORTED_FIELDS.intersection(request))
         if unsupported:
             self._error(501,

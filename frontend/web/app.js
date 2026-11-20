@@ -800,13 +800,11 @@ async function streamInto(m, el, signal) {
     Object.assign(body, {temperature: +settings.temperature, top_p: +settings.top_p, top_k: +settings.top_k});
   }
   if (settings.seed) body.seed = +settings.seed;
-  // This is a cap on visible answer tokens only. Thinking has its own budget.
-  if (settings.max) body.answer_budget_tokens = +settings.max;
   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
-  if (!stateless && settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
-  // Built-in image creation is safe in stateless mode: it works within this
-  // request and does not restore conversational history or per-session KV.
-  if (health.image_generation) body.strata_image_tool = true;
+  // Capability negotiation is separate from the independent Image Studio:
+  // Native may support image jobs without supporting an in-chat image tool.
+  window.MikuchinChatCapabilities.apply(body, health, settings,
+    {stateless, mcpTools:mcpInfo.tools});
   if (sessionV1 && sessionId) body.strata_session_id = sessionId;
   if (stateless) body.mikuchin_stateless = true;
 
@@ -1425,6 +1423,15 @@ function loadDrawer(s = settings) {
   $("s-budget").value = s.thinking === "none" ? 0 : s.budget;
   $("s-temp").value = s.temperature; $("s-topp").value = s.top_p; $("s-topk").value = s.top_k;
   $("s-max").value = s.max; $("s-seed").value = s.seed;
+  const unsupportedAnswerCap = health.answer_budget_tokens === false;
+  // If a saved session has an older cap, let the user erase it. Otherwise
+  // disable a control that would submit unsupported semantics.
+  $("s-max").disabled = unsupportedAnswerCap && !s.max;
+  $("s-max").placeholder = unsupportedAnswerCap ? "Native 暂不支持" : "No limit";
+  $("s-max-support").hidden = !unsupportedAnswerCap;
+  $("s-max").title = unsupportedAnswerCap
+    ? "Native 引擎不支持仅限制正文 Token；请清空旧的设置（不要用 max_tokens 替代）"
+    : "";
   $("s-show").setAttribute("aria-checked", String(!!s.show));
   $("s-esp").setAttribute("aria-checked", String(s.esp !== false));
   $("esp-row").hidden = !projectionLoaded();
@@ -1461,6 +1468,9 @@ function readDrawerSampling() {
   const budget = thinking === "none" ? 0 : Number($("s-budget").value);
   if (!Number.isInteger(budget) || (thinking !== "none" && budget < 1) || budget > 262144) {
     throw Error("Choose a whole number from 1 to 262144 for the thinking budget.");
+  }
+  if (health.answer_budget_tokens === false && $("s-max").value.trim()) {
+    throw Error("Native 暂不支持仅限制正文 Token。请清空 Answer Token budget；Thinking Token budget 不受影响。");
   }
   return {thinking, budget, temperature: +$("s-temp").value, top_p: +$("s-topp").value,
                 top_k: +$("s-topk").value, max: $("s-max").value.trim() ? +$("s-max").value : "",

@@ -12,18 +12,21 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
 
 try:
+    from . import app as gateway_app
     from .app import GatewayServer
     from .conversations import ConversationStore
     from .characters import CharacterStore
     from .image_jobs import ImageJobStore
     from . import gallery
 except ImportError:
+    import app as gateway_app
     from app import GatewayServer
     from conversations import ConversationStore
     from characters import CharacterStore
@@ -145,6 +148,9 @@ class GatewayContract(unittest.TestCase):
         self.assertTrue(health["official_polystrata_reachable"])
         self.assertEqual(health["model"], "official-polystrata")
         self.assertIsNone(health["official_model_loaded"])
+        self.assertIs(health["chat_image_tool"], False)
+        self.assertIs(health["answer_budget_tokens"], False)
+        self.assertIs(health["chat_mcp"], False)
         self.assertFalse(health["image_generation"])
         self.assertEqual(health["native_gpu"], {"busy": False, "phase": "idle"})
         self.assertEqual(health["native_image_jobs"]["running"], 0)
@@ -155,6 +161,16 @@ class GatewayContract(unittest.TestCase):
         status, data = self.request("GET", "/api/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["models"][0]["id"], "official-model")
+
+    def test_image_studio_available_does_not_advertise_unported_chat_image_tool(self):
+        with patch.object(gateway_app.local_images, "catalog",
+                          return_value=([{"id":"local-offline", "available":True}], [])):
+            status, body=self.request("GET", "/health")
+        self.assertEqual(status, 200)
+        health=json.loads(body)
+        self.assertIs(health["image_generation"], True)
+        self.assertIs(health["chat_image_tool"], False)
+        self.assertIs(health["answer_budget_tokens"], False)
 
     def test_health_forwards_exact_model_loaded_state_without_guessing(self):
         try:
@@ -220,11 +236,27 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(self.request("GET", "/v1/mikuchin/image-jobs")[0], 200)
 
     def test_unported_mikuchin_semantics_fail_explicitly(self):
+        before=len(FakeOfficial.seen)
         for key in ("strata_image_tool", "answer_budget_tokens"):
             status, result = self.request("POST", "/v1/chat/completions",
                                           payload={"messages":[], key: "x"})
             self.assertEqual(status, 501, key)
             self.assertIn(key.encode(), result)
+        self.assertEqual(len(FakeOfficial.seen), before,
+                         "unsupported options must never be silently forwarded or ignored")
+
+    def test_image_studio_prompt_rewrite_false_tool_flag_is_allowed(self):
+        request = {"model":"official-model", "messages":[{"role":"user","content":"Rewrite this prompt"}],
+                   "mikuchin_stateless":True, "strata_image_tool":False,
+                   "strata_mcp":False, "max_tokens":80, "reasoning_effort":"none",
+                   "temperature":0.25,"tool_choice":"none"}
+        status, body = self.request("POST", "/v1/chat/completions", payload=request)
+        self.assertEqual(status, 200)
+        forwarded = FakeOfficial.seen[-1][1]
+        self.assertNotIn("strata_image_tool", forwarded)
+        self.assertNotIn("mikuchin_stateless", forwarded)
+        self.assertEqual(forwarded["messages"], request["messages"])
+        self.assertEqual(forwarded["max_tokens"], 80)
 
     def test_legacy_session_metadata_stripped_but_complete_history_forwarded(self):
         ident="a" * 32
