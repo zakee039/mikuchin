@@ -49,8 +49,8 @@ The config is **server-owned**. The browser chooses only a model ID and LoRA ID,
 
 - Explicit `4x` is validated **before activating** a task, including model asset availability and the maximum 4x output side (default 3072). A bad 4x request never triggers an online provider charge.
 - `auto` applies only when the prompt suggests anime and does not explicitly suggest photography/realism, and the output would fit. `off` always skips 4x.
-- The worker runs Real-ESRGAN as a separate GPU turn. On success, the gallery indexes a 4x cover and retains the original in one artwork pair. On failure, it records `upscale_warning` but keeps the original generation marked **success**. This is especially important for paid online providers: never retry an already generated billable image just because upscaling failed.
-- A Qwen generation followed by a 4x stage currently releases and reacquires the GPU, unloading/reloading the official LLM between stages. Correctness and isolation are preferred to performance here; eliminating this redundant handoff is a follow-up optimization.
+- For **local Qwen-Image**, the worker performs Real-ESRGAN before releasing its one GPU lease. It preserves the original first, and only after the GPU has been returned to the LLM does the Worker pair the enhanced image with its original in the gallery. This eliminates the formerly redundant LLM reload/unload between the two stages. **Online API** generation still uses a separate GPU turn for its optional local 4x enhancement, since the remote provider never holds local GPU memory.
+- On success, the gallery indexes a 4x cover and retains the original in one artwork pair. On failure, it records `upscale_warning` but keeps the original generation marked **success**. This is especially important for paid online providers: never retry an already generated billable image just because upscaling failed.
 
 ## Test commands
 
@@ -72,7 +72,7 @@ Tests added in `backend/gateway/test_local_images.py` include concurrent shared/
 
 - This milestone does not build a new installer, Android APK, Tag or Release. Versions remain main 0.3.1 / launcher 0.3.0 / Android 0.3.0.
 - No automatic recovery/replay of uncertain paid provider tasks after a worker crash.
-- The experimental real-GPU smoke must complete separately. A fake-`_run` test proves integration logic, not actual image quality or GPU memory fit.
+- The mock subprocess tests alone do not prove GPU behavior; the real end-to-end CUDA and Vulkan runs are recorded below.
 - The Native image binaries are local runtime dependencies, not Git-tracked distribution assets. Packaging must provide/provision these before advertising bundled local image generation.
 
 ## Real-device verification (2026-11-20, RTX 3070 Ti 8 GB)
@@ -100,3 +100,33 @@ After validation, ports 15240/15249 had no listeners and NVIDIA reported
 approximately 158 MiB / 8192 MiB idle VRAM. Port 15239 remained unused by
 the tests. `scripts/smoke-native-transport.ps1` also passed the official
 mock transport/Worker/character/SSE checks after real-GPU testing.
+
+## Single-handoff optimization: real-device result (2026-11-20)
+
+- Worktree commit following the original real-GPU smoke changes
+  `backend/gateway/local_images.py`: native Qwen-Image and 4x ESRGAN now share
+  **one** exclusive `gpu_handoff`. It unloads official CUDA LLM once,
+  generates the PNG, saves its original, runs Vulkan ESRGAN (when selected),
+  and then attempts one official LLM reload before the exclusive lease ends.
+- The Worker receives only the enhanced PNG bytes in memory. After GPU release,
+  it indexes the existing original and attaches the 4x cover in SQLite.
+  A failed enhancement/attachment does not mark a generated original as failed.
+- Gateway authenticated `/health` now returns `native_gpu` (the OS-lock-verified
+  phase), `native_image_jobs` (running count and status), and
+  `native_upscaler_ready` (actual file availability). This feeds the Tauri
+  native resources panel without leaking prompts, image data, local paths,
+  secrets or internal process-control interfaces.
+- Supervisor tracks per-child restart counts and last recovered role.
+  If the official engine crashes while a Native GPU turn is held, it publishes
+  `waiting-for-gpu` and delays the engine restart until the real OS lock
+  is released. This keeps the 8GB GPU from two competing model loads.
+- The actual supervised **Official Qwen + female-anatomy-v3 LoRA + ESRGAN 4x**
+  run in `native-optimized-gpu-smoke-20261120` completed successfully.
+  The persistent SQLite result reports `gpu_handoffs=1`,
+  `upscale_seconds=1.7`, total `seconds=150.0`, a 1536×1536 gallery
+  cover with two variants, and a clean Gateway status and Supervisor exit.
+- Compared with the earlier run's 144.92 seconds, one optimized run took
+  150.0 seconds. **Do not claim an empirically demonstrated speedup**:
+  variance in model loading/sampling dominates and a controlled repeated
+  A/B benchmark would be needed. The redundant GPU handoff count was
+  nonetheless concretely reduced from two to one.

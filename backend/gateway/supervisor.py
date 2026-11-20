@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .image_jobs import ImageJobStore
 from .worker import singleton_lock
+from .gpu_gate import read_state
 
 
 LOG = logging.getLogger("mikuchin.supervisor")
@@ -91,6 +92,8 @@ class NativeSupervisor:
         self.child_logs = {}
         self.launch_times = {}
         self.restarts = defaultdict(deque)
+        self.child_restarts = defaultdict(int)
+        self.last_recovery = None
         self.start_time = time.time()
         self.image_store = None
         self.status_file = self.data_dir / "supervisor-status.json"
@@ -158,7 +161,9 @@ class NativeSupervisor:
                   "gateway_port": self.gateway_port,
                   "official_port": self.upstream_port,
                   "children": {role: child.pid for role, child in self.children.items()
-                               if child.poll() is None}}
+                               if child.poll() is None},
+                  "child_restarts": dict(self.child_restarts),
+                  "last_recovery": self.last_recovery}
         self.data_dir.mkdir(parents=True, exist_ok=True)
         temp = self.status_file.with_suffix(".tmp")
         temp.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
@@ -216,7 +221,19 @@ class NativeSupervisor:
                 self.stop.wait(min(len(failures) * .5, 2.0))
                 if self.stop.is_set():
                     break
+                if role == "official":
+                    # A local image owns the GPU exclusively between model
+                    # unload and reload. Never re-launch the crashed LLM
+                    # into an image job that still owns that GPU lease.
+                    if read_state(self.data_dir)["busy"]:
+                        self._write_status("waiting-for-gpu")
+                    while not self.stop.is_set() and read_state(self.data_dir)["busy"]:
+                        self.stop.wait(.25)
+                    if self.stop.is_set():
+                        break
                 self._start_role(role)
+                self.child_restarts[role] += 1
+                self.last_recovery = {"role": role, "at": time.time()}
                 self._write_status("running")
 
     def _stop_role(self, role, grace):

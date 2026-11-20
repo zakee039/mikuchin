@@ -1,6 +1,7 @@
 :root{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#19343b;background:#f5f9f9;font-synthesis:none}
 *{box-sizing:border-box}body{margin:0;min-width:390px}button{font:inherit;cursor:pointer;transition:background .12s,border-color .12s,opacity .12s}button:disabled{cursor:not-allowed;opacity:.43}
 #app{display:flex;min-height:100vh;flex-direction:column}
+body{overflow:hidden}#app{height:100vh;min-height:0}main{min-height:0;overflow-y:auto;scrollbar-width:thin}footer{flex-shrink:0}
 .topbar{padding:24px 24px 18px;background:#fff;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e8f0f0;gap:8px}
 .brand{display:flex;align-items:center;gap:10px;min-width:0}.brand img{object-fit:contain}.brand h1{font-size:22px;font-weight:700;letter-spacing:-.65px;margin:0}
 .brand p{font-size:9px;letter-spacing:1.4px;color:#6c8990;margin:3px 0 0;font-weight:650}.dot-sep{color:#39c5bb;margin:0 3px}
@@ -23,6 +24,7 @@ main{width:100%;padding:18px 22px 15px;flex:1}
 .panel-note{border-top:1px solid #f2f6f6;padding-top:10px;margin:4px 0 0;font-size:10px;color:#91a1a6}
 .model-panel{margin-top:13px;padding:13px 15px;border:1px solid #e4eded;border-radius:12px;background:white;display:flex;align-items:center;justify-content:space-between;gap:10px}
 .model-panel strong{font-size:12px;display:block;margin-top:5px;line-height:1.5;word-break:break-word}
+.resource-panel{padding-top:13px;padding-bottom:12px}.resource-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid #f0f5f5;font-size:11px;color:#61787b}.resource-row strong{font-size:11px;color:#355c61;text-align:right;max-width:62%;font-weight:650}.resource-row strong.resource-active{color:#15988d}.resource-phase{font-size:10px;line-height:1.5;color:#4e8888;background:#eefaf8;padding:7px 9px;margin:2px 0 5px;border-radius:7px;word-break:break-word}
 .small-tag{font-size:10px;background:#eef9f7;border-radius:6px;color:#219b8d;padding:6px;flex-shrink:0}
 .actions{display:grid;grid-template-columns:1.45fr 1fr 1fr;gap:8px;margin-top:15px}
 .actions button{border-radius:10px;border:1px solid #d8e6e6;background:#fff;padding:10px 3px;font-size:11px;font-weight:700;color:#466267}

@@ -112,6 +112,8 @@ def main():
                         "state": item["state"], "error":item["error"][:230],
                         "provider": item["result"].get("provider"),
                         "upscaled": item["result"].get("upscale_applied"),
+                        "gpu_handoffs": item["result"].get("gpu_handoffs"),
+                        "upscale_seconds": item["result"].get("upscale_seconds"),
                         "size": item["result"].get("size"),
                         "image_ids": item["result"].get("image_ids"),
                         "seconds": item["result"].get("seconds")},

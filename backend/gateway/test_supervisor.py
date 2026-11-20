@@ -8,14 +8,17 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from backend.gateway.supervisor import NativeSupervisor
 from backend.gateway.image_jobs import ImageJobStore
+from backend.gateway.gpu_gate import gpu_turn
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +31,45 @@ def spare_port():
 
 
 class SupervisorTest(unittest.TestCase):
+    def test_crashed_official_restart_waits_for_image_gpu_lease(self):
+        """Never load a crashed text engine into an ongoing Qwen/4x turn."""
+        class FakeChild:
+            def __init__(self, pid, code):
+                self.pid = pid
+                self.returncode = code
+            def poll(self):
+                return self.returncode
+
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = NativeSupervisor(
+                data_dir=directory, upstream_port=15340, gateway_port=15349,
+                api_key="isolated-test-token")
+            supervisor.children = {
+                "official": FakeChild(111, 1),
+                "image-worker": FakeChild(222, None),
+                "gateway": FakeChild(333, None),
+            }
+            started = []
+            def restarted(role):
+                started.append(role)
+                supervisor.stop.set()
+            with mock.patch.object(supervisor, "_start_role", side_effect=restarted):
+                thread = threading.Thread(target=supervisor._watch, daemon=True)
+                try:
+                    with gpu_turn(directory, exclusive=True):
+                        thread.start()
+                        time.sleep(1.2)
+                        self.assertEqual(started, [])
+                        state = json.loads((Path(directory) / "supervisor-status.json").read_text())
+                        self.assertEqual(state["phase"], "waiting-for-gpu")
+                    thread.join(timeout=5)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(started, ["official"])
+                    self.assertEqual(supervisor.child_restarts["official"], 1)
+                finally:
+                    supervisor.stop.set()
+                    thread.join(timeout=4)
+
     def test_rejects_stable_port_and_stable_data(self):
         with tempfile.TemporaryDirectory() as d:
             for port in (15239,):
@@ -113,6 +155,8 @@ class SupervisorTest(unittest.TestCase):
                     time.sleep(.2)
                 self.assertTrue(restarted,"Worker did not restart after an unexpected exit")
                 self.assertIsNone(proc.poll())
+                self.assertGreaterEqual(now.get("child_restarts", {}).get("image-worker", 0), 1)
+                self.assertEqual(now.get("last_recovery", {}).get("role"), "image-worker")
                 with urllib.request.urlopen(urllib.request.Request(
                     f"http://127.0.0.1:{gateway}/health",headers=headers),timeout=5) as r:
                     self.assertTrue(json.load(r)["image_worker_ready"])

@@ -299,6 +299,14 @@ struct NativeStatus {
     supervisor_pid: Option<u32>,
     children: Value,
     supervisor_phase: String,
+    child_restarts: Value,
+    last_recovery: Value,
+    gpu_busy: bool,
+    gpu_phase: String,
+    image_jobs_running: u64,
+    image_jobs_phase: String,
+    image_worker_ready: bool,
+    upscaler_ready: bool,
     log_path: String,
     data_dir: String,
 }
@@ -322,6 +330,22 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     } else { "unknown" }.to_string();
     let children = if supervisor_phase == "unknown" { json!({}) }
         else { raw.as_ref().map(|v| v["children"].clone()).unwrap_or(json!({})) };
+    let child_restarts = if supervisor_phase == "unknown" { json!({}) }
+        else { raw.as_ref().map(|v| v["child_restarts"].clone()).unwrap_or(json!({})) };
+    let last_recovery = if supervisor_phase == "unknown" { json!(null) }
+        else { raw.as_ref().map(|v| v["last_recovery"].clone()).unwrap_or(json!(null)) };
+    let gpu_busy = health_value.as_ref().and_then(|v| v["native_gpu"]["busy"].as_bool())
+        .unwrap_or(false);
+    let gpu_phase = health_value.as_ref().and_then(|v| v["native_gpu"]["phase"].as_str())
+        .unwrap_or("unknown").to_string();
+    let image_jobs_running = health_value.as_ref().and_then(|v| v["native_image_jobs"]["running"].as_u64())
+        .unwrap_or(0);
+    let image_jobs_phase = health_value.as_ref().and_then(|v| v["native_image_jobs"]["phase"].as_str())
+        .unwrap_or("").to_string();
+    let image_worker_ready = health_value.as_ref().and_then(|v| v["image_worker_ready"].as_bool())
+        .unwrap_or(false);
+    let upscaler_ready = health_value.as_ref().and_then(|v| v["native_upscaler_ready"].as_bool())
+        .unwrap_or(false);
     let error = if error.is_empty() { spec.as_ref().err().cloned().unwrap_or_default() } else { error };
     let phase = if stopping { "stopping" }
         else if managed && gateway_ready { "running" }
@@ -335,6 +359,8 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         gateway_port: GATEWAY_PORT, official_port: OFFICIAL_PORT,
         gateway_ready, api_key_present: security::read("api-key")?.is_some(),
         model, supervisor_pid: pid, children, supervisor_phase,
+        child_restarts, last_recovery, gpu_busy, gpu_phase,
+        image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),
         data_dir: spec.map(|s| s.data_dir.to_string_lossy().to_string()).unwrap_or_default(),
     })

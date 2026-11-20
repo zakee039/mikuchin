@@ -17,6 +17,14 @@ type Status = {
   supervisor_pid: number | null;
   children: Record<string, number>;
   supervisor_phase: string;
+  child_restarts: Record<string, number>;
+  last_recovery: { role: string; at: number } | null;
+  gpu_busy: boolean;
+  gpu_phase: string;
+  image_jobs_running: number;
+  image_jobs_phase: string;
+  image_worker_ready: boolean;
+  upscaler_ready: boolean;
   log_path: string;
   data_dir: string;
 };
@@ -42,6 +50,17 @@ function child(label: string, key: string) {
 function render() {
   const s = status;
   const phase = s?.phase || "starting";
+  const handoffNames: Record<string, string> = {
+    unloading: "释放 LLM 显存", generating: "Qwen-Image 推理",
+    upscaling: "Real-ESRGAN 4×", restoring: "恢复 LLM", idle: "空闲",
+    unknown: "状态更新中",
+  };
+  const imageBusy = (s?.image_jobs_running ?? 0) > 0;
+  const childRecoveryCount = Object.values(s?.child_restarts || {})
+    .reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const recentRecovery = s?.last_recovery?.role
+    ? `最近恢复：${escapeHtml(s.last_recovery.role)}`
+    : "未发生子进程恢复";
   root.innerHTML = `
     <header class="topbar">
       <div class="brand"><img src="/mikuchin-icon.png" width="48" height="48" alt="Mikuchin" />
@@ -66,11 +85,21 @@ function render() {
         ${child("Official Engine", "official")}
         ${child("Image Worker", "image-worker")}
         ${child("Gateway", "gateway")}
-        <p class="panel-note">守护器状态：${escapeHtml(s?.supervisor_phase || "未知")} · 自动恢复 ${s?.restarts ?? 0} 次</p>
+        <p class="panel-note">守护器：${escapeHtml(s?.supervisor_phase || "未知")} · 子进程恢复 ${childRecoveryCount} 次 · ${recentRecovery} · Tauri 重启 ${s?.restarts ?? 0} 次</p>
       </section>
       <section class="model-panel">
         <div><div class="section-kicker">当前模型</div><strong>${escapeHtml(s?.model && s.model !== "—" ? s.model : "等待引擎上线")}</strong></div>
         <span class="small-tag">官方引擎</span>
+      </section>
+      <section class="panel resource-panel">
+        <div class="section-head"><h3>GPU 与图像任务</h3><span>${s?.gateway_ready ? "独立 Native 资源协调" : "等待 Gateway"}</span></div>
+        <div class="resource-row"><span>GPU 独占任务</span>
+          <strong class="${s?.gpu_busy ? "resource-active" : ""}">${s?.gpu_busy ? escapeHtml(handoffNames[s.gpu_phase] || s.gpu_phase) : "空闲 / 可进行推理"}</strong></div>
+        <div class="resource-row"><span>图像队列</span>
+          <strong>${imageBusy ? `${s?.image_jobs_running} 项运行中` : "无运行任务"}</strong></div>
+        ${imageBusy ? `<p class="resource-phase">${escapeHtml(s?.image_jobs_phase || "等待 Worker 更新状态")}</p>` : ""}
+        <div class="resource-row"><span>Image Worker / Real-ESRGAN</span>
+          <strong>${s?.image_worker_ready ? "已就绪" : "未就绪"} / ${s?.upscaler_ready ? "可用" : "未配置"}</strong></div>
       </section>
       <div class="actions">
         <button id="open-chat" class="primary" ${!s?.gateway_ready || actionBusy ? "disabled" : ""}>打开聊天网页</button>

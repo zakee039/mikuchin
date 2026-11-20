@@ -137,15 +137,36 @@ class GatewayContract(unittest.TestCase):
     def test_health_and_native_models_endpoint(self):
         status, data = self.request("GET", "/health")
         self.assertEqual(status, 200)
-        self.assertTrue(json.loads(data)["official_polystrata_reachable"])
-        self.assertEqual(json.loads(data)["model"], "official-polystrata")
-        self.assertFalse(json.loads(data)["image_generation"])
+        health = json.loads(data)
+        self.assertTrue(health["official_polystrata_reachable"])
+        self.assertEqual(health["model"], "official-polystrata")
+        self.assertFalse(health["image_generation"])
+        self.assertEqual(health["native_gpu"], {"busy": False, "phase": "idle"})
+        self.assertEqual(health["native_image_jobs"]["running"], 0)
+        self.assertFalse(health["native_upscaler_ready"])
         status, data = self.request("GET", "/v1/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["data"][0]["id"], "official-model")
         status, data = self.request("GET", "/api/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["models"][0]["id"], "official-model")
+
+    def test_native_gpu_handoff_is_visible_and_prevents_new_inference(self):
+        from backend.gateway.gpu_gate import gpu_turn, publish_state
+        root = self.images.root.parent
+        with gpu_turn(root, exclusive=True):
+            publish_state(root, "upscaling")
+            status, data = self.request("GET", "/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(data)["native_gpu"], {"busy": True, "phase": "upscaling"})
+            prior_calls = len(FakeOfficial.seen)
+            status, data = self.request("POST", "/v1/chat/completions",
+                                        payload={"model":"mock","messages":[]})
+            self.assertEqual(status, 503)
+            self.assertEqual(len(FakeOfficial.seen), prior_calls,
+                             "GPU-busy requests must not reach the official engine")
+        self.assertEqual(json.loads(self.request("GET", "/health")[1])["native_gpu"],
+                         {"busy": False, "phase": "idle"})
 
     def test_public_web_assets_but_no_public_api_or_private_files(self):
         for path, kind in (("/", b"<!doctype html>"),

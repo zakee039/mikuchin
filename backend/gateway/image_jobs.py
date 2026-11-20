@@ -86,6 +86,19 @@ class ImageJobStore:
             row = db.execute("SELECT updated FROM worker_status WHERE singleton=1").fetchone()
         return row["updated"] if row else 0.0
 
+    def activity(self):
+        """Cheap, privacy-safe snapshot for the Tauri/Gateway monitor."""
+        with self._db() as db:
+            counts = dict(db.execute(
+                "SELECT state, COUNT(*) FROM jobs WHERE state IN ('running', 'draft') GROUP BY state"
+            ).fetchall())
+            first = db.execute(
+                "SELECT phase FROM jobs WHERE state='running' ORDER BY created ASC LIMIT 1"
+            ).fetchone()
+        return {"running": counts.get("running", 0),
+                "drafts": counts.get("draft", 0),
+                "phase": first["phase"][:120] if first else ""}
+
     def heartbeat(self):
         import os
         with self._db() as db:
@@ -422,7 +435,30 @@ class ImageJobStore:
                     # potentially billable retry just because indexing failed.
                     result["gallery_warning"] = "画廊索引暂不可用，请使用画廊刷新恢复"
                     result["gallery_error_type"] = type(exc).__name__
-                if local_images.should_upscale(self, request):
+                if local:
+                    # Native Qwen already ran ESRGAN within the *same* GPU
+                    # handoff and returned only the processed bytes in memory.
+                    # Indexing is performed here, after the model reload; it
+                    # must never cause a second unload/reload cycle.
+                    enhanced = response.get("upscaled_png")
+                    if enhanced is not None:
+                        try:
+                            cover = gallery.attach_upscaled(self, name.removesuffix(".png"), enhanced)
+                            result["image_ids"] = [cover]
+                            result["image_file"] = cover + ".png"
+                            w, h = map(int, request["size"].split("x"))
+                            result["size"] = f"{w*4}x{h*4}"
+                            result["upscale_applied"] = True
+                            result["upscale_original_id"] = name.removesuffix(".png")
+                            result["upscale_seconds"] = response.get("upscale_seconds")
+                        except Exception as exc:
+                            result["upscale_applied"] = False
+                            result["upscale_warning"] = type(exc).__name__
+                    elif response.get("upscale_warning"):
+                        result["upscale_applied"] = False
+                        result["upscale_warning"] = response["upscale_warning"]
+                    result["gpu_handoffs"] = 1
+                elif local_images.should_upscale(self, request):
                     try:
                         status("Running Real-ESRGAN 4x")
                         original = gallery._file(self, name.removesuffix(".png")).read_bytes()

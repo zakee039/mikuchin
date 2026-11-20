@@ -1,5 +1,10 @@
 # Native Tauri Launcher 集成（开发分支）
 
+> 2026-11-20 更新：Native 控制面板增加 GPU 互斥阶段、图像队列数、
+> Image Worker / Real-ESRGAN 可用性和子进程自动恢复记录；固定窗口内容区
+> 可滚动。更详细的真实 CUDA/Vulkan 验证和单次 GPU 交接优化见
+> `docs/NATIVE_LOCAL_IMAGE_GPU_2026-11-20.md`。
+
 > 当前分支：`refactor/official-polystrata-gateway`；本说明只覆盖原生开发版。产品主程序仍为 0.3.1，Launcher/APK 仍为 0.3.0。没有打包或发布 Release。
 
 ## 工作内容

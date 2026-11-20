@@ -31,7 +31,7 @@ try:
     from . import image_providers
     from . import gallery
     from . import local_images
-    from .gpu_gate import gpu_turn, GPUUnavailable
+    from .gpu_gate import gpu_turn, GPUUnavailable, read_state
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
     from characters import CharacterStore, card_from_tavern
@@ -41,7 +41,7 @@ except ImportError:  # unittest discover -s backend/gateway imports app as a top
     import image_providers
     import gallery
     import local_images
-    from gpu_gate import gpu_turn, GPUUnavailable
+    from gpu_gate import gpu_turn, GPUUnavailable, read_state
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -228,6 +228,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "image_generation": any(x.get("available") for x in image_catalog),
                 "image_worker_ready": bool(self.server.image_jobs and
                                            self.server.image_jobs.worker_healthy()),
+                "native_gpu": (read_state(self.server.image_jobs.root.parent)
+                               if self.server.image_jobs else {"busy": False, "phase": "idle"}),
+                "native_image_jobs": (self.server.image_jobs.activity()
+                                      if self.server.image_jobs else {"running": 0, "drafts": 0, "phase": ""}),
+                "native_upscaler_ready": bool(self.server.image_jobs and
+                                              local_images.upscaler_ready(self.server.image_jobs)),
             })
             return
         if path not in INFERENCE_GETS and not IMAGE_PATH.fullmatch(path):

@@ -11,6 +11,7 @@ The file contains no secrets or application state.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import secrets
 import time
@@ -19,6 +20,48 @@ from pathlib import Path
 
 class GPUUnavailable(RuntimeError):
     pass
+
+
+_STATE_PHASES = frozenset(("unloading", "generating", "upscaling", "restoring", "idle"))
+
+
+def publish_state(data_dir, phase):
+    """Publish only a bounded operational phase, never prompts/paths/keys.
+
+    The exclusive-lock owner calls this. A stale file after a crash is harmless:
+    read_state probes the real OS lock instead of trusting the JSON alone.
+    """
+    if phase not in _STATE_PHASES:
+        raise ValueError("invalid GPU phase")
+    root = Path(data_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "native-gpu-turn-status.json"
+    temporary = root / ("." + path.name + "." + secrets.token_hex(6) + ".tmp")
+    try:
+        temporary.write_text(json.dumps({"phase": phase, "pid": os.getpid(),
+                                         "updated_at": time.time()}), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def read_state(data_dir):
+    """A nonblocking probe makes a crashed worker's old status report idle."""
+    root = Path(data_dir).resolve()
+    try:
+        with gpu_turn(root, timeout=.08):
+            return {"busy": False, "phase": "idle"}
+    except GPUUnavailable:
+        pass
+    path = root / "native-gpu-turn-status.json"
+    try:
+        if path.stat().st_size > 1024 or path.is_symlink():
+            raise ValueError("unexpected GPU status file")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        phase = data.get("phase")
+        return {"busy": True, "phase": phase if phase in _STATE_PHASES - {"idle"} else "unknown"}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"busy": True, "phase": "unknown"}
 
 
 @contextlib.contextmanager

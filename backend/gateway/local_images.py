@@ -26,9 +26,9 @@ from pathlib import Path
 from PIL import Image
 
 try:
-    from .gpu_gate import gpu_turn
+    from .gpu_gate import gpu_turn, publish_state
 except ImportError:  # unittest discover imports gateway modules by filename
-    from gpu_gate import gpu_turn
+    from gpu_gate import gpu_turn, publish_state
 
 LOG = logging.getLogger("mikuchin.local-image")
 ID = re.compile(r"^local-[a-z0-9-]{2,60}$")
@@ -186,13 +186,16 @@ def _control(method):
 def gpu_handoff(svc, *, on_status=None):
     # Leave the official engine stopped until all GPU work has finished.
     # If the worker dies, OS byte-range lock is released automatically.
-    with gpu_turn(Path(svc.root).parent, exclusive=True, timeout=300):
+    root = Path(svc.root).parent
+    with gpu_turn(root, exclusive=True, timeout=300):
+        publish_state(root, "unloading")
         if on_status:
             on_status("Waiting for official model unload")
-        _control("/v1/unload?wait=180")
         try:
+            _control("/v1/unload?wait=180")
             yield
         finally:
+            publish_state(root, "restoring")
             if on_status:
                 on_status("Restoring official text model")
             try:
@@ -201,6 +204,8 @@ def gpu_handoff(svc, *, on_status=None):
                 # Image files are already generated. Reload may be retried on
                 # the next inference; do not turn a completed image into retry.
                 LOG.exception("Official model reload failed after GPU job")
+            finally:
+                publish_state(root, "idle")
 
 
 def _image_png(raw):
@@ -282,7 +287,9 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
         cmd += [str(a) for a in profile.get("args", [])]
         timeout = max(60, min(int(profile.get("timeout_seconds", 1200)), 3600))
         t0 = time.monotonic()
+        postprocess = {}
         with gpu_handoff(svc, on_status=on_status):
+            publish_state(Path(svc.root).parent, "generating")
             if on_status:
                 on_status("Local Qwen-Image inference")
             _run(cmd, work=work, env=_environment(profile), timeout=timeout)
@@ -296,8 +303,20 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
             dest.mkdir(parents=True, exist_ok=True)
             name = secrets.token_hex(16) + ".png"
             (dest / name).write_bytes(image)
+            # One and only one GPU exclusive lease spans generation AND 4x.
+            # Store the original before attempting enhancement: even if
+            # Real-ESRGAN fails, never mislabel generated content as failed.
+            try:
+                if should_upscale(svc, req):
+                    publish_state(Path(svc.root).parent, "upscaling")
+                    started = time.monotonic()
+                    postprocess["upscaled_png"] = _upscale_inside_gpu(svc, image, on_status=on_status)
+                    postprocess["upscale_seconds"] = round(time.monotonic() - started, 2)
+            except Exception as exc:
+                postprocess["upscale_warning"] = type(exc).__name__
         return {"model": profile.get("model", profile["id"]), "size": req["size"],
-                "strata": {"image_file": name, "seconds": round(time.monotonic()-t0, 2)}}
+                "strata": {"image_file": name, "seconds": round(time.monotonic()-t0, 2)},
+                **postprocess}
 
 
 def should_upscale(svc, req):
@@ -316,7 +335,8 @@ def should_upscale(svc, req):
     return bool(AUTO_ANIME.search(prompt) and not NOT_ANIME.search(prompt))
 
 
-def upscale(svc, raw, *, on_status=None):
+def _upscale_inside_gpu(svc, raw, *, on_status=None):
+    """Called only with the worker's exclusive GPU handoff already held."""
     if not upscaler_ready(svc):
         raise LocalImageError("Real-ESRGAN 4x model is not configured")
     cfg = _settings(svc)["upscaler"]
@@ -335,14 +355,20 @@ def upscale(svc, raw, *, on_status=None):
                "-n", model, "-s", "4", "-m", str(cfg["model_dir"]),
                "-t", str(int(cfg.get("tile", 128))), "-g", str(int(cfg.get("gpu", 0))),
                "-j", "1:2:2", "-f", "png"]
-        with gpu_handoff(svc, on_status=on_status):
-            if on_status:
-                on_status("Real-ESRGAN 4x upscale")
-            _run(cmd, work=work, timeout=max(30, min(int(cfg.get("timeout_seconds", 180)), 1200)))
-            if not output.is_file():
-                raise LocalImageError("Real-ESRGAN produced no image")
-            result = _image_png(output.read_bytes())
-            with Image.open(io.BytesIO(result)) as im:
-                if im.size != (width * 4, height * 4):
-                    raise LocalImageError("Real-ESRGAN produced incorrect dimensions")
-            return result
+        if on_status:
+            on_status("Real-ESRGAN 4x upscale")
+        _run(cmd, work=work, timeout=max(30, min(int(cfg.get("timeout_seconds", 180)), 1200)))
+        if not output.is_file():
+            raise LocalImageError("Real-ESRGAN produced no image")
+        result = _image_png(output.read_bytes())
+        with Image.open(io.BytesIO(result)) as im:
+            if im.size != (width * 4, height * 4):
+                raise LocalImageError("Real-ESRGAN produced incorrect dimensions")
+        return result
+
+
+def upscale(svc, raw, *, on_status=None):
+    """Public/upstream-API 4x entrypoint; takes its own exclusive GPU turn."""
+    with gpu_handoff(svc, on_status=on_status):
+        publish_state(Path(svc.root).parent, "upscaling")
+        return _upscale_inside_gpu(svc, raw, on_status=on_status)

@@ -18,7 +18,7 @@ from unittest import mock
 from PIL import Image
 
 from backend.gateway import gallery, local_images
-from backend.gateway.gpu_gate import GPUUnavailable, gpu_turn
+from backend.gateway.gpu_gate import GPUUnavailable, gpu_turn, publish_state, read_state
 from backend.gateway.image_jobs import ImageJobStore
 
 
@@ -29,6 +29,16 @@ def png(size):
 
 
 class NativeGpuGateTests(unittest.TestCase):
+    def test_status_uses_real_lock_not_a_stale_status_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            publish_state(directory, "upscaling")
+            self.assertEqual(read_state(directory), {"busy": False, "phase": "idle"})
+            with gpu_turn(directory, exclusive=True):
+                self.assertEqual(read_state(directory), {"busy": True, "phase": "upscaling"})
+                publish_state(directory, "restoring")
+                self.assertEqual(read_state(directory)["phase"], "restoring")
+            self.assertEqual(read_state(directory), {"busy": False, "phase": "idle"})
+
     def test_shared_inference_may_coexist_but_exclusive_image_waits(self):
         with tempfile.TemporaryDirectory() as directory:
             with gpu_turn(directory, timeout=.5):
@@ -135,14 +145,16 @@ class LocalNativeImageTests(unittest.TestCase):
             else:
                 steps.append("generate")
                 (Path(work)/"generated_0.png").write_bytes(png((384,384)))
-        with mock.patch.object(local_images,"gpu_handoff",side_effect=lambda *a, **k: contextlib.nullcontext()), \
+        with mock.patch.object(local_images,"gpu_handoff",side_effect=lambda *a, **k: contextlib.nullcontext()) as handoff, \
              mock.patch.object(local_images,"_run",side_effect=fake_run):
             task = self.jobs.submit({"request":{**self.req,"strata_upscale":"4x"}})
             self.jobs.queue.join()
         complete=self.jobs.listing(task["id"])
+        self.assertEqual(handoff.call_count, 1, "generation and 4x share one GPU handoff")
         self.assertEqual(steps,["generate","upscale"])
         self.assertEqual(complete["state"],"success",complete["error"])
         self.assertTrue(complete["result"]["upscale_applied"])
+        self.assertEqual(complete["result"]["gpu_handoffs"], 1)
         cover=gallery.detail(self.jobs,complete["result"]["image_ids"][0])
         self.assertEqual(cover["variant_count"],2)
         self.assertEqual((cover["width"],cover["height"]),(1536,1536))
