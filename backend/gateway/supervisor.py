@@ -64,7 +64,7 @@ class NativeSupervisor:
 
     def __init__(self, *, data_dir, engine="mock", config=None, gateway_port=15249,
                  upstream_port=15240, api_key=None, python=None, startup_timeout=120,
-                 control_stdin=False):
+                 control_stdin=False, lan_access=False):
         if not isinstance(gateway_port, int) or not isinstance(upstream_port, int) or \
            not all(1024 <= port <= 65535 for port in (gateway_port, upstream_port)) or \
            gateway_port == upstream_port or STABLE_PORT in (gateway_port, upstream_port):
@@ -81,6 +81,7 @@ class NativeSupervisor:
         self.engine = engine
         self.python = str(Path(python or sys.executable).resolve())
         self.gateway_port, self.upstream_port = gateway_port, upstream_port
+        self.lan_access = bool(lan_access)
         self.api_key = api_key or os.environ.get("MIKUCHIN_GATEWAY_API_KEY", "")
         if len(self.api_key) < 12:
             raise ValueError("Provide MIKUCHIN_GATEWAY_API_KEY (at least 12 characters)")
@@ -133,6 +134,8 @@ class NativeSupervisor:
                    "--upstream-port", str(self.upstream_port), "--engine", self.engine]
         if self.config:
             command += ["--config", str(self.config)]
+        if role == "gateway" and self.lan_access:
+            command.append("--lan-access")
         return command
 
     def _launch(self, role):
@@ -159,6 +162,7 @@ class NativeSupervisor:
         public = {"phase": phase, "engine": self.engine,
                   "supervisor_pid": os.getpid(), "started_at": self.start_time,
                   "gateway_port": self.gateway_port,
+                  "lan_access": self.lan_access,
                   "official_port": self.upstream_port,
                   "children": {role: child.pid for role, child in self.children.items()
                                if child.poll() is None},
@@ -307,6 +311,8 @@ def main():
     ap.add_argument("--startup-timeout", type=int, default=120)
     ap.add_argument("--control-stdin", action="store_true",
                     help="Enable private STOP/EOF pipe; for a parent launcher")
+    ap.add_argument("--lan-access", action="store_true",
+                    help="Explicitly allow remote access to authenticated Gateway only")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -314,7 +320,8 @@ def main():
                                       config=args.config, gateway_port=args.gateway_port,
                                       upstream_port=args.upstream_port,
                                       startup_timeout=args.startup_timeout,
-                                      control_stdin=args.control_stdin)
+                                      control_stdin=args.control_stdin,
+                                      lan_access=args.lan_access)
         supervisor.run()
     except KeyboardInterrupt:
         pass

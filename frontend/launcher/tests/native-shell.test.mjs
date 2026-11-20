@@ -34,7 +34,7 @@ test("150% DPI uses WebView's native scaling, never shrinking the whole document
 
 test("status polling never remounts the root or erases tab and scroll state", () => {
   assert.match(source, /const savedScroll = el\.scrollTop/);
-  assert.match(source, /if \(el\.innerHTML !== page\) el\.innerHTML = page/);
+  assert.match(source, /if \(!editing && el\.innerHTML !== page\) el\.innerHTML = page/);
   assert.match(source, /el\.scrollTop = savedScroll/);
   assert.match(source, /if \(polling\) return/);
   assert.match(source, /if \(tab !== element\.dataset\.tab\)/);
@@ -50,7 +50,7 @@ test("standalone debug app is GUI subsystem with no console; child logs remain a
   assert.match(source, /data-action="show-log"/);
 });
 
-test("Native services are real, no pretend LAN or CF controls", () => {
+test("Native LAN, Tunnel and startup actions map to real commands", () => {
   assert.match(source, /gateway_port/);
   assert.match(source, /host_gpu/);
   assert.match(source, /conversation_cache/);
@@ -58,14 +58,22 @@ test("Native services are real, no pretend LAN or CF controls", () => {
   assert.match(source, /upscaler_ready/);
   assert.match(source, /data-action="copy-key"/);
   assert.match(source, /data-action="open-chat"/);
-  assert.match(source, /<input type="checkbox" disabled>/);
-  assert.match(source, /<h3>从其它设备访问/);
-  assert.match(source, /局域网 HTTP/);
+  assert.match(source, /data-setting="lan_access"/);
+  assert.match(source, /data-setting="cf_enabled"/);
+  assert.match(source, /toggle\("autostart"/);
+  assert.match(source, /toggle\("auto_start_service"/);
+  assert.match(source, /toggle\("watchdog"/);
   assert.match(source, /Cloudflare Tunnel/);
-  assert.match(source, /待接入/);
+  assert.match(source, /save_native_preferences/);
+  assert.match(source, /save_native_tunnel_token/);
+  assert.match(source, /install_native_tunnel/);
+  assert.match(source, /test_native_tunnel/);
+  assert.match(source, /restart_native_tunnel/);
+  assert.doesNotMatch(source, /待接入/);
   assert.doesNotMatch(source, /<h3>服务控制<\/h3>/);
   assert.doesNotMatch(source, /安全停止会等待正在执行的图像任务/);
   assert.match(nativeStyle, /overscroll-behavior:contain/);
   assert.match(rust, /fn gpu_snapshot\(/);
   assert.match(rust, /fn gateway_metrics\(/);
+  assert.match(rust, /fn save_native_preferences\(/);
 });

@@ -19,7 +19,7 @@ use tauri::{
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State, WindowEvent,
 };
-use crate::security;
+use crate::{security, native_prefs::{self, NativePrefs}, native_network};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -57,6 +57,11 @@ fn runtime_root(root: &Path) -> Result<PathBuf, String> {
         return Err(format!("Native Python environment not installed: {}", runtime.display()));
     }
     Ok(runtime)
+}
+
+pub(crate) fn project_root_for_network() -> Result<PathBuf, String> { project_root() }
+pub(crate) fn project_runtime_root() -> Result<PathBuf, String> {
+    runtime_root(&project_root()?)
 }
 
 #[derive(Clone)]
@@ -118,7 +123,7 @@ fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok()
 }
 
-fn spawn_supervisor(spec: &LaunchSpec, log_path: &Path) -> Result<Child, String> {
+fn spawn_supervisor(spec: &LaunchSpec, log_path: &Path, lan_access: bool) -> Result<Child, String> {
     validate_spec(spec)?;
     if port_open(spec.gateway_port) || port_open(spec.official_port) {
         return Err(format!(
@@ -142,6 +147,9 @@ fn spawn_supervisor(spec: &LaunchSpec, log_path: &Path) -> Result<Child, String>
         .arg("--control-stdin");
     if let Some(config) = &spec.config {
         command.arg("--config").arg(config);
+    }
+    if lan_access {
+        command.arg("--lan-access");
     }
     command.current_dir(&spec.root)
         .env("MIKUCHIN_GATEWAY_API_KEY", &spec.key)
@@ -225,6 +233,10 @@ fn supervisor_status(spec: &LaunchSpec) -> Option<Value> {
 
 struct Inner {
     child: Option<Child>,
+    tunnel_child: Option<Child>,
+    prefs: NativePrefs,
+    cf_error: String,
+    cf_last_retry: Option<Instant>,
     desired: bool,
     stopping: bool,
     last_error: String,
@@ -236,7 +248,10 @@ struct AppState { inner: Mutex<Inner> }
 impl Default for AppState {
     fn default() -> Self {
         Self { inner: Mutex::new(Inner {
-            child: None, desired: false, stopping: false, last_error: String::new(),
+            child: None, tunnel_child: None,
+            prefs: native_prefs::read().unwrap_or_default(),
+            cf_error: String::new(), cf_last_retry: None,
+            desired: false, stopping: false, last_error: String::new(),
             restarts: 0, failures: VecDeque::new(), last_restart: None,
         }) }
     }
@@ -250,11 +265,20 @@ fn start_managed(state: &AppState) -> Result<(), String> {
     if guard.stopping { return Err("Supervisor is stopping; do not restart yet".into()); }
     if alive(&mut guard) { guard.desired = true; return Ok(()); }
     guard.desired = true;
-    let result = normal_spec().and_then(|spec| spawn_supervisor(&spec, &state_dir().join("supervisor.log")));
+    let result = normal_spec().and_then(|spec|
+        spawn_supervisor(&spec, &state_dir().join("supervisor.log"), guard.prefs.lan_access));
     match result {
         Ok(child) => {
             guard.child = Some(child);
             guard.last_error.clear();
+            if guard.prefs.cf_enabled {
+                native_network::stop(&mut guard.tunnel_child);
+                match native_network::spawn(&guard.prefs) {
+                    Ok(tunnel) => { guard.tunnel_child = Some(tunnel); guard.cf_error.clear(); },
+                    Err(err) => { guard.cf_error = err; },
+                }
+                guard.cf_last_retry = Some(Instant::now());
+            }
             Ok(())
         }
         Err(err) => {
@@ -267,6 +291,7 @@ fn start_managed(state: &AppState) -> Result<(), String> {
 fn stop_managed(state: &AppState) -> Result<(), String> {
     let mut guard = state.inner.lock().map_err(|e| e.to_string())?;
     guard.desired = false; // Manual STOP never triggers watchdog restart.
+    native_network::stop(&mut guard.tunnel_child);
     if !alive(&mut guard) {
         guard.child = None;
         guard.stopping = false;
@@ -284,6 +309,7 @@ fn refresh_child(inner: &mut Inner) {
         Ok(None) => (),
         Ok(Some(status)) => {
             inner.child = None;
+            native_network::stop(&mut inner.tunnel_child);
             if inner.stopping {
                 inner.stopping = false;
             } else if inner.desired {
@@ -339,6 +365,14 @@ struct NativeStatus {
     upscaler_ready: bool,
     log_path: String,
     data_dir: String,
+    settings: NativePrefs,
+    cf_running: bool,
+    cf_connections: Option<u32>,
+    cf_error: String,
+    cf_token_present: bool,
+    cf_binary_ready: bool,
+    lan_addresses: Vec<native_network::LanAddress>,
+    lan_effective: bool,
 }
 
 // uv's Windows venv python.exe can be a redirector: the launcher owns the
@@ -357,11 +391,13 @@ fn trusted_supervisor_status(raw: &Value, parent_pid: Option<u32>,
 
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
-    let (managed, desired, stopping, error, restarts, pid) = {
+    let (managed, desired, stopping, error, restarts, pid, prefs, cf_running, cf_error) = {
         let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
         refresh_child(&mut inner);
         (alive(&mut inner), inner.desired, inner.stopping,
-         inner.last_error.clone(), inner.restarts, inner.child.as_ref().map(Child::id))
+         inner.last_error.clone(), inner.restarts, inner.child.as_ref().map(Child::id),
+         inner.prefs.clone(), inner.tunnel_child.as_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none()),
+         inner.cf_error.clone())
     };
     let spec = normal_spec();
     let raw = spec.as_ref().ok().and_then(supervisor_status);
@@ -413,7 +449,106 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),
         data_dir: spec.map(|s| s.data_dir.to_string_lossy().to_string()).unwrap_or_default(),
+        lan_effective: gateway_ready && raw.as_ref()
+            .and_then(|r| r["lan_access"].as_bool()).unwrap_or(false),
+        cf_token_present: security::read("native-cf-tunnel-token")?.is_some(),
+        cf_binary_ready: native_network::binary_path().is_ok_and(|p| p.is_file()),
+        lan_addresses: if prefs.lan_access { native_network::addresses() } else { Vec::new() },
+        cf_connections: if cf_running { native_network::connections() } else { None },
+        cf_running, cf_error, settings: prefs,
     })
+}
+
+#[tauri::command]
+fn save_native_preferences(
+    state: State<'_, AppState>, incoming: NativePrefs,
+) -> Result<NativePrefs, String> {
+    if !incoming.cf_hostname.is_empty() && !native_prefs::validate_hostname(&incoming.cf_hostname) {
+        return Err("Cloudflare 域名格式无效".into());
+    }
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    if inner.stopping {
+        return Err("服务正在安全停止，请完成后再修改".into());
+    }
+    let running = alive(&mut inner);
+    // LAN listener changes are saved as desired state and applied on the
+    // next graceful service start. NEVER interrupt a GPU/KV/paid image job.
+    if incoming.cf_enabled {
+        if !native_prefs::validate_hostname(&incoming.cf_hostname) {
+            return Err("启用 Tunnel 前需填写独立公网域名".into());
+        }
+        if security::read("native-cf-tunnel-token")?.is_none() {
+            return Err("请先保存 Native 专用 Tunnel Token（不可复用正式版 Token）".into());
+        }
+        if !native_network::binary_path()?.is_file() {
+            return Err("请先安装 Native cloudflared".into());
+        }
+    }
+    native_prefs::save(&incoming)?;
+    let changes_tunnel = incoming.cf_enabled != inner.prefs.cf_enabled
+        || incoming.cf_hostname != inner.prefs.cf_hostname;
+    inner.prefs = incoming.clone();
+    if changes_tunnel {
+        native_network::stop(&mut inner.tunnel_child);
+        inner.cf_error.clear();
+        if incoming.cf_enabled && running {
+            match native_network::spawn(&incoming) {
+                Ok(child) => inner.tunnel_child = Some(child),
+                Err(e) => inner.cf_error = e,
+            }
+            inner.cf_last_retry = Some(Instant::now());
+        }
+    }
+    Ok(incoming)
+}
+
+#[tauri::command]
+fn save_native_tunnel_token(state: State<'_, AppState>, token: String) -> Result<(), String> {
+    let token = token.trim();
+    if token.len() < 80 || token.len() > 8000 ||
+        !token.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b)) {
+        return Err("Tunnel Token 格式无效，请粘贴 Cloudflare 提供的完整 Token".into());
+    }
+    security::store("native-cf-tunnel-token", token)?;
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    if inner.prefs.cf_enabled {
+        native_network::stop(&mut inner.tunnel_child);
+        inner.cf_error.clear();
+        if alive(&mut inner) {
+            match native_network::spawn(&inner.prefs) {
+                Ok(child) => inner.tunnel_child = Some(child),
+                Err(e) => inner.cf_error = e,
+            }
+            inner.cf_last_retry = Some(Instant::now());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn install_native_tunnel() -> Result<String, String> {
+    native_network::provision_binary()
+}
+
+#[tauri::command]
+fn restart_native_tunnel(state: State<'_, AppState>) -> Result<(), String> {
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    if !inner.prefs.cf_enabled || !alive(&mut inner) {
+        return Err("需要先启用 Tunnel 和 Gateway".into());
+    }
+    native_network::stop(&mut inner.tunnel_child);
+    let child = native_network::spawn(&inner.prefs)?;
+    inner.tunnel_child = Some(child);
+    inner.cf_error.clear();
+    inner.cf_last_retry = Some(Instant::now());
+    Ok(())
+}
+
+#[tauri::command]
+fn test_native_tunnel(state: State<'_, AppState>) -> Result<Value, String> {
+    let hostname = state.inner.lock().map_err(|e| e.to_string())?.prefs.cf_hostname.clone();
+    let (http_status, latency_ms, valid) = native_network::probe(&hostname)?;
+    Ok(json!({"http_status":http_status, "latency_ms":latency_ms, "connected":valid}))
 }
 
 #[tauri::command]
@@ -476,7 +611,20 @@ fn watchdog(app: tauri::AppHandle) {
         let retry = {
             let Ok(mut inner) = state.inner.lock() else { return };
             refresh_child(&mut inner);
-            if inner.stopping || !inner.desired || alive(&mut inner) { false }
+            if inner.prefs.cf_enabled && inner.prefs.watchdog && alive(&mut inner) {
+                let cf_alive = inner.tunnel_child.as_mut()
+                    .is_some_and(|c| c.try_wait().ok().flatten().is_none());
+                if !cf_alive && inner.cf_last_retry.is_none_or(|t| t.elapsed() > Duration::from_secs(15)) {
+                    native_network::stop(&mut inner.tunnel_child);
+                    let prefs = inner.prefs.clone();
+                    match native_network::spawn(&prefs) {
+                        Ok(child) => { inner.tunnel_child = Some(child); inner.cf_error.clear(); },
+                        Err(err) => inner.cf_error = err,
+                    }
+                    inner.cf_last_retry = Some(Instant::now());
+                }
+            }
+            if inner.stopping || !inner.desired || !inner.prefs.watchdog || alive(&mut inner) { false }
             else {
                 let now = Instant::now();
                 while inner.failures.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60)) {
@@ -535,7 +683,7 @@ pub fn self_test() -> i32 {
             key: security::random_api_key()?,
         };
         let log_path = data_dir.join("launcher-supervisor.log");
-        let mut child = spawn_supervisor(&spec, &log_path)?;
+        let mut child = spawn_supervisor(&spec, &log_path, false)?;
         let outcome = (|| -> Result<Value, String> {
             let deadline = Instant::now() + Duration::from_secs(if full { 130 } else { 35 });
             while Instant::now() < deadline {
@@ -605,7 +753,9 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| request_show(app)))
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            start_service, stop_service, get_status, reveal_api_key, open_chat, get_log
+            start_service, stop_service, get_status, reveal_api_key, open_chat, get_log,
+            save_native_preferences, save_native_tunnel_token, install_native_tunnel,
+            restart_native_tunnel, test_native_tunnel
         ])
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", "打开 Native 控制面板", true, None::<&str>)?;
@@ -640,11 +790,13 @@ pub fn run() {
             }
             let handle = app.handle().clone();
             watchdog(handle.clone());
-            thread::spawn(move || {
-                if let Err(err) = start_managed(&handle.state::<AppState>()) {
-                    let _ = handle.emit("manager-error", err);
-                }
-            });
+            if native_prefs::read().unwrap_or_default().auto_start_service || ui_smoke {
+                thread::spawn(move || {
+                    if let Err(err) = start_managed(&handle.state::<AppState>()) {
+                        let _ = handle.emit("manager-error", err);
+                    }
+                });
+            }
             if ui_smoke {
                 let probe_app = app.handle().clone();
                 thread::spawn(move || {

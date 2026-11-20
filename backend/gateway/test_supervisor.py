@@ -31,6 +31,17 @@ def spare_port():
 
 
 class SupervisorTest(unittest.TestCase):
+    def test_lan_binding_only_applies_to_gateway_not_private_engine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = NativeSupervisor(
+                data_dir=directory, upstream_port=15340, gateway_port=15349,
+                api_key="isolated-test-token", lan_access=True)
+            self.assertIn("--lan-access", supervisor._args("gateway"))
+            self.assertNotIn("--lan-access", supervisor._args("official"))
+            self.assertNotIn("--lan-access", supervisor._args("image-worker"))
+            supervisor.lan_access = False
+            self.assertNotIn("--lan-access", supervisor._args("gateway"))
+
     def test_crashed_official_restart_waits_for_image_gpu_lease(self):
         """Never load a crashed text engine into an ongoing Qwen/4x turn."""
         class FakeChild:

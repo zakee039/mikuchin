@@ -10,6 +10,11 @@ type Metrics = {
   requests?: Array<Record<string, number>>;
   conversation_cache?: {requests?: number; requests_reused?: number};
 };
+type NativePrefs = {
+  autostart: boolean; auto_start_service: boolean; watchdog: boolean;
+  lan_access: boolean; cf_enabled: boolean; cf_hostname: string;
+};
+type LanAddress = {address: string; interface: string; description: string};
 type Status = {
   phase: string; desired: boolean; managed: boolean; stopping: boolean;
   error: string; restarts: number; gateway_port: number; official_port: number;
@@ -21,6 +26,9 @@ type Status = {
   gpu_busy: boolean; gpu_phase: string; image_jobs_running: number;
   image_jobs_phase: string; image_worker_ready: boolean; upscaler_ready: boolean;
   log_path: string; data_dir: string;
+  settings: NativePrefs; cf_running: boolean; cf_connections: number | null;
+  cf_error: string; cf_token_present: boolean; cf_binary_ready: boolean;
+  lan_addresses: LanAddress[]; lan_effective: boolean;
 };
 type Tab = "overview" | "api" | "settings" | "native";
 const root = document.getElementById("app")!;
@@ -44,6 +52,8 @@ let polling = false;
 let notice = "Native 开发版 · 独立端口 15249";
 let avatarCount = 0;
 let lastAvatar = 0;
+let cfHostnameDraft: string | null = null;
+let cfTokenDraft = "";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
@@ -68,6 +78,8 @@ function metric(title: string, value: string, unit = "") {
 }
 function overview(): string {
   const s = status;
+  const tunnelOn = Boolean(s?.settings?.cf_enabled);
+  const tunnelConnected = tunnelOn && Boolean(s?.cf_running && (s.cf_connections || 0) > 0);
   const m = s?.metrics;
   const live = m?.live || {};
   const last = m?.requests?.[0];
@@ -108,9 +120,10 @@ function overview(): string {
         <div class="mini-sub">${seen ? `${reused} / ${seen} 次命中` : "暂无请求记录"}</div>
       </div>
       <div class="tunnel-monitor half-card">
-        <div class="tunnel-monitor-head"><b>CF Tunnel</b><span class="cf-indicator off"><i></i>未接入</span></div>
-        <div class="tunnel-monitor-latency"><span>—</span><small>ms / 待迁移</small></div>
-        <div class="mini-sub native-mini">当前 Native 仅监听本机</div>
+        <div class="tunnel-monitor-head"><b>CF Tunnel</b>
+          <span class="cf-indicator ${tunnelConnected ? "on" : tunnelOn ? "pending" : "off"}"><i></i>${tunnelConnected ? "已连接" : tunnelOn ? "连接中" : "未启用"}</span></div>
+        <div class="tunnel-monitor-latency"><span>${tunnelOn ? (s?.cf_connections ?? "—") : "—"}</span><small>条连接</small></div>
+        <div class="mini-sub native-mini">${s?.settings?.lan_access ? "局域网连接已启用" : "仅监听本机"}</div>
       </div>
     </div>
     <div class="overview-actions">
@@ -121,30 +134,51 @@ function overview(): string {
 }
 function apiPage(): string {
   const s = status;
+  const settings = s?.settings;
+  const cfOn = Boolean(settings?.cf_enabled);
+  const cfActive = cfOn && s?.cf_running && (s.cf_connections || 0) > 0;
+  const cfState = !cfOn ? "未启用" : cfActive ? "已连接" : s?.cf_running ? "连接中" : "未连接";
+  const lanEntries = s?.lan_effective ? (s?.lan_addresses || []).map(item =>
+    `<div class="lan-address-entry"><span class="lan-address-name"><strong>${esc(item.interface)}</strong></span>
+      <a class="lan-chat-link" href="http://${esc(item.address)}:${s?.gateway_port || 15249}/" target="_blank" rel="noopener noreferrer">http://${esc(item.address)}:${s?.gateway_port || 15249}</a></div>`).join("") : "";
   return `<section class="api-compact">
     <div class="setting-card api-panel">
-      <h3>本地 API</h3>
-      <div class="native-line"><label>Gateway</label><input class="field native-readonly" readonly value="127.0.0.1:${s?.gateway_port || 15249}"></div>
-      <div class="native-line"><label>API Key</label><div class="native-buttons">
-        <input class="field native-readonly" value="••••••••••••••••" type="text" readonly aria-label="已隐藏 API Key">
-        <button class="outline-small" data-action="copy-key">复制</button></div></div>
-      <div class="native-line"><label>引擎内部端口</label><input class="field native-readonly" readonly value="127.0.0.1:${s?.official_port || 15240}"></div>
+      <div class="api-line"><strong>端口</strong><input class="field port-field native-readonly" readonly value="${s?.gateway_port || 15249}"><span class="native-inline-note">Native Gateway</span></div>
+      <div class="api-line"><strong>API Key</strong><input class="field key-display native-readonly" type="text" readonly value="••••••••••••" aria-label="API Key 已隐藏"><button class="outline-small" data-action="copy-key">复制</button></div>
+      <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong>
+        <label class="lan-toggle" title="更改监听范围后须安全重启服务，现有任务不会被中断">
+          <input type="checkbox" data-setting="lan_access" ${settings?.lan_access ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label></div>
+      <div class="lan-chat-slot">${lanEntries}
+        ${s?.managed && Boolean(settings?.lan_access) !== Boolean(s?.lan_effective)
+          ? '<span class="lan-chat-pending">监听变更已保存，安全重启服务后生效</span>' : ""}</div>
     </div>
-    <div class="setting-card">
-      <h3>从其它设备访问 <span class="native-coming-soon">待接入</span></h3>
-      <div class="toggle-row native-disabled"><b>局域网 HTTP</b><input type="checkbox" disabled><span class="switch"></span></div>
-      <div class="toggle-row native-disabled"><b>Cloudflare Tunnel</b><input type="checkbox" disabled><span class="switch"></span></div>
+    <div class="setting-card tunnel-panel">
+      <div class="tunnel-heading"><strong>Cloudflare Tunnel</strong>
+        <span class="cf-indicator ${cfActive ? "on" : cfOn ? "pending" : "off"}"><i></i>${cfState}</span>
+        <label class="lan-toggle" title="启用独立 Native Tunnel"><input type="checkbox" data-setting="cf_enabled" ${cfOn ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label>
+      </div>
+      <div class="api-line"><label for="cf-hostname">域名</label><input id="cf-hostname" class="field" spellcheck="false" placeholder="native.example.com" value="${esc(cfHostnameDraft ?? settings?.cf_hostname ?? "")}"></div>
+      <div class="api-line"><label for="cf-token">Token</label><input id="cf-token" class="field" type="password" autocomplete="off" placeholder="${s?.cf_token_present ? "已安全保存 · 留空不修改" : "粘贴独立 Tunnel Token"}" value="${esc(cfTokenDraft)}"></div>
+      <div class="tunnel-actions">
+        <span class="tunnel-meta"><span data-cf-latency>${s?.cf_connections ?? "—"} 条连接</span>
+          <span data-cf-message>${esc(s?.cf_error || "")}</span></span>
+        <button class="primary-small" data-action="save-tunnel" ${busy ? "disabled" : ""}>保存</button>
+        <button class="outline-small" data-action="install-tunnel" ${busy || s?.cf_binary_ready ? "disabled" : ""}>${s?.cf_binary_ready ? "已安装" : "安装"}</button>
+        <button class="outline-small" data-action="test-tunnel" ${busy ? "disabled" : ""}>测试</button>
+        <button class="outline-small" data-action="restart-tunnel" ${busy || !cfOn ? "disabled" : ""}>重启</button>
+      </div>
     </div>
   </section>`;
 }
 function settingsPage(): string {
+  const prefs = status?.settings;
+  const toggle = (key: keyof Pick<NativePrefs,"autostart"|"auto_start_service"|"watchdog">, name: string) =>
+    `<label class="toggle-row"><b>${name}</b><input type="checkbox" data-setting="${key}" ${prefs?.[key] ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label>`;
   return `<section class="setting-page compact-settings native-settings">
     <div class="setting-card"><h3>启动与守护</h3>
-      <label class="toggle-row native-disabled"><b>启动器启动后自动拉起服务</b><input type="checkbox" checked disabled><span class="switch"></span></label>
-      <label class="toggle-row native-disabled"><b>服务异常自动恢复</b><input type="checkbox" checked disabled><span class="switch"></span></label>
-    </div>
-    <div class="setting-card"><h3>独立数据目录</h3>
-      <div class="native-hint" style="overflow-wrap:anywhere">${esc(status?.data_dir || "正在读取")}</div>
+      ${toggle("autostart","开机自启")}
+      ${toggle("auto_start_service","启动器启动后自动拉起服务")}
+      ${toggle("watchdog","服务异常自动恢复")}
     </div>
   </section>`;
 }
@@ -187,9 +221,12 @@ function renderBody() {
   if (!el) return;
   const savedScroll = el.scrollTop;
   const page = {overview, api: apiPage, settings: settingsPage, native: nativePage}[tab]();
-  // Keep the scroll container itself. Polling once discarded the entire
-  // document every two seconds, forcing the viewport back to the top.
-  if (el.innerHTML !== page) el.innerHTML = page;
+  // Polling must never destroy focused form inputs while someone enters a
+  // Tunnel domain/secret. The latest status is displayed after focus leaves.
+  const active = document.activeElement;
+  const editing = active instanceof HTMLInputElement && el.contains(active)
+    && !active.readOnly && active.type !== "checkbox";
+  if (!editing && el.innerHTML !== page) el.innerHTML = page;
   el.scrollTop = savedScroll;
   const phase = document.getElementById("phase");
   if (phase) phase.innerHTML = badge();
@@ -281,6 +318,80 @@ function showPortrait() {
   image.style.cssText = "max-width:100%;max-height:65vh;object-fit:contain;display:block;margin:auto";
   pre.replaceWith(image);
 }
+
+async function updatePrefs(updates: Partial<NativePrefs>, success: string) {
+  if (busy || !status?.settings) return;
+  busy = true;
+  try {
+    const incoming = {...status.settings, ...updates};
+    const saved = await invoke<NativePrefs>("save_native_preferences", {incoming});
+    status.settings = saved;
+    mark(success);
+  } catch (error) {
+    mark("设置失败：" + String(error));
+  } finally {
+    busy = false;
+    await poll();
+  }
+}
+async function saveTunnelForm() {
+  if (busy || !status?.settings) return;
+  busy = true;
+  try {
+    const hostname = (cfHostnameDraft ?? status.settings.cf_hostname).trim();
+    if (!/^[a-z0-9.-]+$/i.test(hostname) || hostname.length > 253) {
+      throw new Error("请填写正确的 Tunnel 域名");
+    }
+    if (cfTokenDraft.trim()) {
+      await invoke("save_native_tunnel_token", {token: cfTokenDraft.trim()});
+    }
+    const saved = await invoke<NativePrefs>("save_native_preferences",
+      {incoming: {...status.settings, cf_hostname: hostname}});
+    status.settings = saved;
+    cfHostnameDraft = null;
+    cfTokenDraft = "";
+    mark("Tunnel 配置已保存；源站请指向 http://127.0.0.1:15249");
+  } catch (error) {
+    mark("保存 Tunnel 失败：" + String(error));
+  } finally {
+    busy = false;
+    await poll();
+  }
+}
+async function tunnelAction(action: "install_native_tunnel"|"test_native_tunnel"|"restart_native_tunnel") {
+  if (busy) return;
+  busy = true;
+  try {
+    const result = await invoke<unknown>(action);
+    if (action === "test_native_tunnel") {
+      const test = result as {http_status: number; latency_ms: number; connected: boolean};
+      mark(test.connected ? `Tunnel 已连接：${test.latency_ms} ms` :
+        `Tunnel 尚未接入 Native Gateway（HTTP ${test.http_status}）`);
+    } else {
+      mark(action === "install_native_tunnel" ? "Native cloudflared 已安装" : "Tunnel 重启指令已发送");
+    }
+  } catch (error) {
+    mark("Tunnel 操作失败：" + String(error));
+  } finally {
+    busy = false;
+    await poll();
+  }
+}
+
+root.addEventListener("input", event => {
+  const input = event.target as HTMLInputElement;
+  if (input.id === "cf-hostname") cfHostnameDraft = input.value;
+  if (input.id === "cf-token") cfTokenDraft = input.value;
+});
+root.addEventListener("change", event => {
+  const input = event.target as HTMLInputElement;
+  const key = input.dataset.setting;
+  if (!key || input.type !== "checkbox") return;
+  if (key === "lan_access" || key === "cf_enabled" ||
+      key === "autostart" || key === "auto_start_service" || key === "watchdog") {
+    void updatePrefs({[key]: input.checked}, "设置已保存");
+  }
+});
 root.addEventListener("click", event => {
   const element = (event.target as HTMLElement).closest<HTMLElement>("[data-tab], [data-action], #header-log, #avatar-trigger");
   if (!element) return;
@@ -305,6 +416,10 @@ root.addEventListener("click", event => {
   if (action === "copy-key") void copyKey();
   else if (action === "open-chat") void task("open_chat", "已打开 Chat 页面");
   else if (action === "show-log") void showLogs();
+  else if (action === "save-tunnel") void saveTunnelForm();
+  else if (action === "install-tunnel") void tunnelAction("install_native_tunnel");
+  else if (action === "test-tunnel") void tunnelAction("test_native_tunnel");
+  else if (action === "restart-tunnel") void tunnelAction("restart_native_tunnel");
   else if (action === "toggle") void task(status?.managed ? "stop_service" : "start_service",
     status?.managed ? "已发送安全停止指令" : "已请求启动 Native 服务");
   else if (action === "start") void task("start_service", "已请求启动 Native 服务");

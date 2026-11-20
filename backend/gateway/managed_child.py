@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--gateway-port", type=int, default=15249)
     parser.add_argument("--upstream-port", type=int, default=15240)
+    parser.add_argument("--lan-access", action="store_true")
     args = parser.parse_args()
 
     if args.role == "image-worker":
@@ -55,7 +56,8 @@ def main():
     watch_parent(_thread.interrupt_main)
     if args.role == "gateway":
         from . import app
-        sys.argv = ["backend.gateway.app", "--host", "127.0.0.1",
+        sys.argv = ["backend.gateway.app", "--host",
+                    "0.0.0.0" if args.lan_access else "127.0.0.1",
                     "--port", str(args.gateway_port), "--upstream-port", str(args.upstream_port)]
         app.main()
         return

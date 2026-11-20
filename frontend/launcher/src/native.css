@@ -41,6 +41,14 @@
 .native-line .native-buttons button{white-space:nowrap}
 .native-disabled .switch{opacity:.4}
 .native-coming-soon{float:right;color:#8a9e9f;font-size:10px;font-weight:500}
+.api-compact .native-inline-note{flex:1;min-width:0;text-align:right;color:#88a19f;font-size:10px;white-space:nowrap}
+.api-compact .tunnel-panel .tunnel-heading{gap:9px}
+.api-compact .tunnel-panel .tunnel-heading .cf-indicator{margin-left:auto}
+.api-compact .tunnel-panel .lan-toggle{flex:0 0 38px}
+.api-compact .tunnel-actions{flex-wrap:wrap;gap:6px;padding:7px 0}
+.api-compact .tunnel-actions .tunnel-meta{flex:1 1 82px}
+.api-compact .tunnel-actions button{padding:7px 8px}
+.api-compact input:disabled+.switch{opacity:.43;cursor:not-allowed}
 .native-settings .setting-card{margin-bottom:10px}
 .native-log-dialog .modal{height:min(520px,82vh)}
 .native-log-dialog pre{font-size:10px;line-height:1.6;color:#cfebdf;background:#183034;white-space:pre-wrap;word-break:break-all}
