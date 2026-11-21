@@ -227,6 +227,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._json(200 if reachable else 503, {
                 "status": "ok" if reachable else "degraded",
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
+                "official_polystrata_release": "v0.1.45-poly.10",
                 "model": str(upstream_health.get("model") or "official-polystrata")[:180],
                 # None is intentional when the upstream lacks a loaded flag:
                 # never misreport an unknown model as idle-unloaded.
@@ -777,7 +778,7 @@ def main():
     parser = argparse.ArgumentParser(description="Native PolyStrata Mikuchin development gateway")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=15249,
-                        help="Isolated development port; production is planned for 15239")
+                        help="Default isolated dev port; the promoted Tauri main binds 15239")
     parser.add_argument("--upstream-port", type=int, default=15240)
     args = parser.parse_args()
     gateway_key = os.environ.get("MIKUCHIN_GATEWAY_API_KEY", "")

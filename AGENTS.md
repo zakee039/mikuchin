@@ -1,5 +1,21 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 Native main 正式迁移（当前最高优先级）
+
+用户明确选择**源码主分支切换**：原始 main 的最后提交 `5dde9ac` 与旧版端口改动 `79f9332` 均保存在 `old-mixed`（原始工作树 `E:\LLM\deploy\mikuchin`），新 Native 工作树 `E:\LLM\deploy\mikuchin-native` 作为 **main**。下面历史文档里“Native 不能使用 main/15239、独立 Key/CF Token 不能迁移”只针对切换前开发隔离，现被用户新决定覆盖。
+
+- **新版 main**：Native Gateway 外部端口 **15239**，官方 PolyStrata 始终只在 **127.0.0.1:15240**；原版 **old-mixed** 默认端口 **25239**，其 Cloudflare 连接器和开机自启已禁用。
+- 原 `key.zakee.fun` 命名 Cloudflare Token 的 **DPAPI 加密字节**与原旧版 API Key 的**加密字节**按用户正式迁移目标复制到 Native 的独立状态目录，并保留切换前备份。只允许新版 Cloudflare Connector 服务该域名，防止两条连接器重叠；凭据永远不进入 Git 或日志。
+- `main`、Launcher、Android 版本统一 **v0.4.0**（Android versionCode 400）；**官方 PolyStrata 仍固定 `v0.1.45-poly.10`、子模块 SHA `3e1642161198c50ff1abed4046f4e4f476099dbb`，不得改动其源码或指针**。
+- 已迁移角色卡 2、11 会话、87 旧画廊 PNG + Native 原5 => 总92、旧 miku 世界书4文件；源数据库/文件只读，独立 SQLite 与加密设置备份：`E:\LLM\deploy\mikuchin-native-runtime\migration-backups\old-mixed-20261121`。不自动重播付费任务或旧 KV 快照。
+- 复刻旧版精心设计的 440×650 Tauri 布局：总览选择/查看配置、API Key 明文复制与更换、CFTunnel 域名/Token/安装/测试/重启、设置三卡（启动与守护/全局语言/空闲卸载分钟），原生状态第四标签单独展示新增监控。不要在设置页重新放“模型 JSON 路径”或解释性长段。
+- **本机真实**公网 `https://key.zakee.fun/v1/strata/sessions` 使用旧 Key 可返回迁移后的11会话；但 Android 真机安装升级及跨机器完整运行时还需单独验证。
+- Windows NSIS 当前**仅包含 Launcher**，不内置 Python/CUDA/模型/服务端，不能宣称完整可搬迁正式安装包；Android v0.4.0 同包名升级候选已经用原证书签名核验，但没有真机验证。在用户明确允许正式发布前**不创建/覆盖 GitHub Tag 或 Release**。
+- 详细实测与回滚步骤见 `docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md`。今后代码修改按新版 main 的安全停机/任务/显存门槛执行，不重启 old-mixed 回到15239。
+
+---
+
+
 ## Native PolyStrata 重构分支（优先级高于下方旧版发布规则）
 
 当前目录 `E:\LLM\deploy\mikuchin-native` 对应 `refactor/official-polystrata-gateway`，是从正式 `v0.3.0` 基线创建的独立 Git Worktree。原始 `E:\LLM\deploy\mikuchin` 和其正在运行的 15239 后端**绝对不得被本分支的开发脚本、重启或清理操作影响**。

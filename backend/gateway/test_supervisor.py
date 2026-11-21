@@ -69,10 +69,20 @@ class SupervisorTest(unittest.TestCase):
                 try:
                     with gpu_turn(directory, exclusive=True):
                         thread.start()
-                        time.sleep(1.2)
+                        deadline = time.monotonic() + 5
+                        state = {}
+                        while time.monotonic() < deadline:
+                            status_file = Path(directory) / "supervisor-status.json"
+                            if status_file.exists():
+                                try:
+                                    state = json.loads(status_file.read_text("utf-8"))
+                                except (OSError, json.JSONDecodeError):
+                                    state = {}
+                                if state.get("phase") == "waiting-for-gpu":
+                                    break
+                            time.sleep(.1)
                         self.assertEqual(started, [])
-                        state = json.loads((Path(directory) / "supervisor-status.json").read_text())
-                        self.assertEqual(state["phase"], "waiting-for-gpu")
+                        self.assertEqual(state.get("phase"), "waiting-for-gpu")
                     thread.join(timeout=5)
                     self.assertFalse(thread.is_alive())
                     self.assertEqual(started, ["official"])
@@ -83,8 +93,8 @@ class SupervisorTest(unittest.TestCase):
 
     def test_rejects_stable_port_and_stable_data(self):
         with tempfile.TemporaryDirectory() as d:
-            for port in (15239,):
-                with self.assertRaisesRegex(ValueError,"15239"):
+            for port in (25239,):
+                with self.assertRaisesRegex(ValueError,"25239"):
                     NativeSupervisor(data_dir=d,gateway_port=port,api_key="isolated-test-token")
             with self.assertRaisesRegex(ValueError,"stable Mikuchin"):
                 NativeSupervisor(data_dir=ROOT.parent/"mikuchin"/"chat",api_key="isolated-test-token")

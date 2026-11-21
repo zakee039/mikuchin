@@ -59,7 +59,7 @@ test("Native LAN, Tunnel and startup actions map to real commands", () => {
   assert.match(source, /data-action="copy-key"/);
   assert.match(source, /data-action="open-chat"/);
   assert.match(source, /data-setting="lan_access"/);
-  assert.match(source, /data-setting="cf_enabled"/);
+  assert.match(source, /data-action="install-tunnel"/);
   assert.match(source, /toggle\("autostart"/);
   assert.match(source, /toggle\("auto_start_service"/);
   assert.match(source, /toggle\("watchdog"/);
@@ -113,13 +113,13 @@ test("overview manually unloads and loads models without calling service stop la
 });
 
 test("Native model registration and idle timeout are wired to isolated real commands", () => {
-  assert.match(source,/id="native-model-select"/);
-  assert.match(source,/id="native-idle-seconds"/);
-  assert.match(source,/id="native-import-path"/);
+  assert.match(source,/data-action="choose-config"/);
+  assert.match(source,/data-action="view-config"/);
+  assert.match(source,/data-import-config/);
   assert.match(source,/register_native_model_config/);
-  assert.match(source,/idle_unload_s:Number\(input.value\)/);
-  assert.match(source,/model_config:input.value/);
-  assert.match(source,/下次手动/);
+  assert.match(source,/saveIdleTimeout\(/);
+  assert.match(source,/model_config:file/);
+  assert.match(source,/id="idle-minutes"/);
   assert.match(rust,/fn effective_config\(/);
   assert.match(rust,/value\["idle_unload_s"\] = json!\(timeout\)/);
   assert.match(rust,/fn list_native_model_configs\(/);

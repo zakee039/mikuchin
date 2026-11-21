@@ -3,6 +3,7 @@ name: Native PolyStrata Gateway contracts
 on:
   push:
     branches:
+      - main
       - refactor/official-polystrata-gateway
   pull_request:
     paths:
@@ -12,7 +13,7 @@ on:
       - 'frontend/launcher/src/**'
       - 'frontend/launcher/src-tauri/src/**'
       - 'frontend/launcher/src-tauri/tauri.conf.json'
-      - 'frontend/launcher/tests/native-shell.test.mjs'
+      - 'frontend/launcher/tests/**'
       - '.gitmodules'
       - 'scripts/native-polystrata.ps1'
       - '.github/workflows/native-polystrata-contract.yml'
@@ -40,10 +41,12 @@ jobs:
           git submodule status
       - name: Gateway contract tests (no actual models or paid API calls)
         run: python -m unittest discover -s backend/gateway -v
+      - name: Verify Mikuchin release manifest and synchronized versions
+        run: python scripts/versioning.py check
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Browser frontend contracts (no services started)
         run: node --test frontend/web/tests/*.test.mjs
-      - name: Native compact launcher shell contracts
-        run: node --test frontend/launcher/tests/native-shell.test.mjs
+      - name: All Native launcher and old-mixed UI parity contracts
+        run: node --test frontend/launcher/tests/*.test.mjs

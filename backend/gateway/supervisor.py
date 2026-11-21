@@ -28,7 +28,7 @@ from .gpu_gate import read_state
 
 LOG = logging.getLogger("mikuchin.supervisor")
 ROOT = Path(__file__).resolve().parents[2]
-STABLE_PORT = 15239
+STABLE_PORT = 25239
 
 
 def _is_available(port):
@@ -68,7 +68,7 @@ class NativeSupervisor:
         if not isinstance(gateway_port, int) or not isinstance(upstream_port, int) or \
            not all(1024 <= port <= 65535 for port in (gateway_port, upstream_port)) or \
            gateway_port == upstream_port or STABLE_PORT in (gateway_port, upstream_port):
-            raise ValueError("Use separate unprivileged ports; stable 15239 is reserved")
+            raise ValueError("Use separate unprivileged ports; old-mixed 25239 is reserved")
         self.data_dir = Path(data_dir).expanduser().resolve()
         stable = (ROOT.parent / "mikuchin").resolve()
         if self.data_dir == stable or stable in self.data_dir.parents:

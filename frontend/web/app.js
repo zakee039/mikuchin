@@ -431,7 +431,7 @@ function renderAbout(eng, hw, st) {
     ["Desktop launcher version", `v${v.launcher}`],
     ["Android client version", `v${v.android}`],
     ["Model", eng.model],
-    ["Engine", eng.version ? `PolyStrata v${eng.version}` : "PolyStrata (built from source)"],
+    ["Engine", health?.component === "mikuchin-gateway" && health?.official_polystrata_release ? `PolyStrata ${health.official_polystrata_release}` : (eng.version ? `PolyStrata v${eng.version}` : "PolyStrata (built from source)")],
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens` : null],
     ["KV cache", kv ? `${kv}${eng.kv_resident ? `, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM` : ", all in VRAM"}` : null],
     ["Experts in VRAM", eng.expert_slots ? `${fmt(eng.expert_slots)} (${gb((eng.expert_cache_mib || 0) * 1048576)} GB)` : null],

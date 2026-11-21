@@ -23,9 +23,9 @@ use crate::{security, native_prefs::{self, NativePrefs}, native_network};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-const GATEWAY_PORT: u16 = 15249;
+const GATEWAY_PORT: u16 = 15239;
 const OFFICIAL_PORT: u16 = 15240;
-const STABLE_PORT: u16 = 15239;
+const STABLE_PORT: u16 = 25239;
 
 pub(crate) fn state_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
@@ -109,7 +109,7 @@ fn validate_spec(spec: &LaunchSpec) -> Result<(), String> {
     if spec.gateway_port == STABLE_PORT || spec.official_port == STABLE_PORT
         || spec.gateway_port == spec.official_port
         || spec.gateway_port < 1024 || spec.official_port < 1024 {
-        return Err("Invalid native ports (stable port 15239 is reserved)".into());
+        return Err("Invalid native ports (old-mixed port 25239 is reserved)".into());
     }
     if !spec.root.join("backend/gateway/supervisor.py").is_file() {
         return Err("Native supervisor is missing".into());
@@ -249,6 +249,91 @@ fn local_http(port: u16, path: &str, key: Option<&str>) -> Result<(u16, Vec<u8>)
     let code = first.split_whitespace().nth(1).ok_or("Missing HTTP status")?
         .parse::<u16>().map_err(|e| e.to_string())?;
     Ok((code, raw[split + 4..].to_vec()))
+}
+
+fn local_json_post(port: u16, path: &str, key: &str, value: &Value)
+    -> Result<(u16, Vec<u8>), String> {
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(850))
+        .map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_millis(2000))).map_err(|e| e.to_string())?;
+    let data = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        data.len());
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(&data).map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    stream.take(64 * 1024).read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let split = raw.windows(4).position(|p| p == b"\r\n\r\n")
+        .ok_or("Incomplete local API headers")?;
+    let code = String::from_utf8_lossy(&raw[..split]).split_whitespace()
+        .nth(1).ok_or("Missing HTTP status")?.parse::<u16>()
+        .map_err(|e| e.to_string())?;
+    Ok((code, raw[split+4..].to_vec()))
+}
+
+#[derive(Serialize, serde::Deserialize)]
+struct NativeLanguagePref {
+    language: String,
+    pending: bool,
+}
+fn language_file() -> PathBuf { state_dir().join("ui-language.json") }
+fn is_language(lang: &str) -> bool { matches!(lang, "zh-CN" | "en-US" | "ja-JP") }
+fn stored_language() -> Option<NativeLanguagePref> {
+    serde_json::from_slice(&fs::read(language_file()).ok()?).ok()
+}
+fn persist_language(language: &str, pending: bool) -> Result<(), String> {
+    fs::create_dir_all(state_dir()).map_err(|e| e.to_string())?;
+    let data = serde_json::to_vec(&NativeLanguagePref {
+        language: language.to_owned(), pending,
+    }).map_err(|e| e.to_string())?;
+    let path = language_file();
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, data).map_err(|e| e.to_string())?;
+    native_prefs::replace_file(&temp, &path)
+}
+fn push_language(language: &str) -> Result<(), String> {
+    let spec = normal_spec()?;
+    let (status, _) = local_json_post(spec.gateway_port,
+        "/v1/mikuchin/ui-language", &spec.key, &json!({"language":language}))?;
+    if status != 200 { return Err(format!("Native language rejected: HTTP {status}")); }
+    Ok(())
+}
+fn sync_pending_language() {
+    if let Some(pref) = stored_language() {
+        if pref.pending && is_language(&pref.language) && push_language(&pref.language).is_ok() {
+            let _ = persist_language(&pref.language, false);
+        }
+    }
+}
+#[tauri::command]
+fn get_native_language() -> Result<String, String> {
+    if let Some(pref) = stored_language() {
+        if pref.pending && is_language(&pref.language) { return Ok(pref.language); }
+    }
+    if let Ok(spec) = normal_spec() {
+        if let Ok((200, body)) = local_http(spec.gateway_port,
+            "/v1/mikuchin/ui-language", Some(&spec.key)) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                if let Some(language) = value["language"].as_str() {
+                    if is_language(language) {
+                        let _ = persist_language(language, false);
+                        return Ok(language.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(stored_language().filter(|v| is_language(&v.language))
+        .map(|v| v.language).unwrap_or_else(|| "zh-CN".into()))
+}
+#[tauri::command]
+fn set_native_language(language: String) -> Result<String, String> {
+    if !is_language(&language) { return Err("不支持的全局语言".into()); }
+    persist_language(&language, true)?;
+    if push_language(&language).is_ok() { persist_language(&language, false)?; }
+    Ok(language)
 }
 
 fn health(spec: &LaunchSpec) -> Option<Value> {
@@ -431,6 +516,7 @@ struct NativeStatus {
     api_key_present: bool,
     model: String,
     config_name: String,
+    model_context: u64,
     available_configs: Vec<NativeModelConfig>,
     metrics: Option<Value>,
     request_monitor: Option<Value>,
@@ -462,6 +548,51 @@ struct NativeStatus {
 struct NativeModelConfig {
     file: String,
     name: String,
+    model: String,
+    context: Option<u64>,
+    quantization: String,
+    kv_type: String,
+    tokenizer: String,
+    vision_projector: String,
+    draft_model: String,
+    vram_reserve_mib: Option<u64>,
+    idle_unload_s: Option<u64>,
+    conversation_cache_mib: Option<String>,
+    engine: String,
+    path: String,
+}
+
+fn describe_model_config(file: String, path: &Path, value: &Value) -> NativeModelConfig {
+    let args = value["args"].as_array();
+    let arg_value = |switch: &str| -> Option<String> {
+        args?.windows(2).find_map(|pair| {
+            (pair[0].as_str() == Some(switch)).then(|| pair[1].as_str())
+                .flatten().map(str::to_owned)
+        })
+    };
+    let model = value["model_name"].as_str().or_else(|| value["display_name"].as_str())
+        .unwrap_or(&file).to_string();
+    let context = arg_value("--max-context").or_else(|| arg_value("--ctx-size"))
+        .and_then(|raw| raw.parse::<u64>().ok());
+    let model_hint = format!("{} {}", model, arg_value("--model").unwrap_or_default())
+        .to_ascii_uppercase();
+    let quantization = ["Q4_K_M","Q5_K_M","Q6_K","Q8_0","IQ3_XXS","Q2_K","Q4_0"]
+        .iter().find(|tag| model_hint.contains(*tag))
+        .map(|x| (*x).to_string()).unwrap_or_default();
+    NativeModelConfig {
+        name: value["display_name"].as_str().unwrap_or(&file).to_string(),
+        file, model, context, quantization,
+        kv_type: arg_value("--kv").unwrap_or_default(),
+        tokenizer: value["tokenizer"].as_str().unwrap_or_default().to_owned(),
+        vision_projector: arg_value("--mmproj").or_else(|| arg_value("--vision-projector"))
+            .unwrap_or_default(),
+        draft_model: arg_value("--draft-model").unwrap_or_default(),
+        vram_reserve_mib: arg_value("--vram-reserve-mib").and_then(|v| v.parse().ok()),
+        idle_unload_s: value["idle_unload_s"].as_u64(),
+        conversation_cache_mib: arg_value("--conversation-cache-mib"),
+        engine: "PolyStrata v0.1.45-poly.10".into(),
+        path: path.to_string_lossy().to_string(),
+    }
 }
 
 fn list_native_model_configs() -> Result<Vec<NativeModelConfig>, String> {
@@ -479,8 +610,7 @@ fn list_native_model_configs() -> Result<Vec<NativeModelConfig>, String> {
         let json_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
         let Ok(value) = serde_json::from_slice::<Value>(json_bytes) else { continue; };
         if !value["exe"].is_string() || !value["args"].is_array() { continue; }
-        let name = value["display_name"].as_str().unwrap_or(&file).to_owned();
-        choices.push(NativeModelConfig { file, name });
+        choices.push(describe_model_config(file, &entry.path(), &value));
     }
     choices.sort_by(|a,b| a.file.cmp(&b.file));
     Ok(choices)
@@ -518,10 +648,7 @@ fn register_native_model_config(path: String) -> Result<NativeModelConfig, Strin
                     let _ = fs::remove_file(&dest);
                     return Err(error.to_string());
                 }
-                return Ok(NativeModelConfig {
-                    file,
-                    name: value["display_name"].as_str().unwrap_or("已导入模型").to_owned(),
-                });
+                return Ok(describe_model_config(file, &dest, &value));
             },
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.to_string()),
@@ -577,6 +704,7 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let raw = spec.as_ref().ok().and_then(supervisor_status);
     let health_value = if managed { spec.as_ref().ok().and_then(health) } else {None};
     let gateway_ready = health_value.is_some();
+    if gateway_ready { sync_pending_language(); }
     let model_loaded = health_value.as_ref()
         .and_then(|h| h["official_model_loaded"].as_bool());
     let metrics = if gateway_ready { spec.as_ref().ok().and_then(gateway_metrics) } else { None };
@@ -620,7 +748,9 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         phase: phase.into(), desired, managed, stopping, error, restarts,
         gateway_port: GATEWAY_PORT, official_port: OFFICIAL_PORT,
         gateway_ready, model_loaded, api_key_present: security::read("api-key")?.is_some(),
-        model, config_name: spec.as_ref().ok().and_then(|s| s.config.as_ref())
+        model, model_context: health_value.as_ref()
+            .and_then(|h| h["max_context"].as_u64()).unwrap_or(0),
+        config_name: spec.as_ref().ok().and_then(|s| s.config.as_ref())
             .and_then(|p| p.file_name()).map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "未配置".into()),
         available_configs: list_native_model_configs().unwrap_or_default(),
@@ -964,7 +1094,8 @@ pub fn run() {
             start_service, stop_service, get_status, reveal_api_key, open_chat, get_log,
             register_native_model_config, rotate_native_api_key,
             save_native_preferences, save_native_tunnel_token, install_native_tunnel,
-            restart_native_tunnel, test_native_tunnel
+            restart_native_tunnel, test_native_tunnel,
+            get_native_language, set_native_language
         ])
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", "打开 Native 控制面板", true, None::<&str>)?;
@@ -1092,7 +1223,7 @@ mod tests {
         assert!(!trusted_supervisor_status(&actual_supervisor, Some(2222), true, false));
         assert!(!trusted_supervisor_status(&actual_supervisor, Some(2222), false, true));
         let unrelated = json!({"supervisor_pid": 3333,
-            "gateway_port": 15239, "official_port": OFFICIAL_PORT});
+            "gateway_port": 25239, "official_port": OFFICIAL_PORT});
         assert!(!trusted_supervisor_status(&unrelated, Some(3333), true, true));
     }
 
@@ -1104,10 +1235,10 @@ mod tests {
             engine: "mock", gateway_port: STABLE_PORT, official_port: OFFICIAL_PORT,
             key: "a".repeat(32),
         };
-        assert!(validate_spec(&spec).unwrap_err().contains("15239"));
+        assert!(validate_spec(&spec).unwrap_err().contains("25239"));
         spec.gateway_port = GATEWAY_PORT;
         spec.official_port = STABLE_PORT;
-        assert!(validate_spec(&spec).unwrap_err().contains("15239"));
+        assert!(validate_spec(&spec).unwrap_err().contains("25239"));
     }
 
     #[test]

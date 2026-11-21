@@ -6,9 +6,9 @@
 
 **Self-hosted Multimodal AI Companion & Image Studio**
 
-**Main app v0.3.1** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.3.1)
+**Main app v0.4.0** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.4.0)
 
-**Independent versions:** main app `0.3.1` · Windows launcher `0.3.0` · Android client `0.3.0` (versionCode 300). Only the main application was updated this release; the launcher and Android client retain their existing binaries. They remain independently versioned for future changes.
+**Independent versions:** main app `0.4.0` · Windows launcher `0.4.0` · Android client `0.4.0` (versionCode 400). All three artifacts were rebuilt for this release; see the release manifest. They remain independently versioned for future changes.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -80,7 +80,7 @@ Inference, conversations and generated images remain on your Mikuchin host. Othe
 - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration), without requiring root access or the official Tailscale app.
 - **Credential and local transport protection**: API keys are encrypted with **Android Keystore (`AES/GCM/NoPadding`)**. Native checks, SSE chat streams and uploads use an internal localhost-only (`127.0.0.1`) reverse proxy guarded by per-session random tokens.
 
-**Upgrade note:** v0.3.0 is release-signed. An APK signed with the same certificate can generally update in place; Debug-signed builds might require uninstalling first. Back up app-local settings before doing so.
+**Upgrade note:** v0.4.0 is release-signed. An APK signed with the same certificate can generally update in place; Debug-signed builds might require uninstalling first. Back up app-local settings before doing so.
 
 #### 7.3 Apple device access (iPhone / iPad / Mac)
 

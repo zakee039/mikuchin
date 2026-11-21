@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import {getLocale, setLocale, translateDom, observeLocale, tr} from "./i18n";
 import "./style.css";
 import "./native.css";
 
@@ -27,7 +29,8 @@ type Status = {
   phase: string; desired: boolean; managed: boolean; stopping: boolean;
   error: string; restarts: number; gateway_port: number; official_port: number;
   gateway_ready: boolean; model_loaded: boolean | null; api_key_present: boolean; model: string; config_name: string;
-  available_configs: Array<{file: string; name: string}>;
+  model_context: number;
+  available_configs: ModelConfig[];
   metrics: Metrics | null; request_monitor: RequestMetrics | null;
   host_gpu: Record<string, number> | null;
   supervisor_pid: number | null; children: Record<string, number>;
@@ -40,6 +43,10 @@ type Status = {
   cf_error: string; cf_token_present: boolean; cf_binary_ready: boolean;
   lan_addresses: LanAddress[]; lan_effective: boolean;
 };
+type ModelConfig = {file:string; name:string; model:string; context:number|null;
+  quantization:string; kv_type:string; tokenizer:string; vision_projector:string;
+  draft_model:string; vram_reserve_mib:number|null; idle_unload_s:number|null;
+  conversation_cache_mib:string|null; engine:string; path:string};
 type Tab = "overview" | "api" | "settings" | "native";
 const root = document.getElementById("app")!;
 const names: Record<Tab, string> = {
@@ -62,12 +69,14 @@ let status: Status | null = null;
 let tab: Tab = "overview";
 let busy = false;
 let polling = false;
-let notice = "Native 开发版 · 独立端口 15249";
+let notice = "本机服务管理 · Windows";
+let keyCache = "";
+let cfLatencyMs: number | null = null;
 let avatarCount = 0;
 let lastAvatar = 0;
 let cfHostnameDraft: string | null = null;
 let cfTokenDraft = "";
-let modelPathDraft = "";
+
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
@@ -92,6 +101,7 @@ function metric(title: string, value: string, unit = "") {
 }
 function overview(): string {
   const s = status;
+  const selected = s?.available_configs?.find(c => c.file === s?.settings?.model_config);
   const tunnelOn = Boolean(s?.settings?.cf_enabled);
   const tunnelConnected = tunnelOn && Boolean(s?.cf_running && (s.cf_connections || 0) > 0);
   const m = s?.metrics;
@@ -111,10 +121,12 @@ function overview(): string {
   const hit = seen > 0 ? Math.min(100, Math.max(0, reused * 100 / seen)) : 0;
   return `<section class="overview-page native-overview">
     <div class="model-card">
-      <div class="model-head"><span>当前配置文件</span><span class="chip">官方 PolyStrata</span></div>
-      <h2 title="${esc(s?.model)}">${esc(s?.model && s.model !== "—" ? s.model : "等待引擎上线")}</h2>
-      <div class="current-config-meta"><span title="${esc(s?.config_name)}">${esc(s?.config_name || "未配置")}</span>
-        <span>${s?.gateway_ready ? "本机服务已就绪" : "正在连接"}</span></div>
+      <div class="model-head"><span>当前配置文件</span>
+        <div class="config-head-actions"><button class="chip chip-action" data-action="choose-config">选择配置文件 ▾</button>
+          <button class="chip chip-action" data-action="view-config" ${selected ? "" : "disabled"}>查看</button></div></div>
+      <h2 title="${esc(selected?.name || s?.model)}">${esc(selected?.name || s?.model || "等待引擎上线")}</h2>
+      <div class="current-config-meta"><span title="${esc(selected?.path || s?.config_name)}">${esc(s?.settings?.model_config || "未配置")}</span>
+        <span>${s?.model_context || selected?.context ? (s?.model_context || selected?.context)?.toLocaleString("zh-CN") + " Token" : "上下文未指定"}</span></div>
     </div>
     <div class="metrics">
       ${metric("GPU 显存", used + ` <em>/ ${total}</em>`, "GB")}
@@ -136,8 +148,9 @@ function overview(): string {
       <div class="tunnel-monitor half-card">
         <div class="tunnel-monitor-head"><b>CF Tunnel</b>
           <span class="cf-indicator ${tunnelConnected ? "on" : tunnelOn ? "pending" : "off"}"><i></i>${tunnelConnected ? "已连接" : tunnelOn ? "连接中" : "未启用"}</span></div>
-        <div class="tunnel-monitor-latency"><span>${tunnelOn ? (s?.cf_connections ?? "—") : "—"}</span><small>条连接</small></div>
-        <div class="mini-sub native-mini">${s?.settings?.lan_access ? "局域网连接已启用" : "仅监听本机"}</div>
+        <div class="tunnel-monitor-latency"><span>${cfLatencyMs ?? "—"}</span><small>ms · HTTPS 延迟</small></div>
+        <div class="monitor-buttons"><button data-action="test-tunnel" ${!tunnelOn || busy ? "disabled" : ""}>测试</button>
+          <button data-action="restart-tunnel" ${!tunnelOn || busy ? "disabled" : ""}>重启</button></div>
       </div>
     </div>
     <div class="overview-actions">
@@ -162,7 +175,7 @@ function apiPage(): string {
         const kind = /tailscale/.test(adapter) ? "Tailscale" :
           /wi-fi|wireless|wlan|802\.11/.test(adapter) ? "Wi-Fi" :
           /ethernet|以太网/.test(adapter) ? "以太网" : "其他网络";
-        const url = `http://${item.address}:${s?.gateway_port || 15249}/`;
+        const url = `http://${item.address}:${s?.gateway_port || 15239}/`;
         return `<div class="lan-address-entry">
           <span class="lan-address-name" title="${esc(item.interface + " · " + item.description)}">
             <strong>${esc(kind)}</strong><small>${esc(item.interface)}</small>
@@ -176,11 +189,8 @@ function apiPage(): string {
     </div>` : "";
   return `<section class="api-compact">
     <div class="setting-card api-panel">
-      <div class="api-line"><strong>端口</strong><input class="field port-field native-readonly" readonly value="${s?.gateway_port || 15249}"><span class="native-inline-note">Native Gateway</span></div>
-      <div class="api-line"><strong>API Key</strong><input class="field key-display native-readonly" type="text" readonly value="••••••••••••" aria-label="API Key 已隐藏"><button class="outline-small" data-action="copy-key">复制</button></div>
-      <div class="api-line"><small class="native-hint">轮换密钥前先卸载模型；旧客户端需重新输入新 Key</small>
-        <button class="outline-small" data-action="rotate-key"
-          ${s?.managed || s?.desired || s?.stopping || busy ? "disabled" : ""}>轮换 Key</button></div>
+      <div class="api-line"><strong>端口</strong><input class="field port-field native-readonly" readonly value="${s?.gateway_port || 15239}"><span class="native-inline-note">Native Gateway</span></div>
+      <div class="api-line"><strong>API Key</strong><input id="api-key-display" class="field key-display native-readonly" type="text" readonly autocomplete="off" value="${esc(keyCache)}"><button class="outline-small" data-action="copy-key">复制</button><button class="outline-small" data-action="rotate-key" ${busy ? "disabled" : ""}>更换</button></div>
       <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong>
         <label class="lan-toggle" title="更改监听范围后须安全重启服务，现有任务不会被中断">
           <input type="checkbox" data-setting="lan_access" ${settings?.lan_access ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label></div>
@@ -191,15 +201,13 @@ function apiPage(): string {
     <div class="setting-card tunnel-panel">
       <div class="tunnel-heading"><strong>Cloudflare Tunnel</strong>
         <span class="cf-indicator ${cfActive ? "on" : cfOn ? "pending" : "off"}"><i></i>${cfState}</span>
-        <label class="lan-toggle" title="启用独立 Native Tunnel"><input type="checkbox" data-setting="cf_enabled" ${cfOn ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label>
       </div>
       <div class="api-line"><label for="cf-hostname">域名</label><input id="cf-hostname" class="field" spellcheck="false" placeholder="native.example.com" value="${esc(cfHostnameDraft ?? settings?.cf_hostname ?? "")}"></div>
       <div class="api-line"><label for="cf-token">Token</label><input id="cf-token" class="field" type="password" autocomplete="off" placeholder="${s?.cf_token_present ? "已安全保存 · 留空不修改" : "粘贴独立 Tunnel Token"}" value="${esc(cfTokenDraft)}"></div>
       <div class="tunnel-actions">
         <span class="tunnel-meta"><span data-cf-latency>${s?.cf_connections ?? "—"} 条连接</span>
           <span data-cf-message>${esc(s?.cf_error || "")}</span></span>
-        <button class="primary-small" data-action="save-tunnel" ${busy ? "disabled" : ""}>保存</button>
-        <button class="outline-small" data-action="install-tunnel" ${busy || s?.cf_binary_ready ? "disabled" : ""}>${s?.cf_binary_ready ? "已安装" : "安装"}</button>
+        <button class="primary-small" data-action="install-tunnel" ${busy ? "disabled" : ""}>安装</button>
         <button class="outline-small" data-action="test-tunnel" ${busy ? "disabled" : ""}>测试</button>
         <button class="outline-small" data-action="restart-tunnel" ${busy || !cfOn ? "disabled" : ""}>重启</button>
       </div>
@@ -213,28 +221,22 @@ function settingsPage(): string {
   return `<section class="setting-page compact-settings native-settings">
     <div class="setting-card"><h3>启动与守护</h3>
       ${toggle("autostart","开机自启")}
-      ${toggle("auto_start_service","启动器启动后自动拉起服务")}
-      ${toggle("watchdog","服务异常自动恢复")}
+      ${toggle("auto_start_service","启动后自动加载模型")}
+      ${toggle("watchdog","服务守护")}
     </div>
-    <div class="setting-card native-model-config"><h3>模型配置与空闲卸载</h3>
-      <div class="api-line"><label for="native-model-select">模型</label>
-        <select id="native-model-select" class="field" ${busy ? "disabled" : ""}>
-          ${(status?.available_configs || []).map(item =>
-            `<option value="${esc(item.file)}" ${item.file===prefs?.model_config ? "selected" : ""}>
-              ${esc(item.name)} (${esc(item.file)})</option>`).join("")}
+    <div class="setting-card"><h3>全局语言</h3>
+      <div class="setting-inline"><label for="global-language">语言</label>
+        <select id="global-language" class="field setting-select" ${busy ? "disabled" : ""}>
+          <option value="zh-CN" ${getLocale()==="zh-CN" ? "selected" : ""}>简体中文</option>
+          <option value="ja-JP" ${getLocale()==="ja-JP" ? "selected" : ""}>日本語</option>
+          <option value="en-US" ${getLocale()==="en-US" ? "selected" : ""}>English</option>
         </select></div>
-      <div class="api-line"><label for="native-idle-seconds">空闲卸载</label>
-        <select id="native-idle-seconds" class="field" ${busy ? "disabled" : ""}>
-          ${[[0,"禁用"],[300,"5 分钟"],[900,"15 分钟"],[1800,"30 分钟"],[3600,"60 分钟"]]
-            .map(([value, label]) => `<option value="${value}"
-              ${prefs?.idle_unload_s===value ? "selected" : ""}>${label}</option>`).join("")}
-        </select></div>
-      <div class="api-line"><label for="native-import-path">注册 JSON</label>
-        <input id="native-import-path" class="field" type="text" spellcheck="false"
-          placeholder="本机模型 JSON 文件路径" value="${esc(modelPathDraft)}">
-        <button class="outline-small" data-action="register-model" ${busy ? "disabled" : ""}>导入</button></div>
-      <p class="native-hint">设置在下次手动「卸载模型」→「加载模型」时生效；
-        不会强制中断当前推理或图片任务。</p>
+    </div>
+    <div class="setting-card"><h3>空闲卸载时间</h3>
+      <div class="setting-inline idle-control"><label for="idle-minutes">分钟</label>
+        <input id="idle-minutes" type="number" class="field idle-input" min="0" max="1440" step="1"
+          value="${Math.round((prefs?.idle_unload_s ?? 900) / 60)}" ${busy ? "disabled" : ""}>
+        <button class="outline-small" data-action="save-idle-timeout" ${busy ? "disabled" : ""}>保存并重启服务</button></div>
     </div>
   </section>`;
 }
@@ -287,7 +289,7 @@ function nativePage(): string {
     </div>
     <div class="setting-card native-card">
       <div class="native-title"><h3>服务端口</h3></div>
-      <div class="metric-row"><span>Gateway / Official</span><strong>${s?.gateway_port || 15249} / ${s?.official_port || 15240}</strong></div>
+      <div class="metric-row"><span>Gateway / Official</span><strong>${s?.gateway_port || 15239} / ${s?.official_port || 15240}</strong></div>
       <div class="actions"><button class="secondary" data-action="show-log">查看运行日志</button>
         <button class="secondary" data-action="open-chat" ${s?.gateway_ready ? "" : "disabled"}>打开 Chat</button></div>
     </div>
@@ -301,9 +303,10 @@ function renderBody() {
   // Polling must never destroy focused form inputs while someone enters a
   // Tunnel domain/secret. The latest status is displayed after focus leaves.
   const active = document.activeElement;
-  const editing = active instanceof HTMLInputElement && el.contains(active)
-    && !active.readOnly && active.type !== "checkbox";
+  const editing = (active instanceof HTMLInputElement && !active.readOnly && active.type !== "checkbox"
+    || active instanceof HTMLSelectElement) && el.contains(active);
   if (!editing && el.innerHTML !== page) el.innerHTML = page;
+  translateDom(el);
   el.scrollTop = savedScroll;
   const phase = document.getElementById("phase");
   if (phase) phase.innerHTML = badge();
@@ -322,8 +325,9 @@ function mount() {
     <nav class="tabs" role="tablist">${(Object.keys(names) as Tab[]).map(key =>
       `<button role="tab" class="tab ${tab === key ? "selected" : ""}" data-tab="${key}">${names[key]}</button>`).join("")}</nav>
     <main id="content"></main>
-    <footer><span id="notice">${esc(notice)}</span><span>v0.3.0</span></footer>`;
+    <footer><span id="notice">${esc(notice)}</span><span>v0.4.0</span></footer>`;
   renderBody();
+  translateDom(root);
 }
 async function task(name: string, done: string) {
   if (busy) return;
@@ -356,7 +360,7 @@ async function copyKey() {
       input.remove();
       if (!copied) throw new Error("无法复制到剪贴板");
     }
-    mark("API Key 已复制，仅保存在本机");
+    mark("API Key 已复制");
   } catch (error) {
     mark("复制失败：" + String(error));
   }
@@ -396,6 +400,85 @@ function showPortrait() {
   pre.replaceWith(image);
 }
 
+const ctxText = (value: number|null|undefined) => typeof value === "number" && value > 0
+  ? value.toLocaleString("zh-CN") + " Token" : "未指定";
+function showConfig(config: ModelConfig) {
+  const valueOrUnset = (value: string | null | undefined) => value || "未指定";
+  const idle = typeof config.idle_unload_s === "number"
+    ? config.idle_unload_s === 0 ? "已关闭" : config.idle_unload_s + " 秒（" +
+      Math.round(config.idle_unload_s / 60) + " 分钟）" : "未在配置中指定";
+  const rows: Array<[string,string]> = [
+    ["模型名称",config.name], ["模型权重",config.model],
+    ["上下文窗口",ctxText(config.context || status?.model_context)],
+    ["量化格式",valueOrUnset(config.quantization)],
+    ["KV 精度",valueOrUnset(config.kv_type)],
+    ["推理引擎",config.engine],
+    ["Tokenizer",valueOrUnset(config.tokenizer)],
+    ["视觉投影文件",valueOrUnset(config.vision_projector)],
+    ["草稿模型",valueOrUnset(config.draft_model)],
+    ["显存预留",typeof config.vram_reserve_mib === "number" ? config.vram_reserve_mib + " MiB" : "未设置"],
+    ["RAM 对话缓存",config.conversation_cache_mib
+      ? config.conversation_cache_mib === "auto" ? "自动预算" : config.conversation_cache_mib + " MiB"
+      : "未设置"],
+    ["空闲自动卸载",idle], ["配置文件完整路径",config.path],
+  ];
+  const bg = document.createElement("div");
+  bg.className = "modal-backdrop";
+  bg.innerHTML = `<div class="modal config-modal" role="dialog" aria-modal="true" aria-label="配置文件详情">
+    <div class="modal-top"><div><strong>配置文件详情</strong><small>${esc(config.file)}</small></div>
+    <button type="button" data-close-config aria-label="关闭">×</button></div>
+    <div class="detail-list">${rows.map(([name,val]) => `<div class="detail-row"><span>${esc(name)}</span>
+      <strong title="${esc(val)}">${esc(val)}</strong></div>`).join("")}</div></div>`;
+  const close = () => bg.remove();
+  bg.querySelector("[data-close-config]")?.addEventListener("click",close);
+  bg.addEventListener("click",e => {if(e.target===bg)close();});
+  document.body.appendChild(bg);
+  translateDom(bg);
+}
+async function openConfigPicker() {
+  const items = status?.available_configs || [];
+  const selected = status?.settings?.model_config || "";
+  const bg = document.createElement("div"); bg.className = "modal-backdrop";
+  bg.innerHTML = `<div class="modal config-picker-modal" role="dialog" aria-modal="true" aria-label="选择配置文件">
+    <div class="modal-top"><div><strong>选择配置文件</strong><small>已注册 ${items.length} 个部署配置</small></div>
+      <button type="button" data-close-picker aria-label="关闭">×</button></div>
+    <div class="config-picker-scroll"><div class="model-list">${items.map(item => {
+      const current = selected===item.file;
+      return `<div class="model-item ${current?"is-selected":""}">
+        <div class="model-text"><b title="${esc(item.path)}">${esc(item.file)}</b>
+          <small>${esc(item.name)}</small>
+          <span class="config-context">${esc(ctxText(item.context))}${item.quantization?" · "+esc(item.quantization):""}</span></div>
+        <div class="config-actions"><button type="button" data-view-config="${esc(item.file)}">查看</button>
+          <button class="choice ${current?"active":""}" data-select-config="${esc(item.file)}"
+            ${current||busy?"disabled":""}>${current?"使用中":"使用"}</button></div></div>`;
+    }).join("") || `<div class="empty">没有已注册的模型配置</div>`}</div>
+      <div class="config-picker-bottom"><button type="button" class="mini-primary" data-import-config>＋ 注册配置文件</button></div>
+    </div></div>`;
+  const close = () => bg.remove();
+  bg.querySelector("[data-close-picker]")?.addEventListener("click",close);
+  bg.addEventListener("click",e => {if(e.target===bg)close();});
+  bg.querySelectorAll<HTMLButtonElement>("[data-view-config]").forEach(button => button.addEventListener("click",()=>{
+    const item = items.find(c => c.file === button.dataset.viewConfig);
+    if(item)showConfig(item);
+  }));
+  bg.querySelectorAll<HTMLButtonElement>("[data-select-config]").forEach(button => button.addEventListener("click",async()=>{
+    const file=button.dataset.selectConfig;
+    if(!file||busy)return;
+    close();
+    await updatePrefs({model_config:file},"模型配置已选择，下次加载模型时生效");
+  }));
+  bg.querySelector("[data-import-config]")?.addEventListener("click",async()=>{
+    if(busy)return;
+    try {
+      const path=await open({multiple:false,directory:false,filters:[{name:"模型 JSON 配置",extensions:["json"]}]});
+      if(typeof path!=="string")return;
+      await invoke<ModelConfig>("register_native_model_config",{path});
+      close();await poll();await openConfigPicker();mark("配置文件已注册");
+    } catch(error){ mark("注册配置失败："+String(error)); }
+  });
+  document.body.appendChild(bg);
+  translateDom(bg);
+}
 async function updatePrefs(updates: Partial<NativePrefs>, success: string) {
   if (busy || !status?.settings) return;
   busy = true;
@@ -419,23 +502,40 @@ async function rotateNativeKey() {
   busy = true;
   try {
     await invoke("rotate_native_api_key");
-    mark("Native Key 已安全轮换。加载模型后请复制新 Key，并更新其他客户端。");
+    await refreshKey();
+    mark("API Key 已更换，请同步更新其他客户端");
   } catch (error) { mark("密钥轮换失败：" + String(error)); }
   finally { busy = false; await poll(); }
 }
-async function registerModel() {
-  if (busy || !modelPathDraft.trim()) {
-    mark("请填写本机模型 JSON 配置文件的完整路径"); return;
-  }
-  busy = true;
+async function refreshKey() {
   try {
-    const item = await invoke<{file: string; name: string}>("register_native_model_config",
-      {path: modelPathDraft.trim()});
-    modelPathDraft = "";
-    mark("已注册 " + item.name + "，可在模型列表中选择");
-  } catch (error) {
-    mark("模型注册失败：" + String(error));
-  } finally { busy = false; await poll(); }
+    keyCache=await invoke<string>("reveal_api_key");
+    const field=document.getElementById("api-key-display") as HTMLInputElement|null;
+    if(field)field.value=keyCache;
+  } catch(error) {mark("读取 API Key 失败："+String(error));}
+}
+async function saveIdleTimeout() {
+  const input=document.getElementById("idle-minutes") as HTMLInputElement|null;
+  const raw=input?.value.trim()||"";
+  const minutes=Number(raw);
+  if(!raw||!Number.isInteger(minutes)||minutes<0||minutes>1440){mark("请输入 0–1440 分钟");return;}
+  if(busy||!status?.settings)return;
+  const safe = !status.image_jobs_running && !status.gpu_busy
+    && !(status.request_monitor?.active||0) && !["reading","generating","starting","stopping"].includes(status.phase);
+  const wasRunning=status.managed;
+  busy=true;
+  try {
+    status.settings=await invoke<NativePrefs>("save_native_preferences",
+      {incoming:{...status.settings,idle_unload_s:minutes*60}});
+    if(wasRunning&&safe){
+      await invoke("stop_service");
+      await invoke("start_service");
+      mark("空闲卸载时间已保存，Native 服务已安全重启");
+    }else if(wasRunning){
+      mark("设置已保存；当前有任务或请求，空闲后请手动重启服务");
+    }else{mark("空闲卸载时间已保存，下次启动生效");}
+  }catch(error){mark("更新空闲卸载失败："+String(error));}
+  finally{busy=false;await poll();}
 }
 async function saveTunnelForm() {
   if (busy || !status?.settings) return;
@@ -448,12 +548,13 @@ async function saveTunnelForm() {
     if (cfTokenDraft.trim()) {
       await invoke("save_native_tunnel_token", {token: cfTokenDraft.trim()});
     }
+    await invoke("install_native_tunnel");
     const saved = await invoke<NativePrefs>("save_native_preferences",
-      {incoming: {...status.settings, cf_hostname: hostname}});
+      {incoming: {...status.settings, cf_hostname: hostname, cf_enabled:true}});
     status.settings = saved;
     cfHostnameDraft = null;
     cfTokenDraft = "";
-    mark("Tunnel 配置已保存；源站请指向 http://127.0.0.1:15249");
+    mark("Cloudflare Tunnel 已配置；等待本地连接数确认公网状态");
   } catch (error) {
     mark("保存 Tunnel 失败：" + String(error));
   } finally {
@@ -468,6 +569,7 @@ async function tunnelAction(action: "install_native_tunnel"|"test_native_tunnel"
     const result = await invoke<unknown>(action);
     if (action === "test_native_tunnel") {
       const test = result as {http_status: number; latency_ms: number; connected: boolean};
+      cfLatencyMs = test.connected ? test.latency_ms : null;
       mark(test.connected ? `Tunnel 已连接：${test.latency_ms} ms` :
         `Tunnel 尚未接入 Native Gateway（HTTP ${test.http_status}）`);
     } else {
@@ -485,15 +587,16 @@ root.addEventListener("input", event => {
   const input = event.target as HTMLInputElement;
   if (input.id === "cf-hostname") cfHostnameDraft = input.value;
   if (input.id === "cf-token") cfTokenDraft = input.value;
-  if (input.id === "native-import-path") modelPathDraft = input.value;
+
 });
 root.addEventListener("change", event => {
   const input = event.target as HTMLInputElement;
-  if (input.id === "native-model-select") {
-    void updatePrefs({model_config:input.value}, "模型配置已保存，下次手动加载时生效"); return;
-  }
-  if (input.id === "native-idle-seconds") {
-    void updatePrefs({idle_unload_s:Number(input.value)}, "空闲卸载时间已保存，下次手动加载时生效"); return;
+  if (input.id === "global-language") {
+    const language=input.value;
+    void invoke<string>("set_native_language",{language}).then(v=>{
+      setLocale(v);renderBody();mark("全局语言已保存");
+    }).catch(err=>mark("语言设置失败："+String(err)));
+    return;
   }
   const key = input.dataset.setting;
   if (!key || input.type !== "checkbox") return;
@@ -511,6 +614,7 @@ root.addEventListener("click", event => {
       const content = document.getElementById("content");
       if (content) content.scrollTop = 0;
       renderBody();
+      if(tab==="api")void refreshKey();
     }
     return;
   }
@@ -525,11 +629,16 @@ root.addEventListener("click", event => {
   const action = element.dataset.action;
   if (action === "copy-key") void copyKey();
   else if (action === "rotate-key") void rotateNativeKey();
-  else if (action === "register-model") void registerModel();
+  else if (action === "choose-config") void openConfigPicker();
+  else if (action === "view-config") {
+    const item=status?.available_configs?.find(c=>c.file===status?.settings?.model_config);
+    if(item)showConfig(item);
+  }
+  else if (action === "save-idle-timeout") void saveIdleTimeout();
   else if (action === "open-chat") void task("open_chat", "已打开 Chat 页面");
   else if (action === "show-log") void showLogs();
-  else if (action === "save-tunnel") void saveTunnelForm();
-  else if (action === "install-tunnel") void tunnelAction("install_native_tunnel");
+
+  else if (action === "install-tunnel") void saveTunnelForm();
   else if (action === "test-tunnel") void tunnelAction("test_native_tunnel");
   else if (action === "restart-tunnel") void tunnelAction("restart_native_tunnel");
   else if (action === "toggle") void task(status?.managed ? "stop_service" : "start_service",
@@ -551,5 +660,7 @@ async function poll() {
 }
 mount();
 void listen<string>("manager-error", event => { mark("守护器：" + event.payload); void poll(); });
+void invoke<string>("get_native_language").then(language=>{setLocale(language);renderBody();}).catch(()=>{});
+observeLocale();
 void poll();
 setInterval(() => void poll(), 2000);
