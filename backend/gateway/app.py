@@ -68,6 +68,7 @@ REFERENCE = CHARACTERS + "/reference/"
 IMAGE_JOBS = "/v1/mikuchin/image-jobs"
 IMAGE_SERVICES = "/v1/mikuchin/image-api-services"
 IMAGE_MODELS = "/v1/mikuchin/image-models"
+LOCAL_IMAGE_MODELS = "/v1/mikuchin/local-image-models"
 IMAGE_REFERENCE = "/v1/mikuchin/image-job-reference/"
 GALLERY = "/v1/mikuchin/gallery"
 GALLERY_THUMB = GALLERY + "/thumb/"
@@ -190,6 +191,37 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._error(403, "Cross-origin request not permitted", "forbidden")
                 return False
         return True
+
+    def _local_model_admin(self):
+        """Host-only import of model paths; reverse-proxied clients forbidden.
+
+        Ordinary Bearer auth deliberately cannot register local executable
+        capabilities. Existing runtime executable/flags are trusted and reused.
+        """
+        from ipaddress import ip_address
+        host=self.headers.get("Host","")
+        origin=self.headers.get("Origin","")
+        try:
+            parsed=urlsplit("http://"+host)
+            orig=urlsplit(origin)
+            host_name=(parsed.hostname or "").lower()
+            host_port=parsed.port or 80
+            allowed_names=("127.0.0.1","localhost","::1")
+            peer=ip_address(self.client_address[0]).is_loopback
+            allowed=(peer and host_name in allowed_names and
+                     host_port==self.server.server_port and
+                     orig.scheme=="http" and
+                     (orig.hostname or "").lower()==host_name and
+                     (orig.port or 80)==host_port)
+        except (ValueError,TypeError):
+            allowed=False
+        if any(self.headers.get(h) for h in (
+             "CF-Connecting-IP","CF-Ray","X-Forwarded-For",
+             "X-Forwarded-Host","X-Real-IP","Forwarded")):
+            allowed=False
+        if not allowed:
+            self._error(403,"本地模型导入仅允许服务器本机浏览器操作","local_only")
+        return allowed
 
     def do_OPTIONS(self):
         origin = self.headers.get("Origin", "")
@@ -355,7 +387,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
                    or path in (SAMPLING_DEFAULT, UI_LANGUAGE) or path == CHARACTERS
-                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY,CHAT_TURNS,
+                   or path in (IMAGE_JOBS,IMAGE_SERVICES,LOCAL_IMAGE_MODELS,GALLERY,CHAT_TURNS,
                                CHAT_TURNS_STREAM)
                    or bool(CHAT_TURN_PATH.fullmatch(path)))
         if path not in INFERENCE_POSTS and not private:
@@ -395,6 +427,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._handle_gallery_post(request)
             elif path in (IMAGE_JOBS,IMAGE_SERVICES):
                 self._handle_image_post(path,request)
+            elif path == LOCAL_IMAGE_MODELS:
+                if self._local_model_admin():
+                    self._handle_local_image_model_post(request)
             elif path == CHARACTERS:
                 self._handle_character_post(request)
             else:
@@ -778,6 +813,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error,OSError):
             LOG.exception("native image operation failed")
             self._error(503,"Native image storage unavailable","unavailable")
+
+    def _handle_local_image_model_post(self,req):
+        if not self.server.image_jobs:
+            self._error(503,"Native image registry unavailable","unavailable")
+            return
+        try:
+            if req.get("action")!="import":
+                raise ValueError("仅支持注册本地已有模型文件")
+            result=local_images.register_existing_model(self.server.image_jobs,req.get("model"))
+            self._json(200,{"model":result})
+        except (ValueError,TypeError) as exc:
+            self._error(400,str(exc),"invalid_local_model")
+        except (OSError,sqlite3.Error,local_images.LocalImageError):
+            LOG.exception("native local model registry failed")
+            self._error(503,"Local image registry unavailable","unavailable")
 
     def _handle_gallery_get(self,path):
         jobs=self.server.image_jobs

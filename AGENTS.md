@@ -1,5 +1,11 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 顶栏状态、聊天工具计时与本地生图导入
+
+- 顶栏状态**只能**通过 `native-header-status.js` 的单一状态仲裁与 `paintHeaderStatus()` 渲染；禁止 Metrics 与 Native Health 各自调用 `setPill()` 抢占标签。后台可并行生图用单独 `生图 N` 副标签。
+- 聊天生图 Tool Calling 计时来自 Worker `started_at` 和 `finished_at`，从实际推理开始（排队和卸载 LLM 不计），只更新计时文本，不每秒重渲染会话；旧任务没有时间时不虚构耗时。
+- 「生图服务」提供本地模型列表及「导入本地模型」。这是本机 localhost + Bearer 允许的**Qwen-Image 文件注册**，只接收 Diffusion/VAE/LLM/可选视觉编码器现有路径，复用受信的已注册 sd-cli exe/args。绝不能变成远端客户端设置任意 EXE/脚本/命令行参数的功能，不能自动上传或下载大模型，不修改 LLM 模型配置文件。详见 `docs/UNIFIED_HEADER_TIMER_LOCAL_IMPORT_2026-11-21.md`。
+
 ## 2026-11-21 聊天生图运行模式与异步交付（最新用户决定）
 
 - **运行方式在「全局设置 → 聊天生图模型」右侧**，作为 `chat_image_settings.runtime_mode` 自动保存于 Mikuchin 自身角色选项；**禁止写入 LLM 模型 JSON**。默认 `exclusive` 及旧配置兼容：沿用 GPU 独占、LLM 卸载→生图→恢复 KV 的工作流。显式 `concurrent` 仅在本地资源允许时跳过卸载、保持共享 GPU 锁；内存不足不得自动重复提交。在线 API 后台独立运行，不需要此本地模式控件。

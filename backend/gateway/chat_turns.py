@@ -221,6 +221,9 @@ class ChatTurnStore:
                          isinstance(value[k],(str,bool,int,float))}
                 result["job"]={"id":job["id"],"state":job.get("state"),
                                "phase":str(job.get("phase") or "")[:120],
+                               "started_at":job.get("started_at"),
+                               "finished_at":job.get("finished_at"),
+                               "elapsed_s":job.get("elapsed_s"),
                                "result":picture}
                 result["job_id"]=job["id"]
         return result

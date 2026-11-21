@@ -20,6 +20,7 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -41,6 +42,8 @@ NOT_ANIME = re.compile(r"photorealistic|photo|realistic|写实|摄影|照片|非
 
 class LocalImageError(RuntimeError):
     pass
+
+_REGISTRY_LOCK=threading.RLock()
 
 
 def config_path(svc):
@@ -77,6 +80,60 @@ def _profile_good(p):
             (not p.get("llm_vision") or _file(p["llm_vision"])) and
             isinstance(p.get("args", []), list) and
             all(isinstance(a, str) and len(a) < 180 for a in p.get("args", [])))
+
+
+def register_existing_model(svc, payload):
+    """Register model *files*, never an executable or runtime arguments.
+
+    A locally authorized administrator selects an installed sd-cli profile as
+    the trusted engine template. Remote clients cannot call this API. The
+    engine executable and its arguments are deliberately not accepted from
+    the request, and no GPU job is started during registration.
+    """
+    if not isinstance(payload,dict) or set(payload)!={"name","base_id",
+            "diffusion_model","vae","llm","llm_vision"}:
+        raise ValueError("本地模型导入参数不完整或存在未知字段")
+    name=payload["name"]
+    if not isinstance(name,str) or not 1<=len(name.strip())<=80 or any(ord(c)<32 for c in name):
+        raise ValueError("本地模型名称须为 1–80 个可显示字符")
+    base_id=payload["base_id"]
+    if not isinstance(base_id,str) or not ID.fullmatch(base_id):
+        raise ValueError("请选择已有的本地 Qwen 推理环境")
+    files={}
+    for key in ("diffusion_model","vae","llm","llm_vision"):
+        value=payload[key]
+        if key=="llm_vision" and value=="":continue
+        if not isinstance(value,str) or not 3<=len(value)<=1024 or not Path(value).is_absolute():
+            raise ValueError("模型文件需要使用本机绝对路径")
+        path=Path(value)
+        if not path.is_file() or path.is_symlink() or path.suffix.lower() not in (".gguf",".safetensors"):
+            raise ValueError("模型文件不存在或类型不受支持："+key)
+        files[key]=str(path.resolve())
+    with _REGISTRY_LOCK:
+        data=_settings(svc)
+        base=next((p for p in data["profiles"] if p.get("id")==base_id),None)
+        if not base or not _profile_good(base):
+            raise ValueError("基础 sd-cli 推理环境不可用")
+        if len(data["profiles"])>=12:
+            raise ValueError("最多可注册 12 个本地图像模型")
+        ident="local-import-"+secrets.token_hex(7)
+        profile={k:base[k] for k in ("exe","family","args","max_side")
+                 if k in base}
+        profile.update({"id":ident,"name":name.strip(),
+                        "model":name.strip(),"timeout_seconds":base.get("timeout_seconds",1200),
+                        **files})
+        if not _profile_good(profile):
+            raise ValueError("模型文件与本地推理环境不兼容")
+        data["profiles"].append(profile)
+        path=config_path(svc)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        temp=path.with_name("."+path.name+"."+secrets.token_hex(6)+".tmp")
+        try:
+            temp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+            os.replace(temp,path)
+        finally:
+            temp.unlink(missing_ok=True)
+        return {"id":ident,"name":profile["name"],"available":True}
 
 
 def get(svc, ident):

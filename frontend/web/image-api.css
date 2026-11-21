@@ -22,6 +22,10 @@
 
 .mk-image-services-head,.mk-api-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .mk-image-services-head{margin-bottom:10px}
+.mk-image-service-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.mk-image-model-section-title{margin:13px 0 4px;font-weight:650;font-size:13px;color:var(--st-ink-soft)}
+.mk-image-model-section-title:not(:first-of-type){border-top:1px solid var(--st-line-soft);padding-top:12px}
+.mk-api-item--local .mk-api-item-info span{white-space:normal;line-height:1.35}
 .mk-api-list{display:flex;flex-direction:column}
 .mk-api-item{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid var(--st-line-soft)}
 .mk-api-item-info{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
@@ -56,6 +60,7 @@
 .img-ref-tile button{font-size:11px;border:0;padding:2px;color:var(--st-accent-text);background:transparent;cursor:pointer}
 .img-ref-tile.inactive{opacity:.55}
 @media(max-width:540px){.mk-api-form{padding:12px;gap:10px}.mk-api-two{grid-template-columns:1fr;gap:10px}.mk-api-heading{padding:12px}.mk-api-item .st-btn{padding:5px 8px;font-size:12px}.img-ref-tile{width:82px}.img-ref-tile img{width:72px;height:62px}}
+@media(max-width:540px){.mk-image-services-head{align-items:flex-start}.mk-image-service-actions{justify-content:flex-start}.mk-image-service-actions .st-btn{font-size:12px;padding:7px}}
 
 /* Server-backed Image Jobs: one line per request, output thumbnail at right. */
 .img-job-panel{margin-top:14px;min-width:0}

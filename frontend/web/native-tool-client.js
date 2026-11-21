@@ -95,6 +95,12 @@
     }
     if(turn.job_id) t.image_job_id=turn.job_id;
     const job=turn.job || {};
+    if(Number.isFinite(job.started_at) && job.started_at>0)
+      t.image_job_started_at=job.started_at;
+    if(Number.isFinite(job.finished_at) && job.finished_at>0)
+      t.image_job_finished_at=job.finished_at;
+    if(Number.isFinite(job.elapsed_s))
+      t.image_job_elapsed_s=job.elapsed_s;
     const picture=job.result || {};
     if(picture.image_file && /^[a-f0-9]{32}\.png$/.test(picture.image_file))
       t.image_file=picture.image_file;
@@ -121,7 +127,7 @@
     } else if(turn.state==="vision_done" || turn.state==="vision_failed"){
       t.state="done";t.ok=true;
       t.status_label="已完成";
-      t.result="Image generation succeeded; image available in this chat.";
+      t.result="图片生成成功，可以在聊天中查看。";
       if(message.native_background){
         // Keep the acknowledgement. Append the completed image as a NEW
         // message after any active user conversation has finished.

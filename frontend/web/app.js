@@ -82,7 +82,8 @@ function showTab(name) {
   // Opening Chat on a phone should not summon the software keyboard.
   if (tab === "chat" && !matchMedia("(max-width: 760px)").matches) $("input").focus();
   if (tab === "monitor") loadMcp();
-  if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.(); void window.MikuchinImageApi?.refresh();}
+  if (tab === "settings") {loadConfig(); window.polyCharactersLoad?.(); void window.MikuchinImageApi?.refresh();
+    void window.MikuchinLocalModels?.refresh();}
   if (tab === "images") void window.MikuchinImageStudio?.refresh();
   if (tab === "gallery") void window.MikuchinGallery?.refresh();
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
@@ -206,43 +207,55 @@ function setMetric(key, value, unit, sub) {
 
 let lastMetrics = null, metricsFailures = 0, keyWarned = false, mcpTick = 0;
 let nativeHealthTick=0;
+let lastNativeHealth=null,lastNativeHealthAt=0,lastMetricsAt=0;
 let reqShowAll = false;   // the Monitor's request table: the last 12, or every one the server keeps (issue #35)
 async function pollNativeHealthStage(){
   try{
     const response=await fetch("health",{headers:headers(),cache:"no-store"});
-    if(response.status===401){setPill("queued","需要 API Key");return true;}
+    if(response.status===401)return {auth:true};
     const snapshot=await response.json();
-    const stage=window.MikuchinNativeToolClient?.healthStage(snapshot);
-    if(stage){
-      setPill(stage.state,stage.text);
-      return true;
-    }
+    if(snapshot.component!=="mikuchin-gateway")return {ok:false};
+    lastNativeHealth=snapshot;lastNativeHealthAt=Date.now();
+    return {ok:true};
   }catch(_){/* Gateway may actually be offline; let metrics handle it. */}
-  return false;
+  return {ok:false};
+}
+function paintHeaderStatus({auth=false}={}){
+  const now=Date.now();
+  const metrics=now-lastMetricsAt<6000?lastMetrics:null;
+  const native=now-lastNativeHealthAt<7000?lastNativeHealth:null;
+  const status=window.MikuchinHeaderStatus?.resolve({
+    metrics,health:native,networkFailed:metricsFailures>=3,unauthorized:auth
+  }) || {state:"idle",text:"连接中…",imageCount:0};
+  setPill(status.state,status.text);
+  const indicator=$("pill-image");
+  indicator.hidden=!status.imageCount;
+  $("pill-image-text").textContent=status.imageCount ? "生图 "+status.imageCount : "";
 }
 async function poll() {
+  let auth=false,metricsOkay=false;
   try {
     const r = await fetch(reqShowAll ? "metrics?requests=all" : "metrics", {headers: headers()});
     if (r.status === 401) {
-      setPill("error", "API key needed");
+      auth=true;
       if (!keyWarned) { keyWarned = true; toast("warn", "API key needed", "This server needs a key: add it under Settings.", 6000); }
     } else if (r.ok) {
       lastMetrics = await r.json();
+      lastMetricsAt=Date.now();
+      metricsOkay=true;
       metricsFailures = 0;
       render(lastMetrics);
-      // Metrics from the Official engine can report idle while the worker is
-      // acquiring its GPU lock. Native health is the authoritative source of
-      // image unload/generate/restore phases.
-      if(health.chat_tool_calling && ++nativeHealthTick%2===0)
-        await pollNativeHealthStage();
-    } else {
-      if(await pollNativeHealthStage())metricsFailures=0;
-      else throw new Error(`HTTP ${r.status}`);
     }
-  } catch (e) {
-    if (++metricsFailures === 3 && !await pollNativeHealthStage())
-      setPill("error", "Server not reachable");
+  }catch(_){/* Native health can still be available after intentional model unload. */}
+  if(++nativeHealthTick%2===0 || !metricsOkay) {
+    const sample=await pollNativeHealthStage();
+    if(sample.auth)auth=true;
   }
+  if(!metricsOkay && !auth){
+    const healthFresh=Date.now()-lastNativeHealthAt<7000;
+    metricsFailures=healthFresh?0:metricsFailures+1;
+  }
+  paintHeaderStatus({auth});
   if (tab === "monitor" && ++mcpTick % 10 === 0) loadMcp();       // server states change rarely: every 10 s
   setTimeout(poll, 1000);
 }
@@ -255,16 +268,6 @@ function setPill(state, text) {
 function render(m) {
   const live = m.live || {}, hw = m.hardware || {}, st = m.hardware_static || {}, eng = m.engine || {}, h = m.history || {};
   const last = (m.requests || [])[0];
-  // the header pill
-  if (live.state === "reading") {
-    const pct = live.prompt_total ? Math.round((100 * live.prompt_read) / live.prompt_total) : null;
-    setPill("reading", pct != null ? `${ui("Reading prompt")} · ${pct}%` : ui("Reading prompt"));
-  } else if (live.state === "generating") {
-    setPill("generating", `${ui("Generating")} · ${fmt(live.tok_s, 1)} tok/s`);
-  } else {
-    setPill("idle", "Idle");
-  }
-  if (live.queued > 0) setPill("queued", `${live.queued} ${ui("Queued")}`);
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
   if (tab === "about" || tab === "settings") renderAbout(eng, hw, st);
@@ -1051,6 +1054,10 @@ const TOOL_STATE = {writing: ["st-badge--reading", "Writing"], running: ["st-bad
 function toolHtml(t, k) {
   const [cls, defaultLabel] = TOOL_STATE[t.state] || ["", t.state];
   const label=t.native_turn_id && t.status_label ? t.status_label : defaultLabel;
+  const toolTimer=Number.isFinite(t.image_job_started_at) && t.image_job_started_at>0 ?
+    `<span class="muted small" data-native-tool-clock-start="${t.image_job_started_at}"
+    ${Number.isFinite(t.image_job_finished_at) ? `data-native-tool-clock-end="${t.image_job_finished_at}"` : ""}
+    aria-label="图像生成耗时"></span>` : "";
   const args = t.arguments == null ? "" : JSON.stringify(t.arguments, null, 2);
   const preview = t.result != null ? t.result : args.replace(/\s+/g, " ");
   let body = "";
@@ -1074,9 +1081,25 @@ function toolHtml(t, k) {
     `<summary>${icon("tool", "st-icon st-icon--sm")}<span class="tool-call__name" title="${esc(t.name || "")}">${esc(t.tool || t.name || "tool")}</span>` +
     (t.server ? `<span class="muted small">${esc(t.server)}</span>` : "") +
     `<span class="tool-call__preview muted">${esc(preview.slice(0, 200))}</span>` +
-    `<span class="st-badge ${cls}">${esc(label)}</span>${t.ms != null && t.state !== "skipped" ? `<span class="muted small">${fmt(t.ms / 1000, 1)} s</span>` : ""}` +
+    `<span class="st-badge ${cls}">${esc(label)}</span>${toolTimer}${t.ms != null && t.state !== "skipped" ? `<span class="muted small">${fmt(t.ms / 1000, 1)} s</span>` : ""}` +
     `${icon("chevron", "st-icon st-icon--sm st-chev")}</summary><div class="st-collapse__body">${body}</div></details>`;
 }
+function renderNativeToolClocks(now=Date.now()){
+  for(const label of document.querySelectorAll("[data-native-tool-clock-start]")){
+    const start=Number(label.dataset.nativeToolClockStart);
+    if(!Number.isFinite(start) || start<=0)continue;
+    const end=Number(label.dataset.nativeToolClockEnd);
+    const stopped=Number.isFinite(end)&&end>0;
+    const elapsed=Math.max(0,Math.floor((stopped?end*1000:now)-start*1000)/1000);
+    const seconds=Math.floor(elapsed);
+    const hours=Math.floor(seconds/3600);
+    const mm=String(Math.floor(seconds/60)%60).padStart(2,"0");
+    const ss=String(seconds%60).padStart(2,"0");
+    label.textContent=(stopped?"耗时 ":"已运行 ")+
+      (hours ? String(hours).padStart(2,"0")+":" : "")+mm+":"+ss;
+  }
+}
+setInterval(renderNativeToolClocks,1000);
 // the answer's text with the tool blocks where the model called them
 function answerHtml(m) {
   if (!m.tools || !m.tools.length) return markdown(m.text || "");

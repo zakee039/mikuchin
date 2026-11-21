@@ -6,10 +6,10 @@
 <title>Mikuchin</title>
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
-<link rel="stylesheet" href="web/components.css">
+<link rel="stylesheet" href="web/components.css?v=20261121-header-indicators">
 <link rel="stylesheet" href="web/app.css?v=20261121-image-runtime-mode">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
-<link rel="stylesheet" href="web/image-api.css?v=20261119-width-height-presets">
+<link rel="stylesheet" href="web/image-api.css?v=20261121-local-model-import">
 <link rel="stylesheet" href="web/gallery.css?v=20261119-instant-swipe">
 <link rel="stylesheet" href="web/chat-image-viewer.css?v=20261121-fullscreen-floating">
 <script>
@@ -48,6 +48,8 @@
           aria-label="Model" hidden></select>
   <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
     <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
+  <span class="st-pill st-pill--image-count" id="pill-image" data-state="generating" hidden
+    title="正在后台执行的图像任务"><span class="st-pill__dot"></span><span id="pill-image-text"></span></span>
   <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
     <svg class="st-icon"><use id="theme-icon" href="web/sprite.svg#i-moon"/></svg></button>
 </header>
@@ -548,8 +550,14 @@
       </div>
 
       <div class="st-card mk-image-services">
-        <div class="mk-image-services-head"><span class="card-title">API 生图服务</span>
-          <button type="button" class="st-btn st-btn--secondary" id="mk-api-add">＋ 添加服务</button></div>
+        <div class="mk-image-services-head"><span class="card-title">生图服务</span>
+          <div class="mk-image-service-actions">
+            <button type="button" class="st-btn st-btn--secondary" id="mk-local-import-open">＋ 导入本地模型</button>
+            <button type="button" class="st-btn st-btn--secondary" id="mk-api-add">＋ 添加 API 服务</button>
+          </div></div>
+        <div class="mk-image-model-section-title">本地模型</div>
+        <div id="mk-local-model-list" class="mk-api-list" aria-live="polite">正在读取本地模型…</div>
+        <div class="mk-image-model-section-title">API 服务</div>
         <div id="mk-api-list" class="mk-api-list"></div>
       </div>
       <div class="st-card">
@@ -709,6 +717,30 @@
     </form>
   </div>
 </div>
+<div class="mk-api-backdrop" id="mk-local-import-backdrop" hidden>
+  <div class="st-card mk-api-dialog" role="dialog" aria-modal="true" aria-labelledby="mk-local-import-title">
+    <div class="mk-api-heading"><span class="card-title" id="mk-local-import-title">导入现有本地 Qwen-Image 模型</span>
+      <button class="st-btn st-btn--secondary" id="mk-local-import-close" type="button" aria-label="关闭">✕</button></div>
+    <form id="mk-local-import-form" class="mk-api-form">
+      <p class="muted small">只注册本机已有模型文件，不上传或复制大模型。复用已安装的 sd-cli 推理程序和参数；不会执行安装脚本。仅服务器本机浏览器能够导入。</p>
+      <label class="st-field">模型名称<input class="st-input" id="mk-local-name" maxlength="80" placeholder="例如：Qwen-Image Turbo 我的模型" required></label>
+      <label class="st-field">基础推理环境<select class="st-input" id="mk-local-base" required></select></label>
+      <label class="st-field">Diffusion 文件（绝对路径）
+        <input class="st-input" id="mk-local-diffusion" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\diffusion.gguf"></label>
+      <label class="st-field">VAE 文件（绝对路径）
+        <input class="st-input" id="mk-local-vae" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\vae.safetensors"></label>
+      <label class="st-field">LLM / 文本编码器文件（绝对路径）
+        <input class="st-input" id="mk-local-llm" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\llm.gguf"></label>
+      <label class="st-field">视觉编码器文件（选填）
+        <input class="st-input" id="mk-local-vision" spellcheck="false" placeholder="E:\LLM\models\qwen-image\vision.gguf"></label>
+      <p class="muted small">仅支持现有 sd-cli 兼容的 Qwen-Image Turbo 文件。导入只检查路径与文件类型，不会自动进行 GPU 推理验证。</p>
+      <div class="mk-api-actions">
+        <button type="button" class="st-btn st-btn--secondary" id="mk-local-import-cancel">取消</button>
+        <button type="submit" class="st-btn st-btn--primary" id="mk-local-import-save">注册模型</button>
+      </div>
+    </form>
+  </div>
+</div>
 <div class="scrim" id="scrim" hidden></div>
 <div class="chat-image-viewer" id="chat-image-viewer" role="dialog"
   aria-modal="true" aria-label="聊天图片预览" hidden>
@@ -726,8 +758,9 @@
 <script src="web/versions.js?v=0.4.0"></script>
 <script src="web/chat-capabilities.js?v=20261121-no-answer-cap"></script>
 <script src="web/native-tool-client.js?v=20261121-async-image-runtime"></script>
+<script src="web/native-header-status.js?v=20261121-unified-header"></script>
 <script src="web/native-turn-stream.js?v=20261121-native-stream-fix"></script>
-<script src="web/app.js?v=20261121-async-image-runtime"></script>
+<script src="web/app.js?v=20261121-unified-header-clock"></script>
 <script src="web/image-resolution.js?v=20261119-square-1536"></script>
 <script src="web/auth-images.js?v=20261120-secure-image-blob"></script>
 <script src="web/chat-image-viewer.js?v=20261121-readonly"></script>
@@ -739,6 +772,7 @@
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 <script src="web/image-api-settings.js?v=20261121-chat-confirm"></script>
+<script src="web/local-model-settings.js?v=20261121-local-model-import"></script>
 <script src="web/gallery.js?v=20261121-download-button"></script>
 </body>
 </html>

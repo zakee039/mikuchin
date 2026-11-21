@@ -19,6 +19,8 @@ a{color:var(--st-accent-text);text-decoration:none} a:hover{text-decoration:unde
 .st-pill[data-state="generating"] .st-pill__dot{background:var(--st-accent);box-shadow:0 0 0 4px var(--st-accent-tint)}
 .st-pill[data-state="reading"] .st-pill__dot{background:var(--st-info);box-shadow:0 0 0 4px var(--st-info-tint)}
 .st-pill[data-state="queued"] .st-pill__dot{background:var(--st-warn)}
+.st-pill--image-count[hidden]{display:none}
+.st-pill--image-count{height:28px;padding:0 9px;white-space:nowrap;font-size:12px}
 
 /* tabs */
 .st-tabs{display:flex;gap:4px;padding:4px;background:var(--st-surface-2);border:1px solid var(--st-line);border-radius:var(--st-r-md)}
