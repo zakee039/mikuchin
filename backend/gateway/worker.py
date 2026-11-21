@@ -14,12 +14,16 @@ import signal
 import sys
 import threading
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .conversations import ConversationStore
 from .image_jobs import ImageJobStore
+from . import image_providers
 
 LOG = logging.getLogger("mikuchin.image-worker")
+MAX_API_INFLIGHT = 20
 
 
 @contextlib.contextmanager
@@ -64,12 +68,49 @@ class ImageWorker:
         self.stop = threading.Event()
 
     def run_once(self):
+        """Synchronous helper retained for deterministic tests."""
         item = self.store.take_pending()
         if item is None:
             return False
         ident, request = item
         self.store.execute_claimed(ident, request)
         return True
+
+    @staticmethod
+    def _lane(request):
+        if request.get("kind")=="upscale":
+            return ("local","upscale")
+        profile=request.get("strata_image_profile","")
+        if isinstance(profile,str) and profile.startswith("local-"):
+            return ("local","gpu")
+        return ("api",str(profile))
+
+    def _eligible(self,request,active):
+        lane,profile=self._lane(request)
+        if lane=="local":
+            return not any(key[0]=="local" for _,key in active.values())
+        api_count=Counter(key for _,key in active.values() if key[0]=="api")
+        if sum(api_count.values())>=MAX_API_INFLIGHT:
+            return False
+        service=image_providers.get(self.store,profile)
+        # A deleted service will fail normally when the job is dispatched,
+        # but should not stall the entire queue forever.
+        configured=service.get("concurrency",1) if service else 1
+        limit=min(MAX_API_INFLIGHT,max(1,int(configured)))
+        return api_count[("api",profile)] < limit
+
+    @staticmethod
+    def _collect_completed(active):
+        for future in list(active):
+            if not future.done():
+                continue
+            ident,lane=active.pop(future)
+            try:
+                future.result()
+            except Exception:
+                # execute_claimed persists routine provider errors itself.
+                # Never replay a possibly billable request after a failure.
+                LOG.exception("Uncaught image worker error for job %s",ident)
 
     def run_forever(self):
         with singleton_lock(self.root / "native-worker.lock"):
@@ -87,9 +128,34 @@ class ImageWorker:
             heartbeat.start()
             LOG.info("Native Image Worker started, PID=%s",os.getpid())
             try:
-                while not self.stop.is_set():
-                    if not self.run_once():
-                        self.stop.wait(self.poll)
+                # Separate pools ensure a long local GPU job cannot occupy
+                # the last API slot, and vice versa. GPU jobs remain strictly
+                # serialized, including standalone 4x upscale tasks.
+                with (ThreadPoolExecutor(max_workers=MAX_API_INFLIGHT,
+                                         thread_name_prefix="native-api-image") as api_pool,
+                      ThreadPoolExecutor(max_workers=1,
+                                         thread_name_prefix="native-local-image") as local_pool):
+                    active={}
+                    while not self.stop.is_set():
+                        self._collect_completed(active)
+                        try:
+                            item=self.store.take_pending(
+                                eligible=lambda req:self._eligible(req,active))
+                        except Exception:
+                            LOG.exception("Native Image Worker unable to claim pending task")
+                            self.stop.wait(self.poll)
+                            continue
+                        if item is None:
+                            self.stop.wait(self.poll)
+                            continue
+                        ident,request=item
+                        lane=self._lane(request)
+                        pool=local_pool if lane[0]=="local" else api_pool
+                        future=pool.submit(self.store.execute_claimed,ident,request)
+                        active[future]=(ident,lane)
+                    # On cooperative shutdown, let already-started jobs
+                    # finish; never start new provider calls or reissue work.
+                    self._collect_completed(active)
             finally:
                 self.stop.set()
                 heartbeat.join(timeout=3)

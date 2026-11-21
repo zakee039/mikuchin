@@ -128,19 +128,28 @@ class ImageJobStore:
                           finished_at=?,updated=? WHERE state IN ('running','queued','working')""",
                        (time.time(),time.time()))
 
-    def take_pending(self):
-        """Transactional single-consumer claim, safe even if a second worker starts."""
+    def take_pending(self, eligible=None):
+        """Atomically claim the oldest eligible job without prematurely starting it.
+
+        The independent Worker can skip a service whose configured API
+        concurrency is full and claim another service's job instead. Eligibility
+        only filters *queued* jobs; never rewrites an active request or
+        automatically retries a possibly billable provider operation.
+        """
         with self._db() as db:
-            row = db.execute("""SELECT id,request_json FROM jobs WHERE state='running'
-                    AND phase='排队等待执行' ORDER BY created ASC LIMIT 1""").fetchone()
-            if row is None:
-                return None
-            cursor = db.execute("""UPDATE jobs SET phase='准备请求提供商',updated=?
-                WHERE id=? AND state='running' AND phase='排队等待执行'""",
-                                (time.time(),row["id"]))
-            if cursor.rowcount != 1:
-                return None
-            return row["id"], json.loads(row["request_json"])
+            rows = db.execute("""SELECT id,request_json FROM jobs WHERE state='running'
+                    AND phase='排队等待执行' ORDER BY created ASC LIMIT ?""",
+                              (MAX_PENDING,)).fetchall()
+            for row in rows:
+                request=json.loads(row["request_json"])
+                if eligible is not None and not eligible(request):
+                    continue
+                cursor = db.execute("""UPDATE jobs SET phase='准备请求提供商',updated=?
+                    WHERE id=? AND state='running' AND phase='排队等待执行'""",
+                                    (time.time(),row["id"]))
+                if cursor.rowcount == 1:
+                    return row["id"], request
+            return None
 
     def _db(self):
         class Context:

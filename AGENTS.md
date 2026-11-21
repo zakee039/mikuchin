@@ -1,5 +1,12 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 Native API 生图并发调度（最新修复）
+
+- 「API 生图服务」配置的 `concurrency` 是 **单个 API 服务真正同时请求提供商的上限**，取值 1–20。Native 独立 Image Worker 在全局 20 个 API 并行名额内按服务分别限流；不能退回原 `run_once()` 的全局单线程循环，否则即使配置为 5 也永远只能串行。
+- 本地 Qwen/SDXL GPU 生图与单独 ESRGAN 4× 超分 **仍必须走容量 1 的独占通道**，不可因为 API 并发扩展而同时加载两个本地 GPU 生图。API 和本地处理使用分离的线程池，其他服务不应被满额服务阻塞。
+- 先按已配置并发量挑选下一条队列任务，再通过 `take_pending(eligible=...)` 原子领取；排队不启动真正生成计时。保留已经提交的收费任务的幂等、不自动重试、Worker OS 单实例锁及重启时不重放可能计费任务。
+- **有运行中图像任务／Native Turn 时不要强制重启 Worker**，先等待安全空闲窗口，再做 SQLite Online Backup 和仅 Worker 的受控恢复；官方 PolyStrata 不修改、不重启。详见 `docs/NATIVE_IMAGE_API_CONCURRENCY_2026-11-21.md`。
+
 ## 2026-11-21 Native Tool Calling 开始／失败反馈（最新用户决定）
 
 - 选中在线 API 生图模型时，在「聊天生图模型」整行中**隐藏**「运行方式」控件（包括标签，剩余模型控件占满宽度）。本地 Qwen/SDXL 仍显示且持久保存 `runtime_mode`，不修改 LLM 模型 JSON。
