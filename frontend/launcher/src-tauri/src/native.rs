@@ -27,6 +27,15 @@ const GATEWAY_PORT: u16 = 15239;
 const OFFICIAL_PORT: u16 = 15240;
 const STABLE_PORT: u16 = 25239;
 
+// On Windows, hiding the first WebView frame during Tauri setup can leave
+// subsequent Tauri show() calls ineffective until Win32 explicitly restores
+// the native window. Keep the fallback scoped to the launcher's own HWND.
+#[link(name = "user32")]
+extern "system" {
+    fn ShowWindow(hwnd: *mut std::ffi::c_void, command: i32) -> i32;
+    fn SetForegroundWindow(hwnd: *mut std::ffi::c_void) -> i32;
+}
+
 pub(crate) fn state_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
         .join("MikuchinNativeLauncher")
@@ -906,12 +915,27 @@ fn get_log() -> String {
 
 fn request_show(app: &tauri::AppHandle) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
+    if let Err(err) = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.set_focus();
+            let _ = window.unminimize();
+            if let Err(err) = window.show() {
+                eprintln!("Mikuchin launcher: show failed: {err}");
+            }
+            // Tauri's show() alone may not restore a startup-hidden WebView
+            // on Windows 10. Restore its *own* HWND, never another window.
+            if let Ok(hwnd) = window.hwnd() {
+                unsafe {
+                    ShowWindow(hwnd.0, 9); // SW_RESTORE: show hidden/minimized
+                    SetForegroundWindow(hwnd.0);
+                }
+            }
+            if let Err(err) = window.set_focus() {
+                eprintln!("Mikuchin launcher: focus failed: {err}");
+            }
         }
-    });
+    }) {
+        eprintln!("Mikuchin launcher: dispatch show failed: {err}");
+    }
 }
 
 fn request_quit(app: tauri::AppHandle) {
@@ -1098,7 +1122,7 @@ pub fn run() {
             get_native_language, set_native_language
         ])
         .setup(|app| {
-            let open = MenuItem::with_id(app, "open", "打开 Native 控制面板", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开启动器", true, None::<&str>)?;
             let chat = MenuItem::with_id(app, "chat", "打开 Chat", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "安全退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &chat, &quit])?;
