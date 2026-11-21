@@ -41,7 +41,7 @@ MeroMero 在第二轮真实思考中报告 `Since I don't have the previous imag
 
 已通过 SQLite Online Backup 备份正式 Turn / Conversations / Image Jobs / Gallery / Characters 数据库及服务配置：`runtime/migration-backups/chat-context-preview-confirm-20261121-174638`，没有读取/输出明文密钥。上线前预检时，真实 Image Worker **12 条历史 success、0 条在途**，Turn **0 条未完成**，Supervisor `running`。
 
-**部署阻碍（不能伪称已正式上线）：** 首次 Gateway-only 重载被安全闸门阻止——Tailscale 远端设备 `100.96.95.122` 在生产 Gateway 15239 上保持一个 `Established` 客户端连接。为了不打断远端使用，未强杀该连接或当前 Gateway。后续只有在无活动客户端、无在途 Worker 和 Turn 时才安全重载 Mikuchin 自有 Gateway；**官方 PolyStrata 和 Worker 不动**。重载后必须检查鉴权、静态资源、历史 Turn/Jobs、数据库状态及官方 SHA。静态 JS/CSS 虽由运行服务实时读取，新服务端 `chat_confirm_each_call` 尚需 Gateway 重载才能生效。
+**生产部署核验（安全完成）：** 首次检查曾发现 Tailscale 远端设备 `100.96.95.122` 在生产 Gateway `15239` 有 `Established` 连接，安全闸门阻止了初次重载，未中断连接。随后连接自然消失；二次核实客户端连接数 0、图像任务 0、Turn 未完成 0 后，只重启 Gateway 自有子进程，Supervisor 自动恢复，生产监听 PID `1100 → 37040`，Gateway 重启计数 3；**官方 PolyStrata 进程 `41712`、独立 Image Worker 与 Supervisor 的模型/Worker 子进程均未重启**。生效后 `/web/app.js`、API 设置、预览器 JS/CSS 和 i18n 文件均 HTTP 200；无密钥的 `/health`、`/v1/mikuchin/image-api-services`、新 Turn POST 均 401。正式会话保留 **9 个 Turn**、图库 **12 条 success**，API 服务 1 个（默认 `chat_confirm_each_call=false`）；Worker 心跳正常。官方子模块 SHA 未改变。没有实际执行收费 API 测试。
 
 如需关闭原生 Tool Calling，设置 `MIKUCHIN_NATIVE_TOOL_CALLING=0` 并在空闲时重载 Gateway；不要主动回放原有可能计费的 Turn，也不要删除现有历史图像。在线请求默认免确认后的潜在费用由用户选择的 API 模型产生，请谨慎保管服务密钥。
 
