@@ -159,14 +159,18 @@ Used for in-chat drawing and the Image Studio:
 Get the Windows installer and Android APK from [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest). **Model weights are not included**; prepare your local model files and register the configuration in the launcher.
 
 ```bash
-git clone https://github.com/zakee039/mikuchin.git
+git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+# Existing clone: git submodule update --init --recursive
 ```
 
-The inference engine is included in this repository: **no Git submodules or external PolyStrata fork are required**. Model weights, native dependencies and GPU backends must still be installed for inference. Original MIT attribution is preserved in [backend/polystrata/LICENSE](backend/polystrata/LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).
+Native main pins the **official upstream PolyStrata** as a Git submodule (v0.1.45-poly.10), with no private fork or upstream source changes. Model weights, Python/CUDA, and image backends must be installed separately; the current Windows Launcher installer is **not a self-contained runtime**. The old mixed architecture is preserved as old-mixed. See [Native migration notes](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md), [upstream MIT license](backend/polystrata/LICENSE), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ```powershell
 python scripts/build-locales.py
-powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
+cd frontend/launcher
+npm ci
+npx tauri build --debug --no-bundle
+cd ../..
 powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 

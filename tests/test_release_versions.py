@@ -99,9 +99,20 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertIn("v" + self.main, site)
         self.assertIn("v" + self.launcher, site)
         self.assertIn("v" + self.android, site)
-        upstream = json.loads((ROOT / "backend/polystrata/manager/package.json")
-                              .read_text(encoding="utf-8"))
-        self.assertNotEqual(upstream["name"], "mikuchin")
+        if (ROOT / ".gitmodules").is_file():
+            # Native main pins pristine official PolyStrata as a Gitlink.
+            # Checkout does not need to initialize the engine for metadata tests.
+            modules = (ROOT / ".gitmodules").read_text(encoding="utf-8")
+            self.assertIn("path = backend/polystrata", modules)
+            self.assertIn("simplexai-labs/PolyStrata.git", modules)
+            release_doc = (ROOT / f"docs/RELEASE_{self.manifest['release']}.md").read_text(
+                encoding="utf-8")
+            self.assertIn("v0.1.45-poly.10", release_doc)
+        else:
+            # Historical old-mixed architecture used a vendored engine.
+            upstream = json.loads((ROOT / "backend/polystrata/manager/package.json")
+                                  .read_text(encoding="utf-8"))
+            self.assertNotEqual(upstream["name"], "mikuchin")
 
 
 if __name__ == "__main__":

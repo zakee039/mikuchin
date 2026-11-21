@@ -156,20 +156,24 @@ mikuchin/
 
 ## 🚀 快速开始与构建指南
 
-### 1. 克隆仓库（完整源码，零子模块）
+### 1. 克隆仓库（包含官方 PolyStrata 子模块）
 ```bash
-git clone https://github.com/zakee039/mikuchin.git
+git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+# 已有仓库，请在其根目录执行：git submodule update --init --recursive
 ```
 
-推理引擎源码已随主仓库直接提供，无需另行克隆 PolyStrata，也不依赖任何个人 fork 存在。推理模型权重、驱动及编译产生的原生引擎仍需按部署文档准备。所集成引擎的 MIT 版权与许可全文保留于 [backend/polystrata/LICENSE](backend/polystrata/LICENSE)，另见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+新版 main 将官方 PolyStrata 固定为 Git 子模块（v0.1.45-poly.10），不修改其源码，也不依赖个人 Fork。推理权重、驱动、Python/CUDA 运行时和生图后端需要单独安装；现有 Windows Launcher 安装包并不是完整的可搬迁运行时。旧版混合架构保留于 old-mixed。详见 [Native 迁移记录](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[官方引擎 MIT 许可](backend/polystrata/LICENSE) 和 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ### 2. 构建多语言词典与 Windows 桌面管理器
 ```powershell
 # 重新生成前端三语包
 python scripts/build-locales.py
 
-# 构建 Windows 原生桌面管理器与 NSIS 安装包
-powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
+# Native Launcher 本地预览构建（不包含完整 Python/GPU 运行时）
+cd frontend/launcher
+npm ci
+npx tauri build --debug --no-bundle
+cd ../..
 ```
 
 ### 3. 一键编译 Android 手机客户端 APK

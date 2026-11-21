@@ -159,14 +159,18 @@ Windows インストーラーおよびリポジトリにはモデルの重みフ
 [GitHub Releases](https://github.com/zakee039/mikuchin/releases/latest) から Windows インストーラーと Android APK を取得できます。**モデルの重みは配布物に含まれません**。ローカルのモデルファイルを準備し、ランチャーから設定ファイルを登録してください。
 
 ```bash
-git clone https://github.com/zakee039/mikuchin.git
+git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
+# クローン済みの場合：git submodule update --init --recursive
 ```
 
-推論エンジンのソースは本リポジトリに含まれ、**Git サブモジュールや個人の PolyStrata fork は不要**です。推論にはモデルの重み、GPU 用ライブラリやビルド済みのネイティブエンジンが別途必要です。元の MIT ライセンスと著作権表示は [backend/polystrata/LICENSE](backend/polystrata/LICENSE) と [第三者ライセンス表示](THIRD_PARTY_NOTICES.md) に残しています。
+Native main は**公式 PolyStrata**を Git サブモジュール（v0.1.45-poly.10）として固定し、上流ソースを改変しません。モデルの重み、Python/CUDA と画像生成のランタイムは別途必要です。現行 Windows Launcher のインストーラーだけでは**単体動作できません**。旧構成は old-mixed に保存されています。[Native 移行記録](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[MIT ライセンス](backend/polystrata/LICENSE)、[第三者ライセンス表示](THIRD_PARTY_NOTICES.md) を参照してください。
 
 ```powershell
 python scripts/build-locales.py
-powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1
+cd frontend/launcher
+npm ci
+npx tauri build --debug --no-bundle
+cd ../..
 powershell -ExecutionPolicy Bypass -File frontend/android/build-apk.ps1
 ```
 
