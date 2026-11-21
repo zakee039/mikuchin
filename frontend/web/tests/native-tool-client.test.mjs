@@ -64,7 +64,7 @@ test("paid provider requires explicit consent before dispatch",()=>{
  client.apply(m,basic("awaiting_approval",{online:true}));
  assert.equal(m.tools[0].state,"writing");
  assert.equal(client.unfinished(m),true);
- assert.match(m.text,/手动确认/);
+ assert.match(m.tools[0].result,/在线生图授权/);
  client.apply(m,basic("cancelled",{text:"用户取消"}));
  assert.equal(m.tools[0].state,"error");
  assert.equal(client.unfinished(m),false);
@@ -78,9 +78,9 @@ test("client never accepts cross-turn replacement",()=>{
 test("composer code uses one POST and then read-only GET polling",()=>{
  const native=app.slice(app.indexOf("async function submitModelToolTurn("),
    app.indexOf("async function submitAutoChatImage("));
- assert.match(native,/method:"POST"/);
+ assert.match(app,/method:"POST",headers:\{\.\.\.headers\(true\),Accept:"text\/event-stream"/);
  assert.match(native,/nativeTurnPath\(m\.native_turn_id\)/);
- assert.match(native,/method:"POST",headers:headers\(true\),body:JSON\.stringify\(request\)/);
+ assert.match(native,/receiveNativeToolStream\(request,m,el,fixedSession\)/);
  assert.doesNotMatch(native,/MikuchinChatImageRouter/);
  assert.doesNotMatch(native,/submitAutoChatImage/);
 });

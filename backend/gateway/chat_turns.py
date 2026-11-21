@@ -49,6 +49,7 @@ class ChatTurnStore:
                 approval_expires REAL NOT NULL DEFAULT 0,
                 job_id TEXT NOT NULL DEFAULT '',
                 text TEXT NOT NULL DEFAULT '',
+                reasoning_text TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT '',
                 created REAL NOT NULL,
                 updated REAL NOT NULL
@@ -56,6 +57,11 @@ class ChatTurnStore:
             CREATE INDEX IF NOT EXISTS turns_session ON turns(session_id,created DESC);
             CREATE INDEX IF NOT EXISTS turns_pending ON turns(state,updated);
             """)
+            # Existing production Turn databases predate streamed reasoning.
+            # A single additive migration preserves all settled image jobs.
+            columns={r["name"] for r in db.execute("PRAGMA table_info(turns)")}
+            if "reasoning_text" not in columns:
+                db.execute("ALTER TABLE turns ADD COLUMN reasoning_text TEXT NOT NULL DEFAULT ''")
             db.execute("PRAGMA journal_mode=WAL")
             # Deciding was interrupted at service stop: NEVER automatically repeat.
             db.execute("""UPDATE turns SET state='decision_error',
@@ -119,7 +125,7 @@ class ChatTurnStore:
         if not from_states or set(from_states) - VALID_STATES:
             raise ValueError("Invalid source state")
         allowed = {"decision_json","image_request_json","profile_id","online",
-                   "approval_hash","approval_expires","job_id","text","error"}
+                   "approval_hash","approval_expires","job_id","text","reasoning_text","error"}
         if set(columns) - allowed:
             raise ValueError("Disallowed transition fields")
         # Update in one transactional compare-and-swap.
@@ -133,10 +139,11 @@ class ChatTurnStore:
             db.execute("UPDATE turns SET "+",".join(cols)+" WHERE turn_id=?", vals)
         return True
 
-    def decision_text(self, session_id, turn_id, text):
-        return self.transition(session_id, turn_id, "deciding", "text_done", text=text)
+    def decision_text(self, session_id, turn_id, text, reasoning=""):
+        return self.transition(session_id, turn_id, "deciding", "text_done",
+                               text=text,reasoning_text=reasoning[:140000])
 
-    def decision_tool(self, session_id, turn_id, tool, image_request, profile):
+    def decision_tool(self, session_id, turn_id, tool, image_request, profile,reasoning=""):
         """Freeze executable choices, produce one-time approval only if paid."""
         public_tool = {k:tool[k] for k in ("name","tool_call_id","arguments")}
         decision = json.dumps(public_tool, ensure_ascii=False, allow_nan=False)
@@ -147,6 +154,7 @@ class ChatTurnStore:
             "awaiting_approval" if online else "queued",
             decision_json=decision,image_request_json=request,
             profile_id=profile["profile"],online=int(online),
+            reasoning_text=reasoning[:140000],
             approval_hash=hashlib.sha256(token.encode()).hexdigest() if token else "",
             approval_expires=time.time()+600 if token else 0)
         return token if succeeded else None
@@ -189,7 +197,8 @@ class ChatTurnStore:
         if row is None: return None
         decision=json.loads(row["decision_json"])
         result={"session_id":row["session_id"],"turn_id":row["turn_id"],
-                "state":row["state"],"text":row["text"],"error":row["error"][:200],
+                "state":row["state"],"text":row["text"],
+                "reasoning":row["reasoning_text"],"error":row["error"][:200],
                 "tool":decision if decision else None,
                 "request_id":row["turn_id"] if decision else None,
                 "job_id":row["job_id"] or None,"profile_id":row["profile_id"],

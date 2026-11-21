@@ -77,7 +77,9 @@ function renderHistorySidebar(list) {
       title.className = "session-title";
       title.title = title.textContent = item.title || "New chat";
       title.onclick = async () => {
-        if (busy || intentRouting || chatImageSubmitting) { toast("warn", "Wait for the response to finish"); return; }
+        if (!detachNativeTurnForNavigation()) {
+          toast("warn", "Wait for the response to finish"); return;
+        }
         // Desktop sidebar stays where the user left it; mobile uses an overlay.
         if (item.id === sessionId) {
           if (mobileHistoryMedia.matches) historySidebarSet(false);
@@ -157,7 +159,7 @@ function historyToMarkdown(record) {
   return "# " + (record.title || "Conversation") + "\n\n" + content.join("\n");
 }
 async function historyAction(record, action) {
-  if (busy || intentRouting || chatImageSubmitting) { toast("warn", "Finish the response first"); return; }
+  if (busy) { toast("warn", "Finish the response first"); return; }
   try {
     await sessionSaveChain;
     if (action === "rename") {

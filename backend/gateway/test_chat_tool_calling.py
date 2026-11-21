@@ -189,6 +189,36 @@ class NativeToolHTTP(unittest.TestCase):
         self.assertEqual(self.request("GET",f"/v1/mikuchin/chat/turns/{TURN}?session_id={OTHER}")[0],404)
         self.assertEqual(self.request("GET",f"/v1/mikuchin/chat/turns/{TURN}?session_id={SESSION}")[1]["state"],"text_done")
 
+    def test_sse_turn_delivers_reasoning_before_final_text_and_deduplicates(self):
+        ident="6"*32
+        def scripted(_payload,on_delta):
+            on_delta({"reasoning":"先推理输入","text":""})
+            on_delta({"reasoning":"","text":"逐字回答"})
+            return model_decision()
+        def sse_call():
+            c=http.client.HTTPConnection("127.0.0.1",self.gateway.server_address[1],timeout=10)
+            c.request("POST","/v1/mikuchin/chat/turns/stream",
+                body=json.dumps(self.payload(ident)).encode("utf-8"),
+                headers={"Authorization":"Bearer secret-for-test-only",
+                         "Content-Type":"application/json"})
+            res=c.getresponse()
+            self.assertEqual(res.status,200)
+            self.assertIn("text/event-stream",res.getheader("Content-Type"))
+            raw=res.read().decode("utf-8")
+            c.close()
+            return [json.loads(line[5:].strip()) for line in raw.splitlines()
+                    if line.startswith("data:")]
+        with patch.object(self.gateway.chat_turns,"_official_stream",side_effect=scripted) as model:
+            events=sse_call()
+            self.assertEqual([e["type"] for e in events],
+                             ["started","delta","delta","done","end"])
+            self.assertEqual(events[1]["reasoning"],"先推理输入")
+            self.assertEqual(events[2]["text"],"逐字回答")
+            self.assertEqual(events[3]["turn"]["state"],"text_done")
+            repeated=sse_call()
+            self.assertEqual([e["type"] for e in repeated],["started","done","end"])
+            self.assertEqual(model.call_count,1)
+
     def test_local_dispatch_once(self):
         req={"prompt":"a cat","strata_image_profile":"local-fake","size":"512x512","strata_upscale":"off"}
         meta={"profile":"local-fake","online":False,"edit_previous":False,"model_name":"mock"}

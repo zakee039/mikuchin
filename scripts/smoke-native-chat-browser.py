@@ -50,6 +50,23 @@ class FakeChatEngine(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def send_sse(self, chunks, *, pause_after_first=0):
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-store")
+        self.send_header("Connection","close")
+        self.end_headers()
+        self.close_connection=True
+        for i,delta in enumerate(chunks):
+            obj={"choices":[{"index":0,"delta":delta,
+                             "finish_reason":delta.pop("_finish",None)}]}
+            self.wfile.write(("data: "+json.dumps(obj,ensure_ascii=False)+"\n\n").encode())
+            self.wfile.flush()
+            if i==0 and pause_after_first:time.sleep(pause_after_first)
+            else:time.sleep(0.12)
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
     def do_GET(self):
         if self.headers.get("Authorization") != "Bearer " + OFFICIAL_KEY:
             self.send_error(401)
@@ -101,7 +118,7 @@ class FakeChatEngine(BaseHTTPRequestHandler):
             c=latest.get("content","")
             user_text=c if isinstance(c,str) else " ".join(p.get("text","")
                 for p in c if isinstance(p,dict) and p.get("type")=="text")
-            if "测试模型决策取消" in user_text:
+            if "测试模型决策取消" in user_text and not body.get("stream"):
                 time.sleep(4)
             if "测试Worker失联" in user_text:
                 FakeChatEngine.worker_offline=True
@@ -119,12 +136,29 @@ class FakeChatEngine(BaseHTTPRequestHandler):
             if not edit and any(x in user_text for x in ("不要生成","不要画",
                                                          "解释","如何","如果","成绩表","Excel","建议")):
                 FakeChatEngine.decisions.append("text")
+                if body.get("stream"):
+                    content="P0_BROWSER_OK：这次只回答文字，没有调用图片工具。"
+                    self.send_sse([{"reasoning_content":"先阅读请求，"},{"reasoning_content":"不需要调用生图工具。"},
+                                   {"content":content[:14]},{"content":content[14:]},
+                                   {"_finish":"stop"}],
+                        pause_after_first=3.5 if "测试模型决策取消" in user_text else 0)
+                    return
                 self.send_json({"choices":[{"finish_reason":"stop","message":{
                     "role":"assistant","content":"P0_BROWSER_OK：这次只回答文字，没有调用图片工具。"}}]})
                 return
             name="edit_image" if edit else "generate_image"
             FakeChatEngine.decisions.append(name)
             arguments={"instruction":user_text} if edit else {"prompt":user_text}
+            if body.get("stream"):
+                args=json.dumps(arguments,ensure_ascii=False)
+                self.send_sse([
+                    {"reasoning_content":"读取用户请求，决定使用图片工具。"},
+                    {"tool_calls":[{"index":0,"id":"call_native_browser",
+                        "type":"function","function":{"name":name,"arguments":args[:8]}}]},
+                    {"tool_calls":[{"index":0,"function":{"arguments":args[8:]}}]},
+                    {"_finish":"tool_calls"}],
+                    pause_after_first=3.5 if "测试模型决策取消" in user_text else 0)
+                return
             self.send_json({"choices":[{"finish_reason":"tool_calls","message":{
                 "role":"assistant","content":None,"tool_calls":[{"id":"call_native_browser",
                     "type":"function","function":{"name":name,

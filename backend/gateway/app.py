@@ -74,6 +74,7 @@ GALLERY_THUMB = GALLERY + "/thumb/"
 GALLERY_ITEM = GALLERY + "/item"
 REQUEST_MONITOR = "/v1/mikuchin/request-monitor"
 CHAT_TURNS = "/v1/mikuchin/chat/turns"
+CHAT_TURNS_STREAM = CHAT_TURNS + "/stream"
 CHAT_TURN_PATH = re.compile(r"^/v1/mikuchin/chat/turns/([a-f0-9]{32})(?:/(approve|cancel))?$")
 WEB_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "web"
 STATIC_FILE = re.compile(r"^/web/([a-z][a-z0-9_-]{0,80}\.(?:js|css|svg))$")
@@ -354,7 +355,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
                    or path in (SAMPLING_DEFAULT, UI_LANGUAGE) or path == CHARACTERS
-                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY,CHAT_TURNS)
+                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY,CHAT_TURNS,
+                               CHAT_TURNS_STREAM)
                    or bool(CHAT_TURN_PATH.fullmatch(path)))
         if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
@@ -385,7 +387,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Expected a JSON object")
             return
         if private:
-            if path == CHAT_TURNS or CHAT_TURN_PATH.fullmatch(path):
+            if path == CHAT_TURNS_STREAM:
+                self._handle_chat_turn_stream(request)
+            elif path == CHAT_TURNS or CHAT_TURN_PATH.fullmatch(path):
                 self._handle_chat_turn_post(path, request)
             elif path == GALLERY:
                 self._handle_gallery_post(request)
@@ -453,6 +457,45 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error,OSError):
             LOG.exception("native tool turn read failed")
             self._error(503,"Native tool turn storage unavailable","unavailable")
+
+    def _handle_chat_turn_stream(self,request):
+        service=self.server.chat_turns
+        if service is None or not self.server.tool_calling_enabled:
+            self._error(503,"Native image tool calling is unavailable","feature_disabled")
+            return
+        try:
+            service._validate(request)
+        except (ValueError,TypeError) as exc:
+            self._error(400,str(exc)[:160],"invalid_request")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-store, no-transform")
+        self.send_header("Connection","close")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self.end_headers()
+        self.close_connection=True
+        delivered=True
+        def publish(obj):
+            nonlocal delivered
+            if not delivered:return
+            try:
+                raw=("data: "+json.dumps(obj,ensure_ascii=False,allow_nan=False)+
+                     "\n\n").encode("utf-8")
+                self.wfile.write(raw)
+                self.wfile.flush()
+            except (BrokenPipeError,ConnectionError,OSError):
+                delivered=False
+        publish({"type":"started"})
+        try:
+            result=service.submit(request,on_delta=lambda delta:
+                publish({"type":"delta",**delta}))
+            publish({"type":"done","turn":result})
+        except (sqlite3.Error,OSError,ValueError,TypeError):
+            LOG.exception("native tool streaming turn failed")
+            publish({"type":"error","message":"模型工具状态保存失败；请只读查询本次任务"})
+        finally:
+            publish({"type":"end"})
 
     def _handle_chat_turn_post(self, path, request):
         if not self.server.chat_turns:

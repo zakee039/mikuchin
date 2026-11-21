@@ -205,7 +205,21 @@ function setMetric(key, value, unit, sub) {
 }
 
 let lastMetrics = null, metricsFailures = 0, keyWarned = false, mcpTick = 0;
+let nativeHealthTick=0;
 let reqShowAll = false;   // the Monitor's request table: the last 12, or every one the server keeps (issue #35)
+async function pollNativeHealthStage(){
+  try{
+    const response=await fetch("health",{headers:headers(),cache:"no-store"});
+    if(response.status===401){setPill("queued","需要 API Key");return true;}
+    const snapshot=await response.json();
+    const stage=window.MikuchinNativeToolClient?.healthStage(snapshot);
+    if(stage){
+      setPill(stage.state,stage.text);
+      return true;
+    }
+  }catch(_){/* Gateway may actually be offline; let metrics handle it. */}
+  return false;
+}
 async function poll() {
   try {
     const r = await fetch(reqShowAll ? "metrics?requests=all" : "metrics", {headers: headers()});
@@ -216,11 +230,18 @@ async function poll() {
       lastMetrics = await r.json();
       metricsFailures = 0;
       render(lastMetrics);
+      // Metrics from the Official engine can report idle while the worker is
+      // acquiring its GPU lock. Native health is the authoritative source of
+      // image unload/generate/restore phases.
+      if(health.chat_tool_calling && ++nativeHealthTick%2===0)
+        await pollNativeHealthStage();
     } else {
-      throw new Error(`HTTP ${r.status}`);
+      if(await pollNativeHealthStage())metricsFailures=0;
+      else throw new Error(`HTTP ${r.status}`);
     }
   } catch (e) {
-    if (++metricsFailures === 3) setPill("error", "Server not reachable");
+    if (++metricsFailures === 3 && !await pollNativeHealthStage())
+      setPill("error", "Server not reachable");
   }
   if (tab === "monitor" && ++mcpTick % 10 === 0) loadMcp();       // server states change rarely: every 10 s
   setTimeout(poll, 1000);
@@ -729,7 +750,10 @@ async function enableServerSessions() {
   }
 }
 $("session-picker").onchange = async () => {
-  if (busy) { toast("warn", "Finish the response before switching chats"); $("session-picker").value = sessionId; return; }
+  if (!detachNativeTurnForNavigation()) {
+    toast("warn", "Finish the response before switching chats");
+    $("session-picker").value = sessionId; return;
+  }
   const next = $("session-picker").value;
   if (!next || next === sessionId) return;
   try { await sessionSaveChain; await loadServerChat(next); }
@@ -737,6 +761,20 @@ $("session-picker").onchange = async () => {
 };
 let attachments = [];                 // {name, url}
 let busy = null;                      // {controller, msg, cutoff?}
+
+function detachNativeTurnForNavigation() {
+  if (!busy)return true;
+  if (!busy.msg?.native_turn_id)return false; // Legacy stream still owns its UI.
+  // Never abort a submitted native image/tool request just because a user
+  // opens another conversation. The old Turn is already server-persisted and
+  // is resumed read-only when the user returns.
+  busy.msg.native_stream_active=false;
+  busy.msg.native_detached=true;
+  saveChat();
+  busy=null;
+  setBusy(false);
+  return true;
+}
 
 function saveChat() {
   const snapshot = messages.map((m) => ({...m, images: (m.images || []).map((i) => ({...i})),
@@ -905,6 +943,7 @@ async function regenerateMessage(i) {
   m.thinkSecs = null; m.stopped = false; m.error = null; m.limit = null;
   const controller = new AbortController();
   busy = {controller, msg: m, cutoff: i};
+  const responseSession=sessionId;
   if (i < messages.length - 1) {
     toast("info", "Regenerating an earlier message",
           `${messages.length - i - 1} later message(s) stay in the chat, and the next request will still see them.`,
@@ -930,11 +969,13 @@ async function regenerateMessage(i) {
     Object.assign(m, keep);
     m.swipes[m.swipeIndex] = keep;
   }
-  busy = null;
-  setBusy(false);
-  updateAssistant(el, m, false);
-  saveChat();
-  scrollDown();
+  if(sessionId===responseSession){
+    if(busy?.msg===m)busy=null;
+    setBusy(false);
+    updateAssistant(el, m, false);
+    saveChat();
+    scrollDown();
+  }
 }
 
 // Moves between variants: saves the current answer, loads the neighbour.
@@ -1005,12 +1046,17 @@ function msgEl(m, i) {
 const TOOL_STATE = {writing: ["st-badge--reading", "Writing"], running: ["st-badge--generating", "Running"], done: ["", "Done"],
                     error: ["st-badge--error", "Error"], skipped: ["st-badge--queued", "Not run"]};
 function toolHtml(t, k) {
-  const [cls, label] = TOOL_STATE[t.state] || ["", t.state];
+  const [cls, defaultLabel] = TOOL_STATE[t.state] || ["", t.state];
+  const label=t.native_turn_id && t.status_label ? t.status_label : defaultLabel;
   const args = t.arguments == null ? "" : JSON.stringify(t.arguments, null, 2);
   const preview = t.result != null ? t.result : args.replace(/\s+/g, " ");
   let body = "";
   if (t.open) {
     body = `<div class="tool-call__label">Arguments</div><pre class="tool-call__pre">${esc(args || "(being written)")}</pre>`;
+    if (Array.isArray(t.phase_history) && t.phase_history.length) {
+      body += `<div class="tool-call__label">执行阶段（已观察到的状态）</div>`+
+        `<div class="muted small">${t.phase_history.map(esc).join(" · ")}</div>`;
+    }
     if (t.result != null) {
       body += `<div class="tool-call__label">${t.state === "running" || t.state === "writing" ? "Status" : (t.ok ? "Result" : "Error")}${t.chars ? ` · ${fmt(t.chars)} characters` : ""}` +
               `${t.truncated ? ", cut for the model" : ""}</div><pre class="tool-call__pre">${esc(t.result)}</pre>`;
@@ -1339,6 +1385,7 @@ async function send() {
   const el = $("chat").lastElementChild;
   const controller = new AbortController();
   busy = {controller, msg: m};
+  const responseSession=sessionId;
   setBusy(true);
   try {
     if (health.chat_tool_calling) {
@@ -1353,12 +1400,14 @@ async function send() {
     toast("error", "The request failed", m.error, 6000);
     updateAssistant(el, m, false);
   }
-  busy = null;
-  setBusy(false);
-  updateAssistant(el, m, false);
-  saveChat();
-  if (sessionV1) sessionSaveChain.then(refreshSessionPicker).catch(console.warn);
-  scrollDown();
+  if(sessionId===responseSession){
+    if(busy?.msg===m)busy=null;
+    setBusy(false);
+    updateAssistant(el, m, false);
+    saveChat();
+    if (sessionV1) sessionSaveChain.then(refreshSessionPicker).catch(console.warn);
+    scrollDown();
+  }
 }
 
 // The Native model (not a keyword matcher) chooses whether to invoke
@@ -1369,6 +1418,61 @@ async function nativeTurnResponse(response) {
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw Error(value.error?.message || "模型工具服务 HTTP " + response.status);
   return value;
+}
+async function receiveNativeToolStream(request,m,el,fixedSession) {
+  if(!window.MikuchinToolStream?.Decoder)
+    throw Error("Native stream decoder missing");
+  const response=await fetch("v1/mikuchin/chat/turns/stream",{
+    method:"POST",headers:{...headers(true),Accept:"text/event-stream"},
+    body:JSON.stringify(request)
+    // Deliberately no AbortSignal: the server may already have accepted a
+    // model decision; disconnects are recovered with GET, never POST retry.
+  });
+  if(!response.ok)throw Error("Tool stream HTTP "+response.status);
+  if(!response.body)throw Error("Tool stream has no readable body");
+  let decision=null,thinkStart=null,lastPaint=0,lastSave=0;
+  const paint=()=>{
+    if(sessionId!==fixedSession || !el.isConnected)return;
+    // Tool-looking legacy JSON is not a user-facing partial answer.
+    if(m.text.trimStart().startsWith('{"action"'))return;
+    updateAssistant(el,m,true);
+    scrollDown();
+  };
+  const parser=new window.MikuchinToolStream.Decoder(event=>{
+    if(event.type==="done"){
+      decision=event.turn;
+      return;
+    }
+    if(event.type==="error")throw Error(event.message || "Native model stream error");
+    if(event.type!=="delta" || sessionId!==fixedSession)return;
+    const now=performance.now();
+    if(typeof event.reasoning==="string" && event.reasoning){
+      if(!thinkStart)thinkStart=now;
+      m.reasoning+=event.reasoning;
+    }
+    if(typeof event.text==="string" && event.text){
+      if(thinkStart && m.thinkSecs==null)m.thinkSecs=(now-thinkStart)/1000;
+      m.text+=event.text;
+    }
+    if(now-lastPaint>65){lastPaint=now;paint();}
+    if(now-lastSave>1000){lastSave=now;saveChat();}
+  });
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  try {
+    for(;;){
+      const {value,done}=await reader.read();
+      if(done)break;
+      parser.push(decoder.decode(value,{stream:true}));
+    }
+    parser.push(decoder.decode());
+    parser.finish();
+  } finally {
+    m.native_stream_active=false;
+    if(thinkStart && m.thinkSecs==null)
+      m.thinkSecs=(performance.now()-thinkStart)/1000;
+    if(sessionId===fixedSession)paint();
+  }
+  return decision;
 }
 function applyNativeTurn(m,turn) {
   window.MikuchinNativeToolClient.apply(m,turn);
@@ -1402,21 +1506,20 @@ async function submitModelToolTurn(m,el,signal) {
   if (settings.seed) request.seed=+settings.seed;
   m.native_turn_id=turnId;
   m.native_abort_requested=false;
+  m.native_stream_active=true;
   m.native_tool_state="deciding";
   m.native_tool_finished=false;
-  m.text="模型正在判断是否需要调用图片工具…";
+  m.text="";
   saveChat(); // Persist the unique ID before the ONLY decision POST.
   updateAssistant(el,m,true);
   let decision;
   try {
-    decision=await nativeTurnResponse(await fetch("v1/mikuchin/chat/turns",{
-      method:"POST",headers:headers(true),body:JSON.stringify(request)
-      // Do not propagate AbortSignal: a valid paid approval might already
-      // have been committed when the network connection closes.
-    }));
+    decision=await receiveNativeToolStream(request,m,el,fixedSession);
   } catch (error) {
+    m.native_stream_active=false;
     // A read-only GET can reconcile an accepted POST without re-submitting.
-    m.text="本次模型决策回执尚未确认；正在只读查询原请求，不会重复执行。";
+    if(sessionId!==fixedSession)return;
+    m.meta="请求连接中断，正在恢复任务状态";
     m.native_tool_error=String(error).slice(0,160);
     saveChat();renderChat();
     return;
@@ -1502,7 +1605,8 @@ async function refreshNativeToolTurns() {
       !window.MikuchinNativeToolClient) return;
   const currentId=sessionId;
   const pending=messages.filter(m => m.role==="assistant" &&
-    window.MikuchinNativeToolClient.unfinished(m)).slice(0,6);
+    window.MikuchinNativeToolClient.unfinished(m) &&
+    !(m.native_stream_active && busy?.msg===m)).slice(0,6);
   if (!pending.length) return;
   nativeTurnPolling=true;
   try {
@@ -1677,7 +1781,9 @@ function autosize() { const t = $("input"); t.style.height = "auto"; t.style.hei
 $("input").addEventListener("input", autosize);
 
 $("new-btn").onclick = async () => {
-  if (busy || sessionTransition) { toast("warn", "正在执行请求", "请先完成当前操作。"); return; }
+  if (sessionTransition || !detachNativeTurnForNavigation()) {
+    toast("warn", "正在执行请求", "请先完成当前操作。"); return;
+  }
   if (sessionV1) {
     const previous = sessionId;
     const previousSettings = settings;

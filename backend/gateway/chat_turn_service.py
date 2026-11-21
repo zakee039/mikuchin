@@ -19,11 +19,13 @@ try:
     from .chat_turns import ChatTurnStore, TurnForbidden
     from . import gallery
     from .gpu_gate import gpu_turn, GPUUnavailable
+    from .chat_streaming import ToolStreamAssembler, StreamIncomplete
 except ImportError:
     from chat_tool_dispatch import TOOL_SCHEMAS, InvalidToolCall, parse_decision, resolve_image_request
     from chat_turns import ChatTurnStore, TurnForbidden
     import gallery
     from gpu_gate import gpu_turn, GPUUnavailable
+    from chat_streaming import ToolStreamAssembler, StreamIncomplete
 
 LOG = logging.getLogger("mikuchin.gateway.turns")
 TURN_FIELDS = frozenset(("session_id","turn_id","messages","model","reasoning_effort",
@@ -74,6 +76,51 @@ class TurnCoordinator:
                 response_bytes=len(data) if status==200 else 0,
                 outcome="completed" if status==200 else "upstream_error")
 
+    def _official_stream(self,payload,on_delta,timeout=240):
+        """Stream the real reasoning/text while safely assembling tool calls.
+
+        The GPU shared lease covers the COMPLETE model response. A disconnected
+        browser does not interrupt the decision or duplicate a possible job;
+        only the final fully-validated tool call may dispatch a task.
+        """
+        payload={**payload,"stream":True}
+        data=json.dumps(payload,ensure_ascii=False,allow_nan=False).encode("utf-8")
+        if len(data)>7*1024*1024:raise ValueError("Model request too large")
+        conn=http.client.HTTPConnection(self.server.upstream_host,self.server.upstream_port,timeout=timeout)
+        ticket=self.server.request_monitor.begin("chat")
+        root=self.server.image_jobs.root.parent if self.server.image_jobs else None
+        result=ToolStreamAssembler()
+        status=502
+        deliver=True
+        try:
+            with gpu_turn(root,timeout=10):
+                try:
+                    conn.request("POST","/v1/chat/completions",body=data,headers={
+                        "Authorization":"Bearer "+self.server.upstream_key,
+                        "Content-Type":"application/json","Accept":"text/event-stream"})
+                    resp=conn.getresponse()
+                    status=resp.status
+                    if status!=200:
+                        raise ValueError("Official model unavailable (HTTP "+str(status)+")")
+                    while True:
+                        line=resp.readline(131072)
+                        if not line:break
+                        delta=result.consume(line)
+                        if delta and deliver:
+                            try:on_delta(delta)
+                            except (BrokenPipeError,ConnectionError,OSError):
+                                # The UI navigated away; the persisted Turn
+                                # must STILL finish exactly once server-side.
+                                deliver=False
+                        if result.done:break
+                finally:conn.close()
+            return result.complete()
+        finally:
+            self.server.request_monitor.finish(ticket,status=status,
+                response_bytes=result.bytes,
+                outcome="completed" if status==200 and result.done
+                         else "upstream_error")
+
     def _validate(self, request):
         if not isinstance(request,dict) or set(request)-TURN_FIELDS:
             raise ValueError("Unsupported model-turn request fields")
@@ -112,24 +159,28 @@ class TurnCoordinator:
                 payload[item]=v
         return session,turn,payload
 
-    def submit(self, request):
+    def submit(self, request, *, on_delta=None):
         session,turn,payload=self._validate(request)
         if not self.store.create(session,turn,payload):
             return self.store.public(session,turn,self.server.image_jobs)
         try:
-            result=self._official(payload)
+            result=(self._official_stream(payload,on_delta) if on_delta is not None
+                    else self._official(payload))
             # The user may have cancelled while the official model was
             # computing. Its answer must then be discarded, never dispatched.
             if self.store.get(session,turn)["state"]!="deciding":
                 return self.store.public(session,turn,self.server.image_jobs)
             decision=parse_decision(result)
+            message=result.get("choices",[{}])[0].get("message") or {}
+            reasoning=message.get("reasoning_content") or ""
+            if not isinstance(reasoning,str):reasoning=""
             if decision["kind"]=="text":
-                self.store.decision_text(session,turn,decision["text"])
+                self.store.decision_text(session,turn,decision["text"],reasoning)
                 return self.store.public(session,turn,self.server.image_jobs)
             req,profile=resolve_image_request(self.server.characters,self.server.image_jobs,decision)
             # Edit may only use this session's latest successful image. The
             # ImageJobStore revalidates and resolves reference SERVER-side.
-            token=self.store.decision_tool(session,turn,decision,req,profile)
+            token=self.store.decision_tool(session,turn,decision,req,profile,reasoning)
             if profile["online"]:
                 result=self.store.public(session,turn,self.server.image_jobs)
                 result["approval_token"]=token  # one-time; never stored in plaintext
@@ -138,7 +189,8 @@ class TurnCoordinator:
             self._dispatch(session,turn)
         except InvalidToolCall as exc:
             self.store.transition(session,turn,"deciding","tool_rejected",error=str(exc))
-        except (ValueError,OSError,TimeoutError,http.client.HTTPException,TypeError,GPUUnavailable) as exc:
+        except (ValueError,OSError,TimeoutError,http.client.HTTPException,TypeError,
+                GPUUnavailable,StreamIncomplete) as exc:
             self.store.transition(session,turn,"deciding","decision_error",
                                   error=self._safe_error(exc))
         return self.store.public(session,turn,self.server.image_jobs)
