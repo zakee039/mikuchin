@@ -62,6 +62,17 @@ def expected_files(data: dict) -> dict[str, str]:
     c = str(data["components"]["android"]["versionCode"])
     only_main_bumped = m != l or m != a
     targets: dict[str, str] = {}
+    # Engine pin is owned by Mikuchin Gateway and does not change with
+    # product/client releases. Embed its exact string in the early-loading
+    # versions.js so the About page never waits for /health or /metrics.
+    gateway_source = _text("backend/gateway/app.py")
+    engine_pins = re.findall(
+        r'"official_polystrata_release": "(v\d+\.\d+\.\d+-poly\.\d+)"',
+        gateway_source,
+    )
+    if len(engine_pins) != 1:
+        raise ValueError("Expected exactly one official PolyStrata pin in Gateway")
+    engine_pin = engine_pins[0]
 
     def replace(file, pat, repl, flags=0):
         s = targets.get(file, _text(file))
@@ -70,6 +81,9 @@ def expected_files(data: dict) -> dict[str, str]:
     replace("frontend/web/versions.js", r'(?m)^  main: "\d+\.\d+\.\d+",', f'  main: "{m}",')
     replace("frontend/web/versions.js", r'(?m)^  launcher: "\d+\.\d+\.\d+",', f'  launcher: "{l}",')
     replace("frontend/web/versions.js", r'(?m)^  android: "\d+\.\d+\.\d+",', f'  android: "{a}",')
+    replace("frontend/web/versions.js",
+            r'(?m)^  polystrata: "v\d+\.\d+\.\d+-poly\.\d+",',
+            f'  polystrata: "{engine_pin}",')
     replace("frontend/web/index.html", r'web/versions\.js\?v=\d+\.\d+\.\d+', f'web/versions.js?v={m}')
 
     replace("frontend/launcher/package.json", r'(?m)^  "version": "\d+\.\d+\.\d+",', f'  "version": "{l}",')

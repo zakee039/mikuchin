@@ -88,6 +88,7 @@ function showTab(name) {
   if (tab === "gallery") void window.MikuchinGallery?.refresh();
   if (tab === "characters" && window.polyCharactersLoad) window.polyCharactersLoad();
   if (lastMetrics) render(lastMetrics);
+  else if (tab === "about") renderAbout({}, {}, {});
 }
 for (const b of document.querySelectorAll(".st-tab")) b.onclick = () => showTab(b.dataset.tab);
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
@@ -455,7 +456,9 @@ function renderAbout(eng, hw, st) {
     ["Desktop launcher version", `v${v.launcher}`],
     ["Android client version", `v${v.android}`],
     ["Model", eng.model],
-    ["Engine", health?.component === "mikuchin-gateway" && health?.official_polystrata_release ? `PolyStrata ${health.official_polystrata_release}` : (eng.version ? `PolyStrata v${eng.version}` : "PolyStrata (built from source)")],
+    // Immutable build metadata; the live health/metrics requests may take
+    // seconds or temporarily fail, but must not alter the displayed version.
+    ["Engine", `PolyStrata ${v.polystrata}`],
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens` : null],
     ["KV cache", kv ? `${kv}${eng.kv_resident ? `, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM` : ", all in VRAM"}` : null],
     ["Experts in VRAM", eng.expert_slots ? `${fmt(eng.expert_slots)} (${gb((eng.expert_cache_mib || 0) * 1048576)} GB)` : null],

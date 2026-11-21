@@ -71,6 +71,14 @@ class ReleaseVersionTests(unittest.TestCase):
         app = (WEB / "app.js").read_text(encoding="utf-8")
         for key in ("main", "launcher", "android"):
             self.assertIn(f"v.{key}", app)
+        self.assertIn("v.polystrata", app)
+        self.assertNotIn("health?.official_polystrata_release", app)
+        # Gateway's pinned upstream version is the one authority. The early
+        # web versions.js is its versioning.py-generated, network-free copy.
+        gateway=(ROOT/"backend/gateway/app.py").read_text(encoding="utf-8")
+        pins=re.findall(r'"official_polystrata_release": "(v\d+\.\d+\.\d+-poly\.\d+)"',gateway)
+        self.assertEqual(len(pins),1)
+        self.assertIn('polystrata: "'+pins[0]+'"', (WEB/"versions.js").read_text(encoding="utf-8"))
         for label in ("Main program version", "Desktop launcher version",
                       "Android client version"):
             self.assertIn(f'["{label}"', app)
