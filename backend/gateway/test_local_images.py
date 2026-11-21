@@ -5,6 +5,7 @@ All subprocesses are fake test binaries; no paid API, model weights or GPU used.
 from __future__ import annotations
 
 import contextlib
+import base64
 import io
 import json
 import os
@@ -118,6 +119,39 @@ class LocalNativeImageTests(unittest.TestCase):
                 "strata_upscale":"4x","size":"1024x1024"}))
         with self.assertRaisesRegex(ValueError,"divisible by 32"):
             self.jobs._require_provider(self.jobs._prepare({**self.req,"size":"400x400"}))
+
+    def test_official_reference_requires_registered_mmproj_and_passes_private_png(self):
+        vision=self.root/"fake-model"/"mmproj.gguf"
+        vision.write_bytes(b"fake mmproj")
+        self.config["profiles"][0]["llm_vision"]=str(vision)
+        local_images.config_path(self.jobs).write_text(json.dumps(self.config),encoding="utf-8")
+        catalog,_=local_images.catalog(self.jobs)
+        self.assertEqual(catalog[0]["reference_mode"],"single")
+        reference="data:image/png;base64,"+base64.b64encode(png((32,24))).decode("ascii")
+        req={**self.req,"strata_lora_id":"none","strata_reference_mode":"single",
+             "strata_reference_assets":[{"name":"user-reference.png","data_url":reference}]}
+        commands=[]
+        def fake_run(args,*,work,**_):
+            commands.append(args)
+            self.assertEqual(args[args.index("--llm_vision")+1],str(vision))
+            path=Path(args[args.index("--ref-image")+1])
+            with Image.open(path) as img:
+                self.assertEqual(img.size,(32,24))
+            (Path(work)/"generated_0.png").write_bytes(png((384,384)))
+        with (mock.patch.object(local_images,"gpu_handoff",
+                                side_effect=lambda *a,**k:contextlib.nullcontext()),
+              mock.patch.object(local_images,"_run",side_effect=fake_run)):
+            task=self.jobs.submit({"request":req})
+            self.jobs.queue.join()
+        self.assertEqual(self.jobs.listing(task["id"])["state"],"success")
+        self.assertEqual(len(commands),1)
+        self.assertIn("--ref-image",commands[0])
+        self.assertIn("--llm_vision",commands[0])
+        self.config["profiles"][0].pop("llm_vision")
+        local_images.config_path(self.jobs).write_text(json.dumps(self.config),encoding="utf-8")
+        self.assertEqual(local_images.catalog(self.jobs)[0][0]["reference_mode"],"none")
+        with self.assertRaisesRegex(ValueError,"reference images"):
+            self.jobs.submit({"request":req})
 
     def test_generate_is_independent_of_online_api_and_registers_gallery(self):
         seen = []

@@ -30,6 +30,8 @@
 
 - Native 聊天输入区与任务计时（2026-11-21）：根据用户明确要求，**删除聊天输入框的「生图」「自动：关」两个按钮及其自动路由/提交逻辑**；不再加载 `chat-image-intent.js`，普通 Chat 始终走文字聊天路径。独立「生图」页、画廊和已存在聊天生图的历史展示/状态轮询仍保留，后台历史任务数据不删除。图像任务 `started_at` 改为由 Worker **真正开始调用 API/模型**时写入；排队、等待 GPU 锁、卸载 LLM 不计入运行耗时，`started_at=NULL` 的进行中任务应显示「排队中」，不再把客户端点击时间当执行起点。此规则同时修复正式 main 的 `backend/polystrata/serve/image_jobs.py` 与 `frontend/web/image-studio.js`，但**main 服务无须为此强制启动**；后续不应擅自恢复两个聊天按钮。
 
+- Native P2 实机验收（2026-11-21）：已在 Native 独立真实 Worker 上验证 Uncensored 384×384/4steps 生成成功（166.4s），同一图片执行画廊手动 Real-ESRGAN 4× 成功（1536×1536，7.2s），画廊原图/封面成对、重复提交幂等，测试图片/任务全部删除。又发现 Official 匹配的 `mmproj-Qwen3VL-8B-Instruct-F16.gguf`，只在 Native Official 的 `llm_vision` 注册并保留配置备份，真实 GPU 参考 128×128 PNG 生成 256×256 成功（170.6s），私有图片引用/CLI参数/输出及画廊索引均核验，测试产物/引用已清理。Uncensored 采用不同LLM，当前 `reference_mode=none`，不得强行复用 Official mmproj。不得将参考图生成功能运行成功夸大为视觉一致性或美学质量已验证。详细结果 `docs/NATIVE_P2_UNCENSORED_4X_VALIDATION_2026-11-21.md`；不影响正式 main/15239，无在线收费生图调用。
+
 - Native P1 请求监控增量（2026-11-21）：受认证的 `GET /v1/mikuchin/request-monitor` 记录每次经 Gateway 转发的推理 POST 的固定类别、HTTP 状态、完成耗时、响应字节及失败状态；仅在内存中保存最近30条，重启清空，**不保存请求正文/消息/Token/用户IP/Key/路径**。真实 SSE 和非流式均按整个转发周期计时，GPU 锁拒绝记为 `gpu_busy`。Tauri `get_status` 与「原生状态」只读汇总已接通；如接口失效不得显示假数据。旧版 `answer_budget_tokens` 仍没有官方精确等价接口（官方 max_tokens 包含思考+正文），继续 health=false/501，不以字符数估算。动态 GPU 配额和单次精确 token 仍不支持，不应显示假配置。详情 `docs/NATIVE_P1_REQUEST_MONITOR_2026-11-21.md`。
 
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。

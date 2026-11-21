@@ -48,6 +48,12 @@ $profiles = @(
         args = $args; max_side = 1024; timeout_seconds = 1200
     }
 )
+# This optional projector belongs to Official's Qwen3VL-8B LLM only.
+# Uncensored uses a different LLM and must not inherit it.
+$officialVision = Join-Path $official 'mmproj-Qwen3VL-8B-Instruct-F16.gguf'
+if (Test-Path -LiteralPath $officialVision -PathType Leaf) {
+    $profiles[0].llm_vision = $officialVision
+}
 $loraEntries = @(
     @{ id = 'female-anatomy-v3'; name = 'Eastern Female v3'; path = (Join-Path $loras 'easternfemale_v2.1_v3.safetensors') },
     @{ id = 'anatomy-fix'; name = 'Anatomy Fix'; path = (Join-Path $loras 'Genitalia-Anatomy-2.1-v1.safetensors') },
