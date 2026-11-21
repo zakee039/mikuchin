@@ -13,6 +13,7 @@ type Metrics = {
 type NativePrefs = {
   autostart: boolean; auto_start_service: boolean; watchdog: boolean;
   manual_unloaded: boolean;
+  model_config: string; idle_unload_s: number;
   lan_access: boolean; cf_enabled: boolean; cf_hostname: string;
 };
 type LanAddress = {address: string; interface: string; description: string};
@@ -20,6 +21,7 @@ type Status = {
   phase: string; desired: boolean; managed: boolean; stopping: boolean;
   error: string; restarts: number; gateway_port: number; official_port: number;
   gateway_ready: boolean; model_loaded: boolean | null; api_key_present: boolean; model: string; config_name: string;
+  available_configs: Array<{file: string; name: string}>;
   metrics: Metrics | null; host_gpu: Record<string, number> | null;
   supervisor_pid: number | null; children: Record<string, number>;
   supervisor_phase: string; child_restarts: Record<string, number>;
@@ -58,6 +60,7 @@ let avatarCount = 0;
 let lastAvatar = 0;
 let cfHostnameDraft: string | null = null;
 let cfTokenDraft = "";
+let modelPathDraft = "";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
@@ -168,6 +171,9 @@ function apiPage(): string {
     <div class="setting-card api-panel">
       <div class="api-line"><strong>端口</strong><input class="field port-field native-readonly" readonly value="${s?.gateway_port || 15249}"><span class="native-inline-note">Native Gateway</span></div>
       <div class="api-line"><strong>API Key</strong><input class="field key-display native-readonly" type="text" readonly value="••••••••••••" aria-label="API Key 已隐藏"><button class="outline-small" data-action="copy-key">复制</button></div>
+      <div class="api-line"><small class="native-hint">轮换密钥前先卸载模型；旧客户端需重新输入新 Key</small>
+        <button class="outline-small" data-action="rotate-key"
+          ${s?.managed || s?.desired || s?.stopping || busy ? "disabled" : ""}>轮换 Key</button></div>
       <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong>
         <label class="lan-toggle" title="更改监听范围后须安全重启服务，现有任务不会被中断">
           <input type="checkbox" data-setting="lan_access" ${settings?.lan_access ? "checked" : ""} ${busy ? "disabled" : ""}><span class="switch"></span></label></div>
@@ -202,6 +208,26 @@ function settingsPage(): string {
       ${toggle("autostart","开机自启")}
       ${toggle("auto_start_service","启动器启动后自动拉起服务")}
       ${toggle("watchdog","服务异常自动恢复")}
+    </div>
+    <div class="setting-card native-model-config"><h3>模型配置与空闲卸载</h3>
+      <div class="api-line"><label for="native-model-select">模型</label>
+        <select id="native-model-select" class="field" ${busy ? "disabled" : ""}>
+          ${(status?.available_configs || []).map(item =>
+            `<option value="${esc(item.file)}" ${item.file===prefs?.model_config ? "selected" : ""}>
+              ${esc(item.name)} (${esc(item.file)})</option>`).join("")}
+        </select></div>
+      <div class="api-line"><label for="native-idle-seconds">空闲卸载</label>
+        <select id="native-idle-seconds" class="field" ${busy ? "disabled" : ""}>
+          ${[[0,"禁用"],[300,"5 分钟"],[900,"15 分钟"],[1800,"30 分钟"],[3600,"60 分钟"]]
+            .map(([value, label]) => `<option value="${value}"
+              ${prefs?.idle_unload_s===value ? "selected" : ""}>${label}</option>`).join("")}
+        </select></div>
+      <div class="api-line"><label for="native-import-path">注册 JSON</label>
+        <input id="native-import-path" class="field" type="text" spellcheck="false"
+          placeholder="本机模型 JSON 文件路径" value="${esc(modelPathDraft)}">
+        <button class="outline-small" data-action="register-model" ${busy ? "disabled" : ""}>导入</button></div>
+      <p class="native-hint">设置在下次手动「卸载模型」→「加载模型」时生效；
+        不会强制中断当前推理或图片任务。</p>
     </div>
   </section>`;
 }
@@ -357,6 +383,32 @@ async function updatePrefs(updates: Partial<NativePrefs>, success: string) {
     await poll();
   }
 }
+async function rotateNativeKey() {
+  if (busy || status?.managed || status?.desired || status?.stopping) {
+    mark("请先卸载模型，等 Native 服务完全停止后再轮换密钥"); return;
+  }
+  if (!window.confirm("确定轮换 Native API Key？当前所有设备、浏览器保存的旧密钥将立即失效。此操作不会影响正式版。")) return;
+  busy = true;
+  try {
+    await invoke("rotate_native_api_key");
+    mark("Native Key 已安全轮换。加载模型后请复制新 Key，并更新其他客户端。");
+  } catch (error) { mark("密钥轮换失败：" + String(error)); }
+  finally { busy = false; await poll(); }
+}
+async function registerModel() {
+  if (busy || !modelPathDraft.trim()) {
+    mark("请填写本机模型 JSON 配置文件的完整路径"); return;
+  }
+  busy = true;
+  try {
+    const item = await invoke<{file: string; name: string}>("register_native_model_config",
+      {path: modelPathDraft.trim()});
+    modelPathDraft = "";
+    mark("已注册 " + item.name + "，可在模型列表中选择");
+  } catch (error) {
+    mark("模型注册失败：" + String(error));
+  } finally { busy = false; await poll(); }
+}
 async function saveTunnelForm() {
   if (busy || !status?.settings) return;
   busy = true;
@@ -405,9 +457,16 @@ root.addEventListener("input", event => {
   const input = event.target as HTMLInputElement;
   if (input.id === "cf-hostname") cfHostnameDraft = input.value;
   if (input.id === "cf-token") cfTokenDraft = input.value;
+  if (input.id === "native-import-path") modelPathDraft = input.value;
 });
 root.addEventListener("change", event => {
   const input = event.target as HTMLInputElement;
+  if (input.id === "native-model-select") {
+    void updatePrefs({model_config:input.value}, "模型配置已保存，下次手动加载时生效"); return;
+  }
+  if (input.id === "native-idle-seconds") {
+    void updatePrefs({idle_unload_s:Number(input.value)}, "空闲卸载时间已保存，下次手动加载时生效"); return;
+  }
   const key = input.dataset.setting;
   if (!key || input.type !== "checkbox") return;
   if (key === "lan_access" || key === "cf_enabled" ||
@@ -437,6 +496,8 @@ root.addEventListener("click", event => {
   }
   const action = element.dataset.action;
   if (action === "copy-key") void copyKey();
+  else if (action === "rotate-key") void rotateNativeKey();
+  else if (action === "register-model") void registerModel();
   else if (action === "open-chat") void task("open_chat", "已打开 Chat 页面");
   else if (action === "show-log") void showLogs();
   else if (action === "save-tunnel") void saveTunnelForm();

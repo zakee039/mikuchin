@@ -111,3 +111,27 @@ test("overview manually unloads and loads models without calling service stop la
   assert.match(rust, /prefs\.manual_unloaded = false/);
   assert.match(rust, /should_auto_start\(/);
 });
+
+test("Native model registration and idle timeout are wired to isolated real commands", () => {
+  assert.match(source,/id="native-model-select"/);
+  assert.match(source,/id="native-idle-seconds"/);
+  assert.match(source,/id="native-import-path"/);
+  assert.match(source,/register_native_model_config/);
+  assert.match(source,/idle_unload_s:Number\(input.value\)/);
+  assert.match(source,/model_config:input.value/);
+  assert.match(source,/下次手动/);
+  assert.match(rust,/fn effective_config\(/);
+  assert.match(rust,/value\["idle_unload_s"\] = json!\(timeout\)/);
+  assert.match(rust,/fn list_native_model_configs\(/);
+  assert.match(rust,/fn register_native_model_config\(/);
+});
+
+test("API key rotation is only available when native service is fully unloaded", () => {
+  assert.match(source,/data-action="rotate-key"/);
+  assert.match(source,/rotate_native_api_key/);
+  assert.match(source,/status\?\.managed \|\| status\?\.desired/);
+  assert.match(rust,/fn can_rotate_key\(/);
+  assert.match(rust,/if !can_rotate_key\(/);
+  assert.match(rust,/security::store\("api-key", &key\)/);
+  assert.match(source,/旧密钥将立即失效/);
+});

@@ -19,6 +19,7 @@ _MAX_MESSAGES = 2000
 _MAX_CHAT_JSON = 7 * 1024 * 1024
 _SAMPLING_KEYS = frozenset(("thinking", "budget", "temperature", "top_p",
                             "top_k", "max", "seed", "show", "esp", "mcp"))
+_LANGUAGES = frozenset(("zh-CN","en-US","ja-JP"))
 
 
 class MissingConversation(LookupError):
@@ -225,3 +226,18 @@ class ConversationStore:
                           ON CONFLICT(key) DO UPDATE SET json_value=excluded.json_value""",
                        (serialized,))
         return {"sampling": value}
+
+    def ui_language(self):
+        with self._db() as db:
+            row=db.execute("SELECT json_value FROM global_settings WHERE key='ui_language'").fetchone()
+        value=json.loads(row["json_value"]) if row else "zh-CN"
+        return {"language":value if value in _LANGUAGES else "zh-CN"}
+
+    def save_ui_language(self, language):
+        if not isinstance(language,str) or language not in _LANGUAGES:
+            raise ValueError("unsupported UI language")
+        with self._db() as db:
+            db.execute("""INSERT INTO global_settings(key,json_value)
+                VALUES('ui_language',?) ON CONFLICT(key)
+                DO UPDATE SET json_value=excluded.json_value""",(json.dumps(language),))
+        return {"language":language}

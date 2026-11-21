@@ -408,8 +408,8 @@
   }
   function taskElapsed(job, now = Date.now()) {
     if (!Number.isFinite(job.started_at) || job.state === "draft") return "";
-    // The draft may have existed for hours; only activation / retry establishes
-    // started_at. Completion freezes finished_at, never updated or created.
+    // started_at is assigned by the Worker when generation actually starts;
+    // time spent queued or preparing a draft must not be counted.
     const end = activeJob(job) ? now :
       Number.isFinite(job.finished_at) ? job.finished_at * 1000 : now;
     const duration = formatDuration(end - job.started_at * 1000);
@@ -423,7 +423,7 @@
       const job = taskRecords.get(id);
       if (!job || !activeJob(job)) continue;
       const clock = row.querySelector(".img-job-timer");
-      if (clock && Number.isFinite(job.started_at))
+      if (clock && Number.isFinite(job.started_at) && job.phase !== "排队等待执行")
         clock.textContent = "已运行 " + taskElapsed(job, now);
     }
   }
@@ -705,8 +705,7 @@
   async function retryTask(job) {
     // A new running task; only a failed source is removed after server success.
     try {
-      const clickedAt = Date.now() / 1000;
-      const created = await jobCommand({action:"retry",id:job.id,client_started_at:clickedAt});
+      const created = await jobCommand({action:"retry",id:job.id});
       if (created.deleted_original_id) {
         taskRecords.delete(created.deleted_original_id);
         taskRows.delete(created.deleted_original_id);
@@ -810,10 +809,11 @@
         catalog.find(m => m.id === job.profile_id)?.name || job.profile_id || "生图任务",
       job.result?.size || job.requested_size].filter(Boolean).join(" · ");
       timer.hidden = job.state === "draft" || job.state === "submitting";
-      timer.classList.toggle("img-job-timer-legacy", !Number.isFinite(job.started_at));
-      timer.textContent = Number.isFinite(job.started_at) ?
+      const executing = Number.isFinite(job.started_at) && job.phase !== "排队等待执行";
+      timer.classList.toggle("img-job-timer-legacy", !executing);
+      timer.textContent = executing ?
         (activeJob(job) ? "已运行 " : "耗时 ") + taskElapsed(job) :
-        "旧记录 · 起点未记录";
+        activeJob(job) ? "排队中" : "未记录执行耗时";
       const prompt = row.querySelector(".img-job-prompt");
       prompt.textContent = job.prompt_summary || "历史图像任务";
       const phase = row.querySelector(".img-job-phase");
@@ -918,7 +918,6 @@
   get("img-form").onsubmit = async ev => {
     ev.preventDefault();
     if (working) return;
-    const clickedAt = Date.now() / 1000;
     const prompt = get("img-positive").value.trim() || get("img-natural").value.trim();
     if (!prompt) {
       toast("warn", "没有生图描述", "请先填写 Positive Prompt 或自然语言描述。");
@@ -938,8 +937,7 @@
       // Activation preserves the very same ID, preventing an extra record.
       await flushDraftSave();
       if (!currentDraftId) throw Error("草稿尚未保存到桌面");
-      const created = await jobCommand({action:"activate",id:currentDraftId,
-        client_started_at:clickedAt});
+      const created = await jobCommand({action:"activate",id:currentDraftId});
       taskRecords.set(created.id,created);
       currentDraftId=null;
       store.set(activeDraftKey,"");

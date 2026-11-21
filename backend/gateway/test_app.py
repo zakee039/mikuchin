@@ -181,6 +181,23 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["models"][0]["id"], "official-model")
 
+    def test_global_ui_language_persists_and_requires_gateway_authentication(self):
+        path="/v1/mikuchin/ui-language"
+        self.assertEqual(self.request("GET",path,key=None)[0],401)
+        status,body=self.request("GET",path)
+        self.assertEqual(status,200)
+        self.assertIn(json.loads(body)["language"],("zh-CN","en-US","ja-JP"))
+        self.assertEqual(self.request("POST",path,payload={"language":"de-DE"})[0],400)
+        self.assertEqual(self.request("POST",path,payload={"language":"ja-JP"},
+                                      origin="https://evil.invalid")[0],403)
+        status,body=self.request("POST",path,payload={"language":"ja-JP"})
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(body)["language"],"ja-JP")
+        self.assertEqual(json.loads(self.request("GET",path)[1])["language"],"ja-JP")
+        self.assertEqual(ConversationStore(self.data.name).ui_language()["language"],"ja-JP")
+        # Restore fixture state for unrelated tests.
+        self.addCleanup(self.store.save_ui_language,"zh-CN")
+
     def test_image_studio_available_does_not_advertise_unported_chat_image_tool(self):
         with patch.object(gateway_app.local_images, "catalog",
                           return_value=([{"id":"local-offline", "available":True}], [])):
@@ -222,7 +239,7 @@ class GatewayContract(unittest.TestCase):
         for path, kind in (("/", b"<!doctype html>"),
                            ("/index.html",b"Mikuchin"),
                            ("/web/app.js?v=cache",b"headers"),
-                           ("/web/chat-image-intent.js?v=router",b"MIKUCHIN_IMAGE_ROUTER_V1"),
+                           ("/web/image-studio.js?v=timer",b"taskElapsed"),
                            ("/web/auth-images.js",b"MikuchinSecureImages"),
                            ("/web/app.css",b".st-"),
                            ("/web/sprite.svg",b"<svg"),
@@ -299,6 +316,45 @@ class GatewayContract(unittest.TestCase):
         self.assertEqual(json.loads(data)["state"],"failed")
         self.assertEqual(self.request("POST",endpoint,payload={
             "action":"chat_cancel","session_id":session_id,"request_id":request_id})[0],400)
+
+    def test_gallery_upscale_request_is_authenticated_queued_once_and_no_provider_call(self):
+        from backend.gateway import gallery
+        from PIL import Image
+        root=self.images.root/"generated-images"
+        root.mkdir(exist_ok=True)
+        ident="f"*32
+        Image.new("RGB",(20,12),"white").save(root/(ident+".png"))
+        gallery.register(self.images,ident,source="studio",model="fixture")
+        endpoint="/v1/mikuchin/image-jobs"
+        request={"kind":"upscale","image_id":ident}
+        self.assertEqual(self.request("POST",endpoint,payload=request,key=None)[0],401)
+        self.assertEqual(self.request("POST",endpoint,payload=request,
+                                      origin="https://evil.invalid")[0],403)
+        with (patch.object(self.images,"worker_healthy",return_value=True),
+              patch.object(gateway_app.local_images,"upscaler_ready",return_value=True),
+              patch.object(gateway_app.local_images,"_settings",
+                           return_value={"upscaler":{"max_output_side":3072}})):
+            status,data=self.request("POST",endpoint,payload=request)
+            self.assertEqual(status,200)
+            first=json.loads(data)
+            self.assertEqual(first["kind"],"upscale")
+            self.assertFalse(first["already_submitted"])
+            status,data=self.request("POST",endpoint,payload=request)
+            self.assertEqual(status,200)
+            second=json.loads(data)
+        self.assertTrue(second["already_submitted"])
+        self.assertEqual(first["id"],second["id"])
+        def cleanup_upscale_fixture():
+            with self.images._db() as db:
+                db.execute("UPDATE jobs SET state='failed' WHERE id=? AND state='running'",
+                           (first["id"],))
+            self.images.delete(first["id"])
+        self.addCleanup(cleanup_upscale_fixture)
+        status,data=self.request("GET",endpoint+"?kind=upscale")
+        self.assertEqual(status,200)
+        self.assertIn(first["id"],[item["id"] for item in json.loads(data)["jobs"]])
+        with self.assertRaises(ValueError):
+            self.images.submit_upscale("not-an-image-id")
 
     def test_unported_mikuchin_semantics_fail_explicitly(self):
         before=len(FakeOfficial.seen)

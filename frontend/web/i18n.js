@@ -49,7 +49,8 @@
   }
   async function refresh() {
     try {
-      const response = await fetch('/v1/mikuchin/ui-language',{cache:'no-store'});
+      const response = await fetch('/v1/mikuchin/ui-language',
+        {headers:typeof headers==='function' ? headers() : {},cache:'no-store'});
       if (!response.ok) return;
       const data = await response.json();
       if (supported.includes(data.language) && active !== data.language) apply(data.language);

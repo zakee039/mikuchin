@@ -70,6 +70,7 @@ struct LaunchSpec {
     python: PathBuf,
     data_dir: PathBuf,
     config: Option<PathBuf>,
+    idle_override: Option<u32>,
     engine: &'static str,
     gateway_port: u16,
     official_port: u16,
@@ -104,10 +105,15 @@ fn validate_spec(spec: &LaunchSpec) -> Result<(), String> {
 fn normal_spec() -> Result<LaunchSpec, String> {
     let root = project_root()?;
     let runtime = runtime_root(&root)?;
+    let prefs = native_prefs::read()?;
+    if !native_prefs::valid_config_name(&prefs.model_config) {
+        return Err("非法 Native 模型配置文件名".into());
+    }
     let spec = LaunchSpec {
         python: runtime.join(".venv/Scripts/python.exe"),
         data_dir: runtime.join("launcher-user-data"),
-        config: Some(runtime.join("config/official-sm86-model-test.json")),
+        config: Some(runtime.join("config").join(&prefs.model_config)),
+        idle_override: Some(prefs.idle_unload_s),
         root,
         engine: "strata",
         gateway_port: GATEWAY_PORT,
@@ -116,6 +122,30 @@ fn normal_spec() -> Result<LaunchSpec, String> {
     };
     validate_spec(&spec)?;
     Ok(spec)
+}
+
+// Never edit an imported official JSON in place. Only the isolated generated
+// copy receives the user-selected idle unload policy on the next model load.
+fn effective_config(spec: &LaunchSpec) -> Result<Option<PathBuf>, String> {
+    let Some(source) = &spec.config else { return Ok(None); };
+    let Some(timeout) = spec.idle_override else { return Ok(Some(source.clone())); };
+    if timeout > 86400 { return Err("自动卸载时间超出允许范围".into()); }
+    let bytes = fs::read(source).map_err(|e| format!("无法读取 Native 模型配置: {e}"))?;
+    if bytes.len() > 256 * 1024 { return Err("模型配置文件过大".into()); }
+    let json_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let mut value: Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| format!("模型配置不是有效 JSON: {e}"))?;
+    if !value.is_object() || !value["args"].is_array() || !value["exe"].is_string() {
+        return Err("模型配置缺少官方引擎的 exe/args 字段".into());
+    }
+    value["idle_unload_s"] = json!(timeout);
+    let dest = spec.data_dir.join("active-model-config.json");
+    fs::create_dir_all(&spec.data_dir).map_err(|e| e.to_string())?;
+    let temp = dest.with_extension("json.tmp");
+    fs::write(&temp, serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    native_prefs::replace_file(&temp, &dest)?;
+    Ok(Some(dest))
 }
 
 fn port_open(port: u16) -> bool {
@@ -145,7 +175,8 @@ fn spawn_supervisor(spec: &LaunchSpec, log_path: &Path, lan_access: bool) -> Res
         .args(["--gateway-port", &spec.gateway_port.to_string()])
         .args(["--upstream-port", &spec.official_port.to_string()])
         .arg("--control-stdin");
-    if let Some(config) = &spec.config {
+    let effective = effective_config(spec)?;
+    if let Some(config) = &effective {
         command.arg("--config").arg(config);
     }
     if lan_access {
@@ -366,6 +397,7 @@ struct NativeStatus {
     api_key_present: bool,
     model: String,
     config_name: String,
+    available_configs: Vec<NativeModelConfig>,
     metrics: Option<Value>,
     host_gpu: Option<Value>,
     supervisor_pid: Option<u32>,
@@ -389,6 +421,78 @@ struct NativeStatus {
     cf_binary_ready: bool,
     lan_addresses: Vec<native_network::LanAddress>,
     lan_effective: bool,
+}
+
+#[derive(Serialize)]
+struct NativeModelConfig {
+    file: String,
+    name: String,
+}
+
+fn list_native_model_configs() -> Result<Vec<NativeModelConfig>, String> {
+    let folder = project_runtime_root()?.join("config");
+    let mut choices = Vec::new();
+    for entry in fs::read_dir(folder).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        let file = entry.file_name().to_string_lossy().to_string();
+        if !native_prefs::valid_config_name(&file) { continue; }
+        let bytes = match fs::read(entry.path()) {
+            Ok(value) if value.len() <= 256 * 1024 => value,
+            _ => continue,
+        };
+        let json_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        let Ok(value) = serde_json::from_slice::<Value>(json_bytes) else { continue; };
+        if !value["exe"].is_string() || !value["args"].is_array() { continue; }
+        let name = value["display_name"].as_str().unwrap_or(&file).to_owned();
+        choices.push(NativeModelConfig { file, name });
+    }
+    choices.sort_by(|a,b| a.file.cmp(&b.file));
+    Ok(choices)
+}
+
+#[tauri::command]
+fn register_native_model_config(path: String) -> Result<NativeModelConfig, String> {
+    if path.trim().len() > 1024 { return Err("模型配置文件路径太长".into()); }
+    let source = PathBuf::from(path.trim());
+    if source.extension().is_none_or(|ext| ext != "json") || !source.is_file() {
+        return Err("请选择本机真实存在的模型 JSON 配置文件".into());
+    }
+    let bytes = fs::read(&source).map_err(|e| e.to_string())?;
+    if bytes.len() > 256 * 1024 { return Err("模型 JSON 文件过大".into()); }
+    let json_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let value: Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| format!("模型配置 JSON 格式错误: {e}"))?;
+    if !value["exe"].as_str().is_some_and(|x| !x.is_empty()) || !value["args"].is_array() {
+        return Err("文件不是有效的官方 PolyStrata 模型配置 (缺少 exe/args)".into());
+    }
+    let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+    let clean: String = stem.chars().take(55).map(|c|
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }
+    ).collect();
+    let folder = project_runtime_root()?.join("config");
+    fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    for n in 1..=100 {
+        let file = format!("import-{clean}-{n}.json");
+        if !native_prefs::valid_config_name(&file) { continue; }
+        let dest = folder.join(&file);
+        match OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(mut handle) => {
+                if let Err(error) = handle.write_all(&bytes) {
+                    drop(handle);
+                    let _ = fs::remove_file(&dest);
+                    return Err(error.to_string());
+                }
+                return Ok(NativeModelConfig {
+                    file,
+                    name: value["display_name"].as_str().unwrap_or("已导入模型").to_owned(),
+                });
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("注册数量已达上限，请先整理 Native 模型配置目录".into())
 }
 
 // uv's Windows venv python.exe can be a redirector: the launcher owns the
@@ -481,6 +585,7 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         model, config_name: spec.as_ref().ok().and_then(|s| s.config.as_ref())
             .and_then(|p| p.file_name()).map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "未配置".into()),
+        available_configs: list_native_model_configs().unwrap_or_default(),
         metrics, host_gpu, supervisor_pid: pid, children, supervisor_phase,
         child_restarts, last_recovery, gpu_busy, gpu_phase,
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
@@ -499,6 +604,13 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
 fn save_native_preferences(
     state: State<'_, AppState>, incoming: NativePrefs,
 ) -> Result<NativePrefs, String> {
+    if !native_prefs::valid_config_name(&incoming.model_config)
+        || !project_runtime_root()?.join("config").join(&incoming.model_config).is_file() {
+        return Err("请选择已注册的 Native 模型 JSON 配置".into());
+    }
+    if incoming.idle_unload_s > 86400 {
+        return Err("自动卸载时间必须在 0–86400 秒之间".into());
+    }
     if !incoming.cf_hostname.is_empty() && !native_prefs::validate_hostname(&incoming.cf_hostname) {
         return Err("Cloudflare 域名格式无效".into());
     }
@@ -590,6 +702,23 @@ fn test_native_tunnel(state: State<'_, AppState>) -> Result<Value, String> {
 #[tauri::command]
 fn reveal_api_key() -> Result<String, String> {
     security::ensure_api_key()
+}
+
+fn can_rotate_key(managed: bool, desired: bool, stopping: bool) -> bool {
+    !managed && !desired && !stopping
+}
+
+#[tauri::command]
+fn rotate_native_api_key(state: State<'_, AppState>) -> Result<(), String> {
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    refresh_child(&mut inner);
+    if !can_rotate_key(alive(&mut inner), inner.desired, inner.stopping) {
+        return Err("请先点击「卸载模型」，待 Native 服务完全停止后才能轮换 API Key".into());
+    }
+    // The new DPAPI key is used on the next explicit Native service start.
+    // Never alter the running Gateway's key or any production credentials.
+    let key = security::random_api_key()?;
+    security::store("api-key", &key)
 }
 
 #[tauri::command]
@@ -717,6 +846,7 @@ pub fn self_test() -> i32 {
             python: runtime.join(".venv/Scripts/python.exe"),
             data_dir: data_dir.clone(),
             config: if full { Some(runtime.join("config/official-sm86-model-test.json")) } else { None },
+            idle_override: None,
             engine: if full { "strata" } else { "mock" },
             gateway_port,
             official_port,
@@ -794,6 +924,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             start_service, stop_service, get_status, reveal_api_key, open_chat, get_log,
+            register_native_model_config, rotate_native_api_key,
             save_native_preferences, save_native_tunnel_token, install_native_tunnel,
             restart_native_tunnel, test_native_tunnel
         ])
@@ -931,7 +1062,7 @@ mod tests {
     fn reserved_stable_port_never_allowed() {
         let mut spec = LaunchSpec {
             root: PathBuf::from("does-not-exist"), python: PathBuf::new(),
-            data_dir: PathBuf::from("native"), config: None,
+            data_dir: PathBuf::from("native"), config: None, idle_override: None,
             engine: "mock", gateway_port: STABLE_PORT, official_port: OFFICIAL_PORT,
             key: "a".repeat(32),
         };
@@ -939,6 +1070,44 @@ mod tests {
         spec.gateway_port = GATEWAY_PORT;
         spec.official_port = STABLE_PORT;
         assert!(validate_spec(&spec).unwrap_err().contains("15239"));
+    }
+
+    #[test]
+    fn isolated_model_config_override_preserves_registered_source() {
+        let root = std::env::temp_dir().join(format!("mikuchin-model-prefs-test-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("registered.json");
+        fs::write(&source, b"\xef\xbb\xbf{\"exe\":\"mock.exe\",\"args\":[\"--model\",\"mock.gguf\"],\"idle_unload_s\":900}").unwrap();
+        let mut spec = LaunchSpec {
+            root: root.clone(), python: PathBuf::new(),
+            data_dir: root.join("user-data"), config: Some(source.clone()),
+            idle_override: Some(300), engine: "strata",
+            gateway_port: GATEWAY_PORT, official_port: OFFICIAL_PORT,
+            key: "x".repeat(32),
+        };
+        let dest = effective_config(&spec).unwrap().unwrap();
+        let obj: Value = serde_json::from_slice(&fs::read(&dest).unwrap()).unwrap();
+        assert_eq!(obj["idle_unload_s"], 300);
+        assert_eq!(obj["args"][1], "mock.gguf");
+        let original_bytes = fs::read(&source).unwrap();
+        assert!(original_bytes.starts_with(&[0xEF,0xBB,0xBF]));
+        let original: Value = serde_json::from_slice(&original_bytes[3..]).unwrap();
+        assert_eq!(original["idle_unload_s"], 900);
+        spec.idle_override = Some(0);
+        let next = effective_config(&spec).unwrap().unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(next).unwrap()).unwrap();
+        assert_eq!(value["idle_unload_s"], 0);
+        spec.idle_override = Some(86401);
+        assert!(effective_config(&spec).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn api_key_rotation_requires_a_stopped_unmanaged_native_service() {
+        assert!(can_rotate_key(false,false,false));
+        assert!(!can_rotate_key(true,false,false));
+        assert!(!can_rotate_key(false,true,false));
+        assert!(!can_rotate_key(false,false,true));
     }
 
     #[test]

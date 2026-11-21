@@ -279,11 +279,11 @@
     $g("gallery-show-original").setAttribute("aria-pressed",String(variant==="original"));
     $g("gallery-show-upscaled").setAttribute("aria-pressed",String(variant==="upscaled"));
     const job=upscaleJobs.get(item.id);
-    const pending=job && ["queued","working"].includes(job.state);
+    const pending=job && ["queued","working","running"].includes(job.state);
     const action=$g("gallery-create-upscale");
-    action.disabled=true;
-    action.hidden=true; // Native local upscaler has not been ported yet.
-    action.textContent=translate("4x 需本地 Image Worker 支持");
+    action.hidden=pair || (typeof health!=="undefined" && health.native_upscaler_ready === false);
+    action.disabled=!!pending;
+    action.textContent=pending ? "4× 超分执行中…" : "生成 4× 图";
     $g("gallery-delete-original").hidden=!pair;
     $g("gallery-delete-upscaled").hidden=!pair;
     $g("gallery-details").textContent=[
@@ -379,7 +379,7 @@
       for (const job of data.jobs||[]) {
         if (job.kind!=="upscale") continue;
         upscaleJobs.set(job.source_id,job);
-        if (job.state==="done" && !appliedUpscales.has(job.source_id)) {
+        if (["done","success"].includes(job.state) && !appliedUpscales.has(job.source_id)) {
           try {await updateUpscaledItem(job.source_id);}catch(_error){}
         }
       }

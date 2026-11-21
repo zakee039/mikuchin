@@ -15,6 +15,9 @@ pub struct NativePrefs {
     // A deliberate unload is persistent: restart/startup/watchdog must not
     // silently bring the model (or its Native service stack) back.
     pub manual_unloaded: bool,
+    // Filename only, resolved inside the isolated Native runtime/config.
+    pub model_config: String,
+    pub idle_unload_s: u32,
     pub lan_access: bool,
     pub cf_enabled: bool,
     pub cf_hostname: String,
@@ -26,6 +29,8 @@ impl Default for NativePrefs {
             auto_start_service: true,
             watchdog: true,
             manual_unloaded: false,
+            model_config: "official-sm86-model-test.json".into(),
+            idle_unload_s: 900,
             lan_access: false,
             cf_enabled: false,
             cf_hostname: String::new(),
@@ -63,6 +68,12 @@ pub fn read() -> Result<NativePrefs, String> {
 }
 
 pub fn save(prefs: &NativePrefs) -> Result<(), String> {
+    if !valid_config_name(&prefs.model_config) {
+        return Err("Native 模型配置必须是 runtime/config 下的 JSON 文件名".into());
+    }
+    if prefs.idle_unload_s > 86400 {
+        return Err("自动卸载时间必须在 0–86400 秒之间".into());
+    }
     if !prefs.cf_hostname.is_empty() && !validate_hostname(&prefs.cf_hostname) {
         return Err("Cloudflare Tunnel 域名格式不正确".into());
     }
@@ -77,7 +88,14 @@ pub fn save(prefs: &NativePrefs) -> Result<(), String> {
     replace_file(&tmp, &path)
 }
 
-fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn valid_config_name(value: &str) -> bool {
+    value.len() >= 6 && value.len() <= 100 && value.ends_with(".json")
+        && !value.starts_with('.') && !value.contains("..")
+        && value.bytes().all(|b| b.is_ascii_alphanumeric()
+            || matches!(b, b'.' | b'-' | b'_'))
+}
+
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     let from: Vec<_> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<_> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -151,5 +169,16 @@ mod tests {
             assert!(!validate_hostname(host), "{host}");
         }
         assert!(validate_hostname("native.example.com"));
+    }
+    #[test]
+    fn model_selection_only_accepts_safe_filenames() {
+        let previous: NativePrefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(previous.idle_unload_s, 900);
+        assert_eq!(previous.model_config, "official-sm86-model-test.json");
+        assert!(valid_config_name("qwen3.5-4b-q4.json"));
+        for bad in ["../stable.json", "C:\\secret.json", "/tmp/model.json",
+                    ".hidden.json", "config/other.json", "config\\other.json"] {
+            assert!(!valid_config_name(bad), "{bad}");
+        }
     }
 }

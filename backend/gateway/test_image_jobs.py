@@ -55,6 +55,77 @@ class ImageTaskTest(unittest.TestCase):
         self.jobs.queue.join()
         self.temp.cleanup()
 
+    def test_queue_and_worker_claim_do_not_start_execution_clock(self):
+        # The browser may submit before an older paid job releases a slot.
+        # Neither HTTP submission nor the Worker claiming it counts as model time.
+        store=ImageJobStore(self.root)
+        with mock.patch.object(store,"worker_healthy",return_value=True):
+            created=store.submit({"request":self.request,
+                "client_started_at":time.time()-180})
+        self.assertIsNone(created["started_at"])
+        self.assertIsNone(created["elapsed_s"])
+        claimed=store.take_pending()
+        self.assertEqual(claimed[0],created["id"])
+        self.assertIsNone(store.listing(created["id"])["started_at"])
+        store._provider=self.jobs._provider
+        store.execute_claimed(*claimed)
+        finished=store.listing(created["id"])
+        self.assertEqual(finished["state"],"success")
+        self.assertIsNotNone(finished["started_at"])
+        self.assertLess(time.time()-finished["started_at"],5)
+        self.assertLess(finished["elapsed_s"],5)
+        self.assertEqual(len(self.calls),1)
+
+    def test_gallery_manual_upscale_is_single_offline_job_and_keeps_original(self):
+        created=self.jobs.submit({"request":self.request})
+        self.jobs.queue.join()
+        self.assertEqual(self.jobs.listing(created["id"])["state"],"success")
+        def fake_upscale(_store,raw,*,on_status=None):
+            if on_status: on_status("Real-ESRGAN 4x upscale")
+            image=Image.open(io.BytesIO(raw))
+            out=io.BytesIO()
+            image.resize((image.width*4,image.height*4)).save(out,"PNG")
+            return out.getvalue()
+        with (mock.patch("backend.gateway.image_jobs.local_images.upscaler_ready",return_value=True),
+              mock.patch("backend.gateway.image_jobs.local_images._settings",
+                         return_value={"upscaler":{"max_output_side":3072}}),
+              mock.patch("backend.gateway.image_jobs.local_images.upscale",
+                         side_effect=fake_upscale) as upscale):
+            submitted=self.jobs.submit_upscale("a"*32)
+            self.jobs.queue.join()
+            repeated=self.jobs.submit_upscale("a"*32)
+            self.assertTrue(repeated["already_submitted"])
+            self.assertEqual(repeated["id"],submitted["id"])
+            upscale.assert_called_once()
+        record=self.jobs.listing(submitted["id"])
+        self.assertEqual(record["kind"],"upscale")
+        self.assertEqual(record["state"],"success")
+        self.assertIsNotNone(record["started_at"])
+        self.assertEqual(record["source_id"],"a"*32)
+        self.assertEqual(self.jobs.listing(kind="upscale")["jobs"][0]["id"],submitted["id"])
+        self.assertEqual(len(self.calls),1,"4x must not call the image provider again")
+        group=gallery.detail(self.jobs,"a"*32)
+        self.assertEqual(group["variants"]["original"],"a"*32)
+        self.assertEqual(group["variant_count"],2)
+        self.assertEqual(group["width"],80)
+        self.assertEqual(group["height"],48)
+
+    def test_gallery_manual_upscale_requires_config_and_size_limit(self):
+        self.jobs.submit({"request":self.request})
+        self.jobs.queue.join()
+        with self.assertRaises(ValueError):
+            self.jobs.submit_upscale("../bad")
+        with mock.patch("backend.gateway.image_jobs.local_images.upscaler_ready",return_value=False):
+            with self.assertRaisesRegex(ValueError,"尚未配置"):
+                self.jobs.submit_upscale("a"*32)
+        with (mock.patch("backend.gateway.image_jobs.local_images.upscaler_ready",return_value=True),
+              mock.patch("backend.gateway.image_jobs.local_images._settings",
+                         return_value={"upscaler":{"max_output_side":40}})):
+            with self.assertRaisesRegex(ValueError,"输出尺寸"):
+                self.jobs.submit_upscale("a"*32)
+        self.assertEqual(self.jobs.listing(kind="upscale")["jobs"],[])
+        self.assertEqual(len(self.calls),1)
+
     def test_chat_image_idempotency_survives_restart_without_paid_replay(self):
         """A lost HTTP response cannot create a second chargeable request."""
         session="a"*32

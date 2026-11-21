@@ -293,7 +293,7 @@ class ImageJobStore:
                 raise ValueError("4x output exceeds configured size limit")
         return service
 
-    def _insert(self,db,request,state,started_at=None,source_id=""):
+    def _insert(self,db,request,state,source_id=""):
         ident="img-"+secrets.token_hex(12)
         now=time.time()
         db.execute("""INSERT INTO jobs(id,state,phase,request_json,profile_id,prompt_summary,
@@ -302,12 +302,12 @@ class ImageJobStore:
                    (ident,state,"草稿已保存" if state == "draft" else "排队等待执行",
                     json.dumps(request,ensure_ascii=False),request["strata_image_profile"],
                     " ".join((request.get("prompt") or request.get("natural_prompt") or "").split())[:180],
-                    request.get("size",""),now,now,started_at,source_id))
+                    request.get("size",""),now,now,None,source_id))
         return self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
 
     def listing(self,ident=None,kind=None,limit=100,session_id=None):
-        if kind not in (None,"generate"):
-            raise ValueError("native image worker supports generate jobs only")
+        if kind not in (None,"generate","upscale"):
+            raise ValueError("unknown image task kind")
         if session_id is not None and (not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id)):
             raise ValueError("invalid chat session ID")
         with self.lock,self._db() as db:
@@ -319,15 +319,52 @@ class ImageJobStore:
                         (ident,session_id)).fetchone()
                 else:
                     row=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
+                if row is not None and kind is not None and row["kind"] != kind:
+                    row = None
                 return self._public(row) if row else {"id":ident,"state":"unknown"}
             if session_id:
                 rows=db.execute("""SELECT jobs.*, c.request_id FROM chat_image_requests c
                     JOIN jobs ON jobs.id=c.job_id WHERE c.session_id=?
                     ORDER BY c.created DESC LIMIT ?""",(session_id,min(max(limit,1),100))).fetchall()
+            elif kind:
+                rows=db.execute("SELECT * FROM jobs WHERE kind=? ORDER BY created DESC LIMIT ?",
+                                (kind,min(max(limit,1),100))).fetchall()
             else:
                 rows=db.execute("SELECT * FROM jobs ORDER BY created DESC LIMIT ?",
                                 (min(max(limit,1),100),)).fetchall()
             return {"jobs":[self._public(row) for row in rows]}
+
+    def submit_upscale(self, image_id):
+        """User-triggered offline-only 4x; never invokes an image provider."""
+        with self.lock,self._db() as db:
+            existing=db.execute("""SELECT * FROM jobs WHERE kind='upscale' AND source_id=?
+                AND state IN ('running','success') ORDER BY created DESC LIMIT 1""",
+                (image_id,)).fetchone()
+            if existing is not None:
+                return {**self._public(existing),"already_submitted":True}
+            if not self.embedded_worker and not self.worker_healthy():
+                raise ValueError("独立 Image Worker 尚未就绪")
+            if not local_images.upscaler_ready(self):
+                raise ValueError("本地 4× 超分引擎尚未配置")
+            original=gallery.upscale_source(self,image_id)
+            max_side=int(local_images._settings(self)["upscaler"].get("max_output_side",3072))
+            if max(original["width"],original["height"])*4 > max_side:
+                raise ValueError("4× 输出尺寸超出已配置的限制")
+            if db.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0] >= MAX_PENDING:
+                raise ValueError("图像任务队列已满")
+            now=time.time()
+            ident="img-"+secrets.token_hex(12)
+            payload={"kind":"upscale","image_id":image_id}
+            db.execute("""INSERT INTO jobs(id,kind,state,phase,request_json,profile_id,
+                prompt_summary,requested_size,created,updated,started_at,source_id)
+                VALUES(?,'upscale','running','排队等待执行',?,?,?,?,?,?,?,?)""",
+                (ident,json.dumps(payload),"native-4x","仅超分",f"{original['width']}x{original['height']}",
+                 now,now,now,image_id))
+            created=self._public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
+        if self.embedded_worker:
+            self.queue.put((ident,payload))
+            self._start_worker()
+        return {**created,"already_submitted":False}
 
     def chat_submit(self, session_id, request_id, request, *, edit_previous=False):
         """One explicit button press => one paid job at most, including retries.
@@ -389,7 +426,7 @@ class ImageJobStore:
             if not (prepared.get("prompt") or "").strip():
                 raise ValueError("image prompt is required")
             self._require_provider(prepared)
-            created=self._insert(db,prepared,"running",time.time(),source_id=source_id)
+            created=self._insert(db,prepared,"running",source_id=source_id)
             db.execute("""INSERT INTO chat_image_requests(session_id,request_id,job_id,created)
                 VALUES(?,?,?,?)""",(session_id,request_id,created["id"],time.time()))
         if self.embedded_worker:
@@ -470,11 +507,11 @@ class ImageJobStore:
                     if action == "activate":
                         now=time.time()
                         db.execute("""UPDATE jobs SET state='running',phase='排队等待执行',updated=?,
-                                    started_at=?,finished_at=NULL WHERE id=? AND state='draft'""",
-                                   (now,self._start_time(req.get("client_started_at")),original_id))
+                                    started_at=NULL,finished_at=NULL WHERE id=? AND state='draft'""",
+                                   (now,original_id))
                         created=self._public(db.execute("SELECT * FROM jobs WHERE id=?",(original_id,)).fetchone())
                     else:
-                        created=self._insert(db,prepared,"running",self._start_time(req.get("client_started_at")),original_id or "")
+                        created=self._insert(db,prepared,"running",source_id=original_id or "")
                         if action == "retry" and row["state"] == "failed":
                             db.execute("DELETE FROM jobs WHERE id=? AND state='failed'",(original_id,))
                             created["deleted_original_id"]=original_id
@@ -484,10 +521,17 @@ class ImageJobStore:
                 return created
             raise ValueError("unsupported native image task action")
 
-    @staticmethod
-    def _start_time(value):
+    def _begin_execution(self,ident,phase):
+        """The clock begins only when the Worker actually calls the provider.
+
+        The submission timestamp and the worker claim are not execution time;
+        waiting for another queued job must never inflate image latency.
+        """
         now=time.time()
-        return min(float(value),now) if type(value) in (int,float) and now-300 <= value <= now+5 else now
+        with self.lock,self._db() as db:
+            db.execute("""UPDATE jobs SET started_at=COALESCE(started_at,?),
+                updated=?,phase=? WHERE id=? AND state='running'""",
+                (now,now,str(phase)[:200],ident))
 
     def delete(self,ident=None,clear=False):
         with self.lock,self._db() as db:
@@ -514,6 +558,8 @@ class ImageJobStore:
                 self.queue.task_done()
 
     def execute_claimed(self, ident, request):
+            if request.get("kind") == "upscale":
+                return self._execute_upscale(ident,request)
             try:
                 refs=[]
                 for item in request.get("strata_reference_assets",[]):
@@ -522,10 +568,16 @@ class ImageJobStore:
                 payload={key:val for key,val in request.items() if key != "strata_reference_assets"}
                 payload["strata_reference_images"]=refs
                 def status(phase):
+                    # Local GPU requests may wait for the shared GPU lease or
+                    # LLM unload. Only start the timer at actual inference.
+                    if phase in ("Local Qwen-Image inference", "Real-ESRGAN 4x upscale"):
+                        self._begin_execution(ident,phase)
                     with self.lock,self._db() as db:
                         db.execute("UPDATE jobs SET phase=?,updated=? WHERE id=? AND state='running'",
                                    (str(phase)[:200],time.time(),ident))
                 local = request["strata_image_profile"].startswith("local-")
+                if not local:
+                    self._begin_execution(ident,"调用图像 API")
                 if local:
                     response=local_images.generate(self,payload,on_status=status,diagnostic_id=ident)
                 else:
@@ -608,3 +660,31 @@ class ImageJobStore:
                     db.execute("""UPDATE jobs SET state='failed',phase='任务失败',error=?,
                                   updated=?,finished_at=? WHERE id=?""",
                                (message,time.time(),time.time(),ident))
+
+    def _execute_upscale(self, ident, request):
+        try:
+            original=gallery.upscale_source(self,request["image_id"])
+            raw=gallery._file(self,original["id"]).read_bytes()
+            if not 0 < len(raw) <= 20 * 1024 * 1024:
+                raise ValueError("超分原图为空或过大")
+            def status(phase):
+                if phase == "Real-ESRGAN 4x upscale":
+                    self._begin_execution(ident,phase)
+                with self.lock,self._db() as db:
+                    db.execute("UPDATE jobs SET phase=?,updated=? WHERE id=? AND state='running'",
+                               (str(phase)[:200],time.time(),ident))
+            status("等待 GPU 空闲并释放 LLM")
+            output=local_images.upscale(self,raw,on_status=status)
+            cover=gallery.attach_upscaled(self,original["id"],output)
+            result={"image_id":cover,"source_id":original["id"],
+                    "image_file":cover+".png","upscale_applied":True}
+            with self.lock,self._db() as db:
+                db.execute("""UPDATE jobs SET state='success',phase='4× 超分完成',
+                    result_json=?,updated=?,finished_at=? WHERE id=?""",
+                    (json.dumps(result),time.time(),time.time(),ident))
+        except Exception as exc:
+            # Offline-only operation: never re-run the original generation.
+            with self.lock,self._db() as db:
+                db.execute("""UPDATE jobs SET state='failed',phase='4× 超分失败',
+                    error=?,updated=?,finished_at=? WHERE id=?""",
+                    (type(exc).__name__+": "+str(exc)[:160],time.time(),time.time(),ident))

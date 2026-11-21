@@ -56,6 +56,7 @@ UNPORTED_FIELDS = frozenset((
 IMAGE_PATH = re.compile(r"^/v1/images/files/[a-f0-9]{32}\.png$")
 SESSIONS = "/v1/strata/sessions"
 SAMPLING_DEFAULT = "/v1/strata/sampling-default"
+UI_LANGUAGE = "/v1/mikuchin/ui-language"
 CHARACTERS = "/v1/strata/characters"
 REFERENCE = CHARACTERS + "/reference/"
 IMAGE_JOBS = "/v1/mikuchin/image-jobs"
@@ -196,7 +197,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path == CHARACTERS or path.startswith(REFERENCE):
             self._handle_character_get(path)
             return
-        if path == SESSIONS or path.startswith(SESSIONS + "/") or path == SAMPLING_DEFAULT:
+        if path == SESSIONS or path.startswith(SESSIONS + "/") or path in (SAMPLING_DEFAULT, UI_LANGUAGE):
             self._handle_private("GET", path)
             return
         if path == "/health":
@@ -313,7 +314,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
-                   or path == SAMPLING_DEFAULT or path == CHARACTERS
+                   or path in (SAMPLING_DEFAULT, UI_LANGUAGE) or path == CHARACTERS
                    or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY))
         if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
@@ -398,7 +399,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(503, "Native conversation store is not configured", "unavailable")
             return
         try:
-            if path == SAMPLING_DEFAULT:
+            if path == UI_LANGUAGE:
+                if method == "GET":
+                    result = store.ui_language()
+                elif method == "POST":
+                    result = store.save_ui_language(request.get("language"))
+                else:
+                    self._error(405, "Method not allowed")
+                    return
+            elif path == SAMPLING_DEFAULT:
                 if method == "GET":
                     result = {"sampling": store.default_sampling()}
                 elif method == "POST":
@@ -610,6 +619,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                                             edit_previous=req.get("edit_previous",False))
                 elif action == "chat_cancel":
                     result=jobs.chat_cancel(valid_id(req.get("session_id")),req.get("request_id"))
+                elif action == "upscale" or req.get("kind") == "upscale":
+                    result=jobs.submit_upscale(req.get("image_id"))
                 elif action in ("delete","clear_completed"):
                     result=jobs.delete(req.get("id"),clear=action=="clear_completed")
                 else:

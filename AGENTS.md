@@ -26,6 +26,10 @@
 - Native 显式聊天生图（2026-11-20）：在 Chat 输入纯文本后点击新增「生图」并于**页面内确认框**确认方会创建任务；普通聊天依旧不加 `strata_image_tool=true`，`health.chat_image_tool=false`。显式能力 `health.chat_image_jobs` 仅代表可使用独立 Worker。持久化 `chat_image_requests(session_id,request_id)` 唯一键保证重复点击、刷新或请求超时后不自动重复付费；只能取消未认领任务。成功后安全 Blob 图片显示并在 `health.images=true` 时用**一次** `reasoning_effort=none,max_tokens=256` 本地视觉摘要，不重复触发生图。Chat 作品画廊来源为 `chat` 并保存会话归属。旧版 LLM 自主调用的工具功能**仍未移植**，不要宣称自动识别任意生图意图。完整约束与 Mock 浏览器验收见 `docs/NATIVE_CHAT_IMAGE_ORCHESTRATION_2026-11-20.md`；实际收费 API 不得仅为测试而调用。
 - Native P1 智能生图意图（2026-11-20）：Chat「自动：关／开」默认关闭（浏览器本地偏好），开时使用**本地官方 LLM**短请求分类 `text/generate/edit`；异常回退正常聊天，仅 `generate/edit` 且人工确认后通过原 `chat_submit` 幂等单次提交。修改上一张时从**同会话**最近成功生成图提取私有参考图、保留 `source_id` 和 `edited_previous`，不允许跨会话任意引用；不支持参考图时明确失败而非降级为新图。旧版 `strata_image_tool=true` 仍未移植；独立 `answer_budget_tokens` 仍未得到精确等价官方接口，不能把 `max_tokens` 冒充正文限额。详见 `docs/NATIVE_P1_IMAGE_INTENT_2026-11-20.md`。
 
+- Native P0–P3 补齐进展（2026-11-20）：启动器已有模型 JSON 注册/切换（独立 runtime/config 文件名白名单、仅手动卸载/重新加载后生效）、可选 `idle_unload_s` 0/300/900/1800/3600，运行时生成 isolated active-model-config.json 且绝不更改原 JSON；API Key 可在完全停止 Native 三进程且用户确认后轮换 DPAPI，测试期间不主动轮换真实用户 Key。Gallery 显式 4× 使用独立 Image Worker 的 `kind=upscale`，只读已有原 PNG 并调用 Real-ESRGAN；重复任务不重新调用生图提供商、成功则封面+原图同组。新增 Native 会话全局语言 `GET/POST /v1/mikuchin/ui-language` 经 Bearer/Origin 授权，zh-CN/en-US/ja-JP 持久 SQLite。剩余精确正文 Token 限额、内容型完整监控/WDDM GPU预算、真实 Uncensored 图生图、公网 Tunnel/Android/正式打包仍未全部验收，详见 `docs/NATIVE_P0_P3_CLOSEOUT_2026-11-20.md`。**不得宣称 P0–P3 全完成；生产 main/15239 不动。**
+
+- Native 聊天输入区与任务计时（2026-11-21）：根据用户明确要求，**删除聊天输入框的「生图」「自动：关」两个按钮及其自动路由/提交逻辑**；不再加载 `chat-image-intent.js`，普通 Chat 始终走文字聊天路径。独立「生图」页、画廊和已存在聊天生图的历史展示/状态轮询仍保留，后台历史任务数据不删除。图像任务 `started_at` 改为由 Worker **真正开始调用 API/模型**时写入；排队、等待 GPU 锁、卸载 LLM 不计入运行耗时，`started_at=NULL` 的进行中任务应显示「排队中」，不再把客户端点击时间当执行起点。此规则同时修复正式 main 的 `backend/polystrata/serve/image_jobs.py` 与 `frontend/web/image-studio.js`，但**main 服务无须为此强制启动**；后续不应擅自恢复两个聊天按钮。
+
 本仓库从 v0.2.8 起使用 **根目录 `versions.json` 作为唯一产品版本来源**。
 
 每次开始版本相关工作（包括新对话、移植上游、Release、安装包构建），先执行：
