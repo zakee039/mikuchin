@@ -6,14 +6,19 @@ const require=createRequire(import.meta.url);
 const router=require("../chat-image-router.js");
 
 test("direct Chinese and English image requests route to generation",()=>{
-  for(const text of ["你好，生成一张初音未来的图片","帮我画一张小猫插画","给我做张壁纸",
+  for(const text of ["生成一张初音未来","你好，生成一张初音未来",
+    "请帮我生成一张初音未来","画一幅水墨山水","帮我做张橘猫",
+    "你好，生成一张初音未来的图片","帮我画一张小猫插画","给我做张壁纸",
     "Please generate an image of a teal-haired singer","Draw a picture of a dragon"]) {
     assert.equal(router.intent(text), "generate", text);
   }
 });
 
 test("questions, explanations, instructions and negations never charge an image job",()=>{
-  for(const text of ["如何生成一张图片？","帮我解释生成图像的原理","不用生成图片，聊聊模型配置",
+  for(const text of ["如何生成一张初音未来？","不要生成一张初音未来",
+    "如果我想生成一张初音未来会怎样","我在考虑生成一张初音未来",
+    "生成一张成绩表","生成一张 Excel 表格",
+    "如何生成一张图片？","帮我解释生成图像的原理","不用生成图片，聊聊模型配置",
     "别画图，讲一下","你好","Tell me how to generate an image"]) {
     assert.equal(router.intent(text), "text", text);
   }

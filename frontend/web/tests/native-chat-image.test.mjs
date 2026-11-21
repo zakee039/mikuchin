@@ -18,6 +18,9 @@ test("Native composer uses automatic image routing without extra buttons", () =>
   assert.match(app,/submitAutoChatImage\(m,autoAction/);
   assert.match(app,/action:"chat_submit"/);
   assert.match(app,/image_request_id:requestId/);
+  assert.match(app,/if \(\(!text && !attachments\.length\) \|\| busy \|\| sessionTransition\) return/);
+  assert.match(app,/sessionTransition = true/);
+  assert.match(app,/sessionTransition = false/);
   assert.match(app,/if \(plan.online && !confirm/);
   assert.match(characters,/resolveChatImageProfile/);
 });test("Chat image polling matches by session and request ID, handles Native success/failed", () => {

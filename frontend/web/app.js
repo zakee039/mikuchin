@@ -1298,13 +1298,16 @@ function assistantMessages(m) {
 
 function setBusy(on) {
   $("stop-btn").hidden = !on;
-  $("send-btn").disabled = on;
+  $("send-btn").disabled = on || sessionTransition;
   $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
 }
 
+// Do not enqueue an image into a stale session while New Chat is still
+// waiting for its previous save / default role assignment to finish.
+let sessionTransition = false;
 async function send() {
   const text = $("input").value.trim();
-  if ((!text && !attachments.length) || busy) return;
+  if ((!text && !attachments.length) || busy || sessionTransition) return;
   if (chatImageVisionPending || messages.some(x => x.role === "assistant" &&
         (x.tools || []).some(t => t.image_request_id && t.state === "running"))) {
     toast("info","Image generation in progress","Wait for this conversation's image task to finish before sending the next turn.");
@@ -1464,12 +1467,14 @@ function autosize() { const t = $("input"); t.style.height = "auto"; t.style.hei
 $("input").addEventListener("input", autosize);
 
 $("new-btn").onclick = async () => {
-  if (busy) { toast("warn", "正在执行请求", "请先完成当前操作。"); return; }
+  if (busy || sessionTransition) { toast("warn", "正在执行请求", "请先完成当前操作。"); return; }
   if (sessionV1) {
     const previous = sessionId;
     const previousSettings = settings;
     const button = $("new-btn");
     button.disabled = true;
+    sessionTransition = true;
+    $("send-btn").disabled = true;
     try {
       // Fail visibly if an unreachable remote session save or character API
       // stalls; never leave a phantom session pointer with old messages.
@@ -1496,7 +1501,9 @@ $("new-btn").onclick = async () => {
       window.polyCharacterRefresh?.();
       toast("error", "Could not create a new chat", String(e), 6500);
     } finally {
+      sessionTransition = false;
       button.disabled = false;
+      $("send-btn").disabled = !!busy;
     }
     return;
   }

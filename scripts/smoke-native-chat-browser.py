@@ -114,6 +114,17 @@ def main():
         original_catalog = gateway_app.local_images.catalog
         gateway_app.local_images.catalog = lambda _jobs: ([{"id":"local-mock","available":True}], [])
         jobs=ImageJobStore(directory / "images",embedded_worker=True)
+        # The disposable embedded worker can execute immediately; unlike the
+        # production independent worker it never sends heartbeats. Report
+        # ready only in this isolated browser fixture.
+        jobs.worker_healthy = lambda: True
+        original_provider_catalog = image_providers.catalog
+        # Pretend this TEST-ONLY fake PNG provider is locally hosted so a
+        # native JS billing confirmation cannot block headless automation.
+        # The provider below writes a local 64x64 PNG and never uses HTTP.
+        image_providers.catalog = lambda store: [
+            {**item, "family": "qwen_turbo"}
+            for item in original_provider_catalog(store)]
         fake_service=image_providers.save_service(jobs,{
             "name":"Disposable fixture (no paid calls)",
             "base_url":"http://127.0.0.1:19999/v1",
@@ -126,7 +137,7 @@ def main():
             "chat_image_settings":{"lora_id":"none","width":1024,"height":1024,
                                    "upscale":"off","steps":None}},
             allowed_image_profiles={fake_service["id"]},
-            image_profile_configs={fake_service["id"]:{"family":"api","max_side":2048,
+            image_profile_configs={fake_service["id"]:{"family":"qwen_turbo","max_side":2048,
                                    "sizes":"standard","upscale_available":False}})
         fake_calls=[]
         def fake_image_provider(store, request, *, on_status, diagnostic_id, **kwargs):
@@ -157,6 +168,7 @@ def main():
                 time.sleep(.2)
         finally:
             gateway_app.local_images.catalog = original_catalog
+            image_providers.catalog = original_provider_catalog
             for server in (gateway, official):
                 server.shutdown()
                 server.server_close()

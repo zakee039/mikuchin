@@ -4,6 +4,13 @@
 (function (root) {
   const IMAGE = /(?:图片|图像|插画|照片|头像|壁纸|海报|画面|画作|配图|立绘|image|picture|photo|portrait|illustration|poster|wallpaper)/i;
   const GENERATE = /(?:生成|生图|绘制|创作|画(?:一|张|个|幅|出|给|下|点)|做(?:一张|张|一幅|个)|制作|给我(?:来|做)|帮我(?:画|生成|做)|来(?:一张|张|一幅)|generate|draw|create|make me)/i;
+  // Chinese users often omit 图片/插画 when the object is already obvious:
+  // “生成一张初音未来”, “画一幅水墨山水”. The measure word explicitly
+  // signals a visual artifact, but a spreadsheet/report still goes to Chat.
+  // Require an imperative at the start rather than an incidental mention in
+  // a long explanation (which must never enqueue work by itself).
+  const VISUAL_MEASURE = /^(?:(?:你好|嗨|哈喽|hi|hello)[，,\s]*)?(?:(?:请|帮我|给我|麻烦|现在|再|先|来|帮忙|这次|我想|我需要)\s*){0,3}(?:生成|绘制|创作|制作|画|做)(?:一|两|几)?(?:张|幅|副)(?=\S{2,})/iu;
+  const NON_IMAGE_ARTIFACT = /(?:表格|统计表|数据表|报表|成绩表|Excel|电子表格|幻灯片|PPT|演示文稿|试卷|答题卡|文档|清单)/i;
   const EDIT = /(?:改(?:成|一下|为|掉|动)|修改|调整|调(?:大|小|亮|暗|成)|去掉|换(?:成|掉|为)|添加|加上|移除|去除|修(?:一|改)|放大|缩小|重画|重绘|edit|change|remove|replace)/i;
   const DISCUSS = /(?:怎么|如何|为什么|是否|能否|教程|原理|步骤|能不能解释|介绍一下|什么是|不用|不要|别|无需|不需要|how to|why|explain|tutorial|do not|don't)/i;
   function intent(text, hasEarlierImage = false) {
@@ -12,6 +19,7 @@
     if (hasEarlierImage && EDIT.test(s) && (IMAGE.test(s) ||
       /(?:这张|上一张|刚才|刚生成|眼睛|头发|衣服|服装|背景|颜色|表情|手指|人物|姿势)/i.test(s))) return "edit";
     if ((GENERATE.test(s) && IMAGE.test(s)) ||
+        (VISUAL_MEASURE.test(s) && !NON_IMAGE_ARTIFACT.test(s)) ||
         /(?:^|[，。！？,.!\s])(?:帮我|请|给我|来)?画(?:一张|一幅|一个|张|幅|个)/u.test(s)) return "generate";
     return "text";
   }
