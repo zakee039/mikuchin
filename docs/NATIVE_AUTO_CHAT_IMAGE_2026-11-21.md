@@ -43,5 +43,5 @@
 - 真实本地 Qwen-Image Worker 成功生成 384×384 PNG：任务 `success`、`provider=local`、`gpu_handoffs=1`，没有调用在线付费生成服务。
 - 官方推理日志记录 `strata-poly: session saved: 124 tokens, 320 MiB in 299 ms`，生图后模型重新加载，接着 `strata-poly: session restored: 124 tokens, 320 MiB in 12269 ms`。
 - GPU 状态从 `generating` 经 `restoring` 回到 `idle`；临时 Slot 文件被删除，任务只执行一次。此验证是**活动 Slot 恢复**，并非证明所有缓存会话均恢复。
-- 当前 Chat 视觉尾部发送历史上下文和生成图像，带原会话 `strata_session_id`，禁用思考及生图工具，限制 256 总 Token；改动对应网页结构检查已经通过，但完整真实浏览器交互仍需单独验收。
-- Gateway Python 全套 88 项、Native 网页相关 Node 15 项测试通过；官方 PolyStrata 子模块 commit 保持 `3e164216` 不变。
+- 当前 Chat 视觉尾部发送历史上下文和生成图像，带原会话 `strata_session_id`，禁用思考及生图工具，限制 256 总 Token。真实 Chrome Headless 对**完全隔离的 Mock Gateway 与假图像提供商**执行从聊天发送、一次 `chat_submit`、图片显示到视觉尾部回复的浏览器端到端流程：`fake_image_provider_calls=1`、`image_file=true`、`vision_state=done`、回复 `P0_BROWSER_OK`。测试提供商不访问外网/不收费，模拟页面所需的独立 Worker 心跳标志由测试浏览器临时设置；这不等于真实用户浏览器设备兼容性全覆盖。
+- Gateway Python 全套 88 项、Native 网页 Node 全套 48 项测试通过；官方 PolyStrata 子模块 commit 保持 `3e164216` 不变。

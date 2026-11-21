@@ -100,7 +100,7 @@ function headers(json = false) {
   return h;
 }
 $("api-key").value = store.get("apikey", "");
-$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
+$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); void loadHealth(); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
 
 let health = {model: "strata", images: false, max_context: 0};
 // Chat image generation is routed through authenticated ImageJobStore tasks.
