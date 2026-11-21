@@ -58,7 +58,7 @@ impl Default for Preferences {
             registered_configs: Vec::new(),
             config_path: config.to_string_lossy().to_string(),
             project_path: root.to_string_lossy().to_string(),
-            port: 15239,
+            port: 25239,
         }
     }
 }

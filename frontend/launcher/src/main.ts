@@ -145,7 +145,7 @@ function lanChatLinks(){
  return `<div class="lan-address-list" aria-label="${esc(tr("局域网访问地址"))}">
  ${!ready?`<span class="lan-address-note">${esc(tr("HTTP 服务尚未就绪，以下地址暂不可访问"))}</span>`:""}
  ${addresses.map(a=>{
-   const url=`http://${a.address}:${prefs?.port||15239}/`;
+   const url=`http://${a.address}:${prefs?.port||25239}/`;
    const kind=lanAddressKind(a);
    const details=`${a.interface} · ${a.description}`;
    return `<div class="lan-address-entry">
@@ -157,7 +157,7 @@ function lanChatLinks(){
 }
 function apiPage(){return `<section class="api-compact">
  <div class="setting-card api-panel">
-  <div class="api-line"><strong>端口</strong><input id="port-field" type="number" class="field port-field" min="1024" max="65535" value="${prefs?.port||15239}"><button class="outline-small" id="save-api-port" ${status?.managed?"disabled":""}>保存</button></div>
+  <div class="api-line"><strong>端口</strong><input id="port-field" type="number" class="field port-field" min="1024" max="65535" value="${prefs?.port||25239}"><button class="outline-small" id="save-api-port" ${status?.managed?"disabled":""}>保存</button></div>
   <div class="api-line"><strong>API Key</strong><input id="api-key-display" class="field key-display" type="text" readonly value="" autocomplete="off"><button id="copy-key" class="outline-small">复制</button><button id="rotate-key" class="outline-small">更换</button></div>
   <div class="api-line toggle-compact lan-toggle-row"><strong>局域网 HTTP 直连</strong><label class="lan-toggle" title="启用或关闭局域网 HTTP 访问"><input type="checkbox" data-setting="lan_access" ${prefs?.lan_access?"checked":""}><span class="switch"></span></label></div>
   <div class="lan-chat-slot">${lanChatLinks()}</div>
