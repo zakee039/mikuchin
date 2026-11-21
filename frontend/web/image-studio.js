@@ -282,14 +282,19 @@
         continue;
       }
       try {
+        // Browser-previewable files can still have invalid PNG CRCs,
+        // contradictory extension/MIME metadata or truncated ancillary
+        // chunks that Pillow's strict verify() rejects. Decode and
+        // re-encode only the reference, never overwrite the user's file.
+        const normalized=await window.MikuchinReferenceNormalizer.normalize(file);
         const url = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result));
           reader.onerror = () => reject(Error("无法读取图片"));
-          reader.readAsDataURL(file);
+          reader.readAsDataURL(normalized);
         });
-        references.push({url, name: file.name, objectUrl: URL.createObjectURL(file)});
-      } catch(err) { toast("error", "图片读取失败", String(err.message || err)); }
+        references.push({url, name: file.name, objectUrl: URL.createObjectURL(normalized)});
+      } catch(err) { toast("error", "参考图自动修复失败", String(err.message || err)); }
     }
     reference = references[0] || null;
     refreshReferenceHint(); saveDraft();
