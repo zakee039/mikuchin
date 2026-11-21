@@ -913,7 +913,15 @@ async function regenerateMessage(i) {
   setBusy(true);
   updateAssistant(el, m, true);
   try {
-    await streamInto(m, el, controller.signal);
+    if (health.chat_tool_calling) {
+      if (window.MikuchinNativeToolClient?.unfinished(m))
+        throw Error("当前工具调用尚未结束，请先完成该任务");
+      delete m.native_turn_id;
+      delete m.native_tool_state;
+      await submitModelToolTurn(m, el, controller.signal);
+    } else {
+      await streamInto(m, el, controller.signal);
+    }
     m.swipes.push(swipeSnapshot(m));
     m.swipeIndex = m.swipes.length - 1;
   } catch (e) {
@@ -1004,13 +1012,15 @@ function toolHtml(t, k) {
   if (t.open) {
     body = `<div class="tool-call__label">Arguments</div><pre class="tool-call__pre">${esc(args || "(being written)")}</pre>`;
     if (t.result != null) {
-      body += `<div class="tool-call__label">${t.ok ? "Result" : "Error"}${t.chars ? ` · ${fmt(t.chars)} characters` : ""}` +
+      body += `<div class="tool-call__label">${t.state === "running" || t.state === "writing" ? "Status" : (t.ok ? "Result" : "Error")}${t.chars ? ` · ${fmt(t.chars)} characters` : ""}` +
               `${t.truncated ? ", cut for the model" : ""}</div><pre class="tool-call__pre">${esc(t.result)}</pre>`;
     }
   }
-  if (t.image_request_id && t.state === "running" && t.open)
+  if (t.image_request_id && (t.state === "running" ||
+       (t.native_turn_id && t.state === "writing")) && t.open)
     body += `<button type="button" class="st-btn st-btn--secondary"
-      data-chat-image-cancel="${esc(t.image_request_id)}">仅取消尚未执行的排队任务</button>`;
+      data-chat-image-cancel="${esc(t.image_request_id)}">${t.native_turn_id ?
+        "取消尚未执行的工具请求" : "仅取消尚未执行的排队任务"}</button>`;
   return `<details class="st-collapse tool-call" data-tool="${k}" data-state="${esc(t.state)}"${t.open ? " open" : ""}>` +
     `<summary>${icon("tool", "st-icon st-icon--sm")}<span class="tool-call__name" title="${esc(t.name || "")}">${esc(t.tool || t.name || "tool")}</span>` +
     (t.server ? `<span class="muted small">${esc(t.server)}</span>` : "") +
@@ -1076,7 +1086,8 @@ let chatImageJobPolling = false;
 async function refreshChatImageJobs() {
   if (!sessionV1 || !sessionId || chatImageJobPolling || document.hidden) return;
   const pending = messages.some(m => m.role === "assistant" &&
-    (m.tools || []).some(t => (t.image_job_id || t.image_request_id) && t.state === "running"));
+    (m.tools || []).some(t => !t.native_turn_id &&
+      (t.image_job_id || t.image_request_id) && t.state === "running"));
   if (!pending) return;
   const currentId = sessionId;
   chatImageJobPolling = true;
@@ -1092,6 +1103,7 @@ async function refreshChatImageJobs() {
     for (const m of messages) {
       if (m.role !== "assistant") continue;
       for (const t of m.tools || []) {
+        if (t.native_turn_id) continue; // owned by the model-turn state machine
         const job = jobs.get(t.image_job_id) || requests.get(t.image_request_id);
         if (!job && t.image_request_id && !t.image_job_id &&
             Date.now()-(t.created_at || m.time || Date.now()) > 30_000 &&
@@ -1148,7 +1160,7 @@ async function refreshChatImageJobs() {
   } catch (error) { console.warn("Image job refresh:", error); }
   finally { chatImageJobPolling = false; }
 }
-setInterval(() => { void refreshChatImageJobs(); }, 2500);
+setInterval(() => { void refreshChatImageJobs(); void refreshNativeToolTurns(); }, 2500);
 
 function updateAssistant(el, m, streaming) {
   const det = el.querySelector("details.think");
@@ -1309,11 +1321,11 @@ async function send() {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy || sessionTransition) return;
   if (chatImageVisionPending || messages.some(x => x.role === "assistant" &&
-        (x.tools || []).some(t => t.image_request_id && t.state === "running"))) {
+        ((x.tools || []).some(t => t.image_request_id && t.state === "running") ||
+         window.MikuchinNativeToolClient?.unfinished(x)))) {
     toast("info","Image generation in progress","Wait for this conversation's image task to finish before sending the next turn.");
     return;
   }
-  const hadAttachments = attachments.length > 0;
   messages.push({role: "user", text, images: attachments.filter((a) => a.kind !== "file"),
                  files: attachments.filter((a) => a.kind === "file"), time: Date.now()});
   attachments = [];
@@ -1329,22 +1341,12 @@ async function send() {
   busy = {controller, msg: m};
   setBusy(true);
   try {
-    const hasImage = messages.slice(0,-2).some(x => x.role === "assistant" &&
-      (x.tools || []).some(t => t.state === "done" && t.image_file));
-    const parser = window.MikuchinChatImageRouter;
-    const autoAction = !hadAttachments && parser?.intent(text,hasImage);
-    if (autoAction && autoAction !== "text") {
-      await submitAutoChatImage(m,autoAction,text,controller.signal);
+    if (health.chat_tool_calling) {
+      await submitModelToolTurn(m,el,controller.signal);
     } else {
+      // No keyword route. The model must explicitly emit validated
+      // tool_calls through the Native Gateway before an image may be created.
       await streamInto(m,el,controller.signal);
-      const legacy=parser?.tool(m.text);
-      if (!m.stopped && (legacy || parser?.looksLikeTool(m.text))) {
-        m.text="";m.reasoning="";
-        if (legacy && parser.intent(text,hasImage) !== "text")
-          await submitAutoChatImage(m,legacy.action,legacy.prompt,controller.signal);
-        else
-          m.text="模型返回了旧版生图工具格式，但未收到有效的用户图像指令；未执行生图任务。";
-      }
     }
   } catch (e) {
     m.error = e.message || String(e);
@@ -1357,6 +1359,181 @@ async function send() {
   saveChat();
   if (sessionV1) sessionSaveChain.then(refreshSessionPicker).catch(console.warn);
   scrollDown();
+}
+
+// The Native model (not a keyword matcher) chooses whether to invoke
+// generate_image/edit_image. A persisted turn_id is the sole billing-safe
+// idempotency key. NEVER automatically POST this turn a second time.
+const nativeTurnPath = id => "v1/mikuchin/chat/turns/" + encodeURIComponent(id);
+async function nativeTurnResponse(response) {
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) throw Error(value.error?.message || "模型工具服务 HTTP " + response.status);
+  return value;
+}
+function applyNativeTurn(m,turn) {
+  window.MikuchinNativeToolClient.apply(m,turn);
+  if (Array.isArray(m.swipes)) swipeSave(m);
+  saveChat();
+  if (!busy || busy.msg === m) renderChat();
+}
+async function submitModelToolTurn(m,el,signal) {
+  if (!sessionV1 || !sessionId || !window.MikuchinNativeToolClient)
+    throw Error("原生 Tool Calling 需要已验证的 Native 会话服务");
+  const fixedSession=sessionId;
+  if (signal?.aborted) return;
+  try { await refreshCurrentSampling(); }
+  catch (error) { console.warn("Native turn sampling refresh failed",error); }
+  const stateless=window.polyIsStateless?.()===true;
+  const history=apiMessages();
+  const context=stateless ? [history.filter(x => x.role === "user").at(-1)] : history;
+  if (stateless && !context[0]) throw Error("当前无状态会话没有用户消息");
+  const roleSystem=stateless ? null : await window.polyCharacterPrompt?.(context);
+  if (roleSystem) context.unshift({role:roleSystem.role,content:roleSystem.content});
+  if (signal?.aborted || fixedSession!==sessionId) return;
+  // A regenerated variant always has its own fresh turn id.
+  const turnId=makeSessionId();
+  const request={session_id:fixedSession,turn_id:turnId,
+    model:health.model,messages:context,reasoning_effort:settings.thinking,
+    reasoning_budget_tokens:Math.min(16384,thinkingBudget(settings))};
+  if (!(settings.temperature > 0)) request.temperature=0;
+  else if (!samplingUntouched(settings))
+    Object.assign(request,{temperature:+settings.temperature,
+      top_p:+settings.top_p,top_k:+settings.top_k});
+  if (settings.seed) request.seed=+settings.seed;
+  m.native_turn_id=turnId;
+  m.native_abort_requested=false;
+  m.native_tool_state="deciding";
+  m.native_tool_finished=false;
+  m.text="模型正在判断是否需要调用图片工具…";
+  saveChat(); // Persist the unique ID before the ONLY decision POST.
+  updateAssistant(el,m,true);
+  let decision;
+  try {
+    decision=await nativeTurnResponse(await fetch("v1/mikuchin/chat/turns",{
+      method:"POST",headers:headers(true),body:JSON.stringify(request)
+      // Do not propagate AbortSignal: a valid paid approval might already
+      // have been committed when the network connection closes.
+    }));
+  } catch (error) {
+    // A read-only GET can reconcile an accepted POST without re-submitting.
+    m.text="本次模型决策回执尚未确认；正在只读查询原请求，不会重复执行。";
+    m.native_tool_error=String(error).slice(0,160);
+    saveChat();renderChat();
+    return;
+  }
+  if (sessionId!==fixedSession) return;
+  applyNativeTurn(m,decision);
+  if (m.native_abort_requested && window.MikuchinNativeToolClient.unfinished(m)) {
+    await cancelActiveNativeTurn(m);
+    return;
+  }
+  if (decision.state==="text_done" && roleSystem?.workflowInitPending)
+    await window.polyWorkflowCommit?.(fixedSession);
+  if (decision.state!=="awaiting_approval") return;
+  if (!decision.approval_token) {
+    m.text="在线生图尚未获得本次确认，未提交付费任务。";
+    saveChat();renderChat();
+    return;
+  }
+  // Gateway has frozen the provider/profile and request. A one-time consent
+  // token is required server-side; model text cannot authorize online billing.
+  const approved=await confirmNativePaidImage(
+    decision.model_name || decision.profile_id || "在线图像模型") &&
+    sessionId===fixedSession && !m.native_abort_requested;
+  const action=approved ? "approve" : "cancel";
+  const post={session_id:fixedSession};
+  if (approved) post.approval_token=decision.approval_token;
+  try {
+    const after=await nativeTurnResponse(await fetch(
+      nativeTurnPath(turnId)+"/"+action,{method:"POST",
+        headers:headers(true),body:JSON.stringify(post)}));
+    if (sessionId===fixedSession) applyNativeTurn(m,after);
+  } catch (error) {
+    // Uncertain approval never triggers a second POST; GET only from now on.
+    m.text="在线服务确认状态未知，已停止自动提交；可在任务中心核查。";
+    saveChat();renderChat();
+  }
+}
+
+// An explicit, accessible confirmation dialog rather than window.confirm:
+// works on mobile/embedded WebViews and is testable without CDP dialog hacks.
+// Its safe default is always CANCEL, never automatic billing.
+function confirmNativePaidImage(modelName) {
+  return new Promise(resolve => {
+    const dialog=document.createElement("dialog");
+    dialog.id="native-paid-image-confirm";
+    dialog.setAttribute("aria-labelledby","native-paid-title");
+    dialog.style.cssText="width:min(92vw,440px);max-width:440px;box-sizing:border-box;" +
+      "border:1px solid var(--border,#ddd);border-radius:14px;padding:22px;" +
+      "background:var(--surface,#fff);color:var(--text,inherit);" +
+      "box-shadow:0 12px 40px #0003;";
+    dialog.innerHTML=`<h3 id="native-paid-title" style="margin:0 0 12px;">在线生图 · 单次确认</h3>
+      <p style="margin:0 0 8px;">模型请求使用：<strong>${esc(String(modelName))}</strong></p>
+      <p style="margin:0 0 18px;">本次请求可能产生费用；取消不会创建图像任务。批准只对这一次调用有效。</p>
+      <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="st-btn st-btn--secondary" id="native-paid-cancel">取消</button>
+        <button type="button" class="st-btn" id="native-paid-approve">确认执行一次</button>
+      </div>`;
+    let finished=false;
+    const decide=allow=>{
+      if(finished)return;
+      finished=true;
+      if(dialog.open)dialog.close();
+      dialog.remove();
+      resolve(!!allow);
+    };
+    dialog.addEventListener("cancel",event=>{event.preventDefault();decide(false);});
+    dialog.querySelector("#native-paid-cancel").onclick=()=>decide(false);
+    dialog.querySelector("#native-paid-approve").onclick=()=>decide(true);
+    document.body.appendChild(dialog);
+    try {
+      dialog.showModal();
+      dialog.querySelector("#native-paid-cancel").focus();
+    } catch(error) {
+      console.warn("Online tool confirmation unavailable",error);
+      decide(false);
+    }
+  });
+}
+
+let nativeTurnPolling=false;
+async function refreshNativeToolTurns() {
+  if (!sessionV1 || !sessionId || nativeTurnPolling || document.hidden ||
+      !window.MikuchinNativeToolClient) return;
+  const currentId=sessionId;
+  const pending=messages.filter(m => m.role==="assistant" &&
+    window.MikuchinNativeToolClient.unfinished(m)).slice(0,6);
+  if (!pending.length) return;
+  nativeTurnPolling=true;
+  try {
+    for (const m of pending) {
+      const query=nativeTurnPath(m.native_turn_id)+
+        "?session_id="+encodeURIComponent(currentId);
+      const response=await fetch(query,{headers:headers(),cache:"no-store"});
+      if (sessionId!==currentId) return;
+      if (response.status===404 && Date.now()-(m.time || Date.now()) > 35_000) {
+        m.native_tool_state="unavailable";m.native_tool_finished=true;
+        m.text="未找到这次模型工具请求；没有自动重复提交。";
+        saveChat();renderChat();
+        continue;
+      }
+      if (!response.ok) continue;
+      const turn=await response.json();
+      if (turn.session_id!==currentId || turn.turn_id!==m.native_turn_id) continue;
+      if (turn.state==="awaiting_approval" && !turn.approval_token) {
+        m.text="在线生图等待原始页面确认；未收费，可取消本次请求后重新提问。";
+      } else {
+        const job=turn.job || {};
+        const signature=JSON.stringify([turn.state,turn.text,turn.error,
+          job.id,job.state,job.phase,job.result?.image_file]);
+        if (m.native_poll_signature!==signature) {
+          m.native_poll_signature=signature;
+          applyNativeTurn(m,turn);
+        }
+      }
+    }
+  }catch(error){console.warn("Read-only native tool poll failed",error);}
+  finally{nativeTurnPolling=false;}
 }
 
 async function submitAutoChatImage(m,action,instruction,signal) {
@@ -1398,9 +1575,42 @@ async function submitAutoChatImage(m,action,instruction,signal) {
 
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };
 $("stop-btn").onclick = () => {
-  if (busy) busy.controller.abort();
+  if (!busy) return;
+  busy.controller.abort();
+  if (busy.msg?.native_turn_id) {
+    busy.msg.native_abort_requested=true;
+    void cancelActiveNativeTurn(busy.msg);
+  }
 };
+async function cancelActiveNativeTurn(m) {
+  if (!sessionId || !m?.native_turn_id || !window.MikuchinNativeToolClient?.unfinished(m))
+    return;
+  const id=m.native_turn_id;
+  const currentId=sessionId;
+  try {
+    const result=await nativeTurnResponse(await fetch(nativeTurnPath(id)+"/cancel",{
+      method:"POST",headers:headers(true),body:JSON.stringify({session_id:currentId})}));
+    if (sessionId===currentId && m.native_turn_id===id)
+      applyNativeTurn(m,result);
+  }catch(error) {
+    // The request may not yet have reached SQLite, or the Worker may have
+    // already claimed it. Never pretend a billable request was cancelled.
+    console.warn("Native tool cancellation not confirmed",error);
+  }
+}
 async function cancelNativeChatImage(tool) {
+  if (tool?.native_turn_id) {
+    if (!sessionId || !["running","writing"].includes(tool.state)) return;
+    if (!confirm("取消本次工具调用？只可撤回尚未由 Worker 认领的任务；在线请求一旦发送不能撤回。")) return;
+    try {
+      const turn=await nativeTurnResponse(await fetch(
+        nativeTurnPath(tool.native_turn_id)+"/cancel",{
+          method:"POST",headers:headers(true),body:JSON.stringify({session_id:sessionId})}));
+      const m=messages.find(x=>x.native_turn_id===tool.native_turn_id);
+      if(m) applyNativeTurn(m,turn);
+    }catch(error){toast("warn","无法取消",String(error));}
+    return;
+  }
   if (!sessionId || !tool?.image_request_id || tool.state !== "running") return;
   if (!confirm("仅能取消 Worker 尚未认领的排队任务。已经发送至在线服务的请求无法保证撤回，确认尝试取消？"))
     return;

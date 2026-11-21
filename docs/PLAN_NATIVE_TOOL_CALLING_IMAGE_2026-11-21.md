@@ -1,6 +1,8 @@
 # Mikuchin Native Tool Calling 重构实施计划书
 
-> 版本：计划 v1.0｜编写日期：2026-11-21｜**状态：待下一对话实施，本文件不是功能完成报告**
+> 版本：计划 v1.0｜编写日期：2026-11-21｜**实施状态：P0–P3 核心验收通过；P4 Python/Node/本地实机与生产 Gateway 热部署通过，GitHub/剩余 Chrome 和远端手工验收见实施记录。**
+>
+> 实际证据和限制请见 [Native Tool Calling 实施与验证记录](NATIVE_TOOL_CALLING_IMPLEMENTATION_2026-11-21.md)；本计划保留原始验收清单，未通过项目不视为完成。
 >
 > 主仓库：`E:\LLM\mikuchin`（`main`，起始审计 HEAD `77bf25b`）；旧版只读回退工作树：`E:\LLM\mikuchin-old`。项目版本暂为 `v0.4.0`。
 >

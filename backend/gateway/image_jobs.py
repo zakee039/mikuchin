@@ -434,6 +434,23 @@ class ImageJobStore:
             self._start_worker()
         return {**created,"request_id":request_id,"already_submitted":False}
 
+    def chat_lookup(self, session_id, request_id):
+        """Read-only, indexed job lookup for an idempotent model Turn.
+
+        Unlike a paged gallery/list, this never loses a committed link as a
+        session accumulates more than 100 images. It never submits work.
+        """
+        if not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id):
+            raise ValueError("invalid chat session ID")
+        if not isinstance(request_id,str) or not CHAT_ID.fullmatch(request_id):
+            raise ValueError("invalid chat request ID")
+        with self.lock,self._db() as db:
+            row=db.execute("""SELECT jobs.* FROM jobs
+                JOIN chat_image_requests c ON c.job_id=jobs.id
+                WHERE c.session_id=? AND c.request_id=?""",
+                (session_id,request_id)).fetchone()
+            return ({**self._public(row),"request_id":request_id} if row else None)
+
     def chat_cancel(self, session_id, request_id):
         if not isinstance(session_id,str) or not CHAT_ID.fullmatch(session_id):
             raise ValueError("invalid chat session ID")

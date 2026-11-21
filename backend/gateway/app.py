@@ -33,6 +33,8 @@ try:
     from . import local_images
     from .gpu_gate import gpu_turn, GPUUnavailable, read_state
     from .request_monitor import RequestMonitor
+    from .chat_turn_service import TurnCoordinator
+    from .chat_turns import TurnForbidden
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
     from characters import CharacterStore, card_from_tavern
@@ -44,6 +46,8 @@ except ImportError:  # unittest discover -s backend/gateway imports app as a top
     import local_images
     from gpu_gate import gpu_turn, GPUUnavailable, read_state
     from request_monitor import RequestMonitor
+    from chat_turn_service import TurnCoordinator
+    from chat_turns import TurnForbidden
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -69,6 +73,8 @@ GALLERY = "/v1/mikuchin/gallery"
 GALLERY_THUMB = GALLERY + "/thumb/"
 GALLERY_ITEM = GALLERY + "/item"
 REQUEST_MONITOR = "/v1/mikuchin/request-monitor"
+CHAT_TURNS = "/v1/mikuchin/chat/turns"
+CHAT_TURN_PATH = re.compile(r"^/v1/mikuchin/chat/turns/([a-f0-9]{32})(?:/(approve|cancel))?$")
 WEB_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "web"
 STATIC_FILE = re.compile(r"^/web/([a-z][a-z0-9_-]{0,80}\.(?:js|css|svg))$")
 STATIC_MIME = {"js":"text/javascript; charset=utf-8", "css":"text/css; charset=utf-8",
@@ -83,7 +89,8 @@ class GatewayServer(ThreadingHTTPServer):
                  upstream_host: str, upstream_port: int, allowed_origins=(),
                  conversations: ConversationStore | None = None,
                  characters: CharacterStore | None = None,
-                 image_jobs: ImageJobStore | None = None):
+                 image_jobs: ImageJobStore | None = None,
+                 tool_calling_enabled: bool | None = None):
         if not api_key or not upstream_key:
             raise ValueError("Both gateway and upstream API keys are required")
         if upstream_host not in ("127.0.0.1", "::1", "localhost"):
@@ -100,6 +107,23 @@ class GatewayServer(ThreadingHTTPServer):
         self.image_jobs = image_jobs
         self.request_monitor = RequestMonitor()
         super().__init__(address, GatewayHandler)
+        # Read-only state recovery remains available even if the new feature
+        # has been disabled after a failed rollout.
+        self.chat_turns = (TurnCoordinator(self, image_jobs.root.parent)
+                           if image_jobs is not None and characters is not None
+                           and conversations is not None else None)
+        # Rollout passed isolated real-model/image and browser paid-consent
+        # acceptance. Enabled on Native Gateway by default; explicit 0/off
+        # remains a fast fail-closed rollback switch for new turns.
+        rollout = os.getenv("MIKUCHIN_NATIVE_TOOL_CALLING", "1").strip().lower()
+        self.tool_calling_enabled = (rollout not in {"0", "false", "off", "no"}
+                                     if tool_calling_enabled is None
+                                     else bool(tool_calling_enabled))
+
+    def server_close(self):
+        if self.chat_turns is not None:
+            self.chat_turns.close()
+        super().server_close()
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
@@ -192,6 +216,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Invalid request target")
             return
         path = urlsplit(self.path).path
+        match = CHAT_TURN_PATH.fullmatch(path)
+        if match and match.group(2) is None:
+            self._handle_chat_turn_get(match.group(1))
+            return
         if path in (GALLERY,GALLERY_ITEM) or path.startswith(GALLERY_THUMB):
             self._handle_gallery_get(path)
             return
@@ -245,6 +273,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # Explicit per-user-action chat image jobs (not an LLM tool).
                 # No hidden paid submissions during ordinary text responses.
                 "chat_image_jobs": bool(self.server.image_jobs),
+                # Image Studio capabilities do not imply model-driven tools.
+                "chat_tool_calling": bool(reachable and self.server.tool_calling_enabled
+                                          and self.server.chat_turns),
                 # The official engine counts thinking and answer together in
                 # max_tokens. The previous Mikuchin answer_budget_tokens cap
                 # applies to visible answer tokens alone; substituting
@@ -323,7 +354,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
                    or path in (SAMPLING_DEFAULT, UI_LANGUAGE) or path == CHARACTERS
-                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY))
+                   or path in (IMAGE_JOBS,IMAGE_SERVICES,GALLERY,CHAT_TURNS)
+                   or bool(CHAT_TURN_PATH.fullmatch(path)))
         if path not in INFERENCE_POSTS and not private:
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
             return
@@ -353,7 +385,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(400, "Expected a JSON object")
             return
         if private:
-            if path == GALLERY:
+            if path == CHAT_TURNS or CHAT_TURN_PATH.fullmatch(path):
+                self._handle_chat_turn_post(path, request)
+            elif path == GALLERY:
                 self._handle_gallery_post(request)
             elif path in (IMAGE_JOBS,IMAGE_SERVICES):
                 self._handle_image_post(path,request)
@@ -400,6 +434,64 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._handle_private("DELETE", path)
         else:
             self._error(404, "Endpoint not found", "not_found")
+
+    def _handle_chat_turn_get(self, turn_id):
+        if not self.server.chat_turns:
+            self._error(503,"Native image tool turns are unavailable","unavailable")
+            return
+        from urllib.parse import parse_qs
+        query = parse_qs(urlsplit(self.path).query)
+        session_id = query.get("session_id",[None])[0]
+        try:
+            result = self.server.chat_turns.get(session_id,turn_id)
+            if result is None:
+                self._error(404,"Turn not found in this session","not_found")
+            else:
+                self._json(200,result)
+        except (TurnForbidden,ValueError):
+            self._error(404,"Turn not found in this session","not_found")
+        except (sqlite3.Error,OSError):
+            LOG.exception("native tool turn read failed")
+            self._error(503,"Native tool turn storage unavailable","unavailable")
+
+    def _handle_chat_turn_post(self, path, request):
+        if not self.server.chat_turns:
+            self._error(503,"Native image tool turns are unavailable","unavailable")
+            return
+        match = CHAT_TURN_PATH.fullmatch(path)
+        if not match and path != CHAT_TURNS:
+            self._error(404,"Unknown turn endpoint","not_found")
+            return
+        if not self.server.tool_calling_enabled and (path == CHAT_TURNS or
+                                                     (match and match.group(2)=="approve")):
+            self._error(503,"Model image tool calling is disabled","feature_disabled")
+            return
+        try:
+            service=self.server.chat_turns
+            if path == CHAT_TURNS:
+                result=service.submit(request)
+            else:
+                turn_id,action=match.groups()
+                session_id=request.get("session_id")
+                if action=="approve":
+                    result=service.approve(session_id,turn_id,request.get("approval_token"))
+                elif action=="cancel":
+                    result=service.cancel(session_id,turn_id)
+                else:
+                    self._error(405,"Unsupported turn action","invalid_request")
+                    return
+            if result is None:
+                self._error(404,"Turn not found in this session","not_found")
+            else:
+                self._json(200,result)
+        except TurnForbidden:
+            self._error(404,"Turn not found in this session","not_found")
+        except (ValueError,TypeError,OverflowError) as exc:
+            # Never echo untrusted tool arguments, model response, or keys.
+            self._error(400,str(exc)[:160],"invalid_request")
+        except (sqlite3.Error,OSError):
+            LOG.exception("native tool turn storage failed")
+            self._error(503,"Native tool turn storage unavailable","unavailable")
 
     def _handle_private(self, method, path, request=None):
         store = self.server.conversations

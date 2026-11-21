@@ -68,7 +68,8 @@ test("Native official MCP tools activate only when advertised and opted in", () 
 test("Capability shim is loaded before main app and Image Studio keeps explicit tool opt-out", () => {
   assert.ok(html.indexOf('web/chat-capabilities.js') < html.indexOf('web/app.js'));
   assert.match(app,/MikuchinChatCapabilities\.apply\(body, health, settings/);
-  assert.ok(html.indexOf('web/chat-image-router.js') < html.indexOf('web/app.js'));
+  assert.ok(html.indexOf('web/native-tool-client.js') < html.indexOf('web/app.js'));
+  assert.doesNotMatch(html,/web\/chat-image-router\.js/);
   assert.doesNotMatch(html,/id="s-max"/);
   assert.match(html,/id="s-budget"/);
   assert.match(studio,/mikuchin_stateless: true, strata_image_tool: false/);

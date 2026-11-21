@@ -7,7 +7,7 @@ const html=readFileSync(new URL("../index.html",import.meta.url),"utf8");
 const characters=readFileSync(new URL("../characters.js",import.meta.url),"utf8");
 const secure=readFileSync(new URL("../auth-images.js",import.meta.url),"utf8");
 
-test("Native composer uses automatic image routing without extra buttons", () => {
+test("Native composer uses model-chosen tool calls, never keyword-triggered auto generation", () => {
   assert.doesNotMatch(html,/id="chat-draw-btn"/);
   assert.doesNotMatch(html,/id="chat-auto-btn"/);
   assert.doesNotMatch(html,/id="chat-image-confirm"/);
@@ -15,7 +15,13 @@ test("Native composer uses automatic image routing without extra buttons", () =>
   assert.doesNotMatch(app,/sendNativeChatImage|autoImageEnabled|intentRouting/);
   assert.match(html,/id="tab-btn-images"/);
   assert.match(app,/async function send\(\)/);
-  assert.match(app,/submitAutoChatImage\(m,autoAction/);
+  assert.match(html,/native-tool-client\.js/);
+  assert.match(app,/await submitModelToolTurn\(m,el,controller\.signal\)/);
+  const composer=app.slice(app.indexOf("async function send()"),
+                           app.indexOf("async function submitAutoChatImage("));
+  assert.doesNotMatch(composer,/MikuchinChatImageRouter|submitAutoChatImage\(/);
+  assert.match(composer,/async function submitModelToolTurn/);
+  assert.match(composer,/action=approved \? "approve" : "cancel"/);
   assert.match(app,/action:"chat_submit"/);
   assert.match(app,/image_request_id:requestId/);
   assert.match(app,/if \(\(!text && !attachments\.length\) \|\| busy \|\| sessionTransition\) return/);

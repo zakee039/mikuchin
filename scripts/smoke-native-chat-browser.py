@@ -33,6 +33,11 @@ OFFICIAL_KEY = "native-p0-browser-upstream-test-key"
 class FakeChatEngine(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     recorded = None
+    tools_mode = False
+    vision_images = 0
+    decisions = []
+    worker_offline = False
+    fail_vision_once = False
 
     def log_message(self, *_args):
         pass
@@ -67,12 +72,64 @@ class FakeChatEngine(BaseHTTPRequestHandler):
             return
         count = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(count))
-        record = {"fields":sorted(body), "messages":body.get("messages", []),
+        record = {"fields":sorted(body), "messages":body.get("messages", []) if not self.tools_mode else
+                  [m.get("role") for m in body.get("messages", [])],
                   "image_tool":body.get("strata_image_tool", "absent"),
                   "budget":body.get("answer_budget_tokens", "absent")}
         with self.recorded.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         chat=body.get("messages") or []
+        if self.tools_mode and body.get("tool_choice")=="none":
+            if FakeChatEngine.fail_vision_once:
+                FakeChatEngine.fail_vision_once=False
+                self.send_error(503,"Deliberate mock vision failure")
+                return
+            final=chat[-1].get("content") if chat else None
+            picture=bool(isinstance(final,list) and any(
+                p.get("type")=="image_url" and
+                p.get("image_url",{}).get("url","").startswith("data:image/jpeg;base64,")
+                for p in final if isinstance(p,dict)))
+            linked=any(m.get("role")=="tool" and m.get("tool_call_id")=="call_native_browser"
+                       for m in chat)
+            if picture and linked:
+                FakeChatEngine.vision_images+=1
+            self.send_json({"choices":[{"finish_reason":"stop","message":{
+                "role":"assistant","content":"刚刚画好了这张图片，接下来可以调整背景或眼睛。"}}]})
+            return
+        if self.tools_mode and body.get("tools"):
+            latest=next((m for m in reversed(chat) if m.get("role")=="user"),{})
+            c=latest.get("content","")
+            user_text=c if isinstance(c,str) else " ".join(p.get("text","")
+                for p in c if isinstance(p,dict) and p.get("type")=="text")
+            if "测试模型决策取消" in user_text:
+                time.sleep(4)
+            if "测试Worker失联" in user_text:
+                FakeChatEngine.worker_offline=True
+            if "恢复Worker" in user_text:
+                FakeChatEngine.worker_offline=False
+            if "测试视觉尾部失败" in user_text:
+                FakeChatEngine.fail_vision_once=True
+            if "测试非法工具" in user_text:
+                self.send_json({"choices":[{"finish_reason":"tool_calls","message":{
+                    "role":"assistant","content":None,"tool_calls":[{"id":"call_native_browser",
+                        "type":"function","function":{"name":"shell",
+                            "arguments":"{\"command\":\"no\"}"}}]}}]})
+                return
+            edit=any(x in user_text for x in ("眼睛调大","背景改","修改这张","编辑上一张"))
+            if not edit and any(x in user_text for x in ("不要生成","不要画",
+                                                         "解释","如何","如果","成绩表","Excel","建议")):
+                FakeChatEngine.decisions.append("text")
+                self.send_json({"choices":[{"finish_reason":"stop","message":{
+                    "role":"assistant","content":"P0_BROWSER_OK：这次只回答文字，没有调用图片工具。"}}]})
+                return
+            name="edit_image" if edit else "generate_image"
+            FakeChatEngine.decisions.append(name)
+            arguments={"instruction":user_text} if edit else {"prompt":user_text}
+            self.send_json({"choices":[{"finish_reason":"tool_calls","message":{
+                "role":"assistant","content":None,"tool_calls":[{"id":"call_native_browser",
+                    "type":"function","function":{"name":name,
+                        "arguments":json.dumps(arguments,ensure_ascii=False)}}]}}]})
+            return
         if chat and chat[0].get("role")=="system" and "MIKUCHIN_IMAGE_ROUTER_V1" in chat[0].get("content",""):
             text=json.loads(chat[-1]["content"]).get("user_text","").lower()
             action=("edit" if any(term in text for term in ("编辑","修改","change","edit","眼睛"))
@@ -101,6 +158,8 @@ class FakeChatEngine(BaseHTTPRequestHandler):
 
 
 def main():
+    FakeChatEngine.tools_mode = "--tools" in sys.argv
+    paid_consent_fixture = "--paid" in sys.argv
     # All state is disposable. Fixture is explicitly stopped by creating the
     # reported control file so Windows processes and ports can be verified free.
     with tempfile.TemporaryDirectory(prefix="mikuchin-p0-browser-") as root:
@@ -117,14 +176,15 @@ def main():
         # The disposable embedded worker can execute immediately; unlike the
         # production independent worker it never sends heartbeats. Report
         # ready only in this isolated browser fixture.
-        jobs.worker_healthy = lambda: True
+        jobs.worker_healthy = lambda: not FakeChatEngine.worker_offline
         original_provider_catalog = image_providers.catalog
         # Pretend this TEST-ONLY fake PNG provider is locally hosted so a
         # native JS billing confirmation cannot block headless automation.
         # The provider below writes a local 64x64 PNG and never uses HTTP.
-        image_providers.catalog = lambda store: [
-            {**item, "family": "qwen_turbo"}
-            for item in original_provider_catalog(store)]
+        if not paid_consent_fixture:
+            image_providers.catalog = lambda store: [
+                {**item, "family": "qwen_turbo"}
+                for item in original_provider_catalog(store)]
         fake_service=image_providers.save_service(jobs,{
             "name":"Disposable fixture (no paid calls)",
             "base_url":"http://127.0.0.1:19999/v1",
@@ -137,13 +197,15 @@ def main():
             "chat_image_settings":{"lora_id":"none","width":1024,"height":1024,
                                    "upscale":"off","steps":None}},
             allowed_image_profiles={fake_service["id"]},
-            image_profile_configs={fake_service["id"]:{"family":"qwen_turbo","max_side":2048,
+            image_profile_configs={fake_service["id"]:{"family":"api" if paid_consent_fixture else "qwen_turbo","max_side":2048,
                                    "sizes":"standard","upscale_available":False}})
         fake_calls=[]
         def fake_image_provider(store, request, *, on_status, diagnostic_id, **kwargs):
             fake_calls.append({"job_id":diagnostic_id,
                                "reference_count":len(request.get("strata_reference_images",[]))})
             on_status("Mock: local PNG only; no network or payment")
+            if "测试慢任务" in str(request.get("prompt","")):
+                time.sleep(5)
             folder=directory/"images"/"generated-images"
             folder.mkdir(exist_ok=True)
             name=secrets.token_hex(16)+".png"
@@ -155,14 +217,16 @@ def main():
         gateway = GatewayServer(("127.0.0.1", 0), api_key=TEST_KEY, upstream_key=OFFICIAL_KEY,
                                 upstream_host="127.0.0.1", upstream_port=official.server_address[1],
                                 conversations=ConversationStore(directory),
-                                characters=cards,image_jobs=jobs)
+                                characters=cards,image_jobs=jobs,
+                                tool_calling_enabled=FakeChatEngine.tools_mode)
         threads = [threading.Thread(target=x.serve_forever,daemon=True)
                    for x in (official,gateway)]
         for thread in threads:
             thread.start()
         print(json.dumps({"gateway_port":gateway.server_address[1],
                           "stop_file":str(stop_file), "forwarded_file":str(recorded),
-                          "key":TEST_KEY}),flush=True)
+                          "key":TEST_KEY, "tool_calling":FakeChatEngine.tools_mode,
+                          "paid_consent_fixture":paid_consent_fixture}),flush=True)
         try:
             while not stop_file.exists():
                 time.sleep(.2)
@@ -182,6 +246,8 @@ def main():
             print("fake_image_provider_calls="+str(len(fake_calls)),flush=True)
             print("fake_image_reference_counts="+",".join(str(c["reference_count"])
                 for c in fake_calls),flush=True)
+            print("fake_model_decisions="+",".join(FakeChatEngine.decisions),flush=True)
+            print("fake_vision_images="+str(FakeChatEngine.vision_images),flush=True)
 
 
 if __name__ == "__main__":
