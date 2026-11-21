@@ -27,6 +27,7 @@ android {
         targetSdk = 34
         versionCode = 300
         versionName = "0.3.0"
+        manifestPlaceholders["appLabel"] = "Mikuchin"
     }
 
     signingConfigs {
@@ -52,6 +53,15 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // Separate install ID and data/Keystore/tsnet directories.
+        // Never overwrite or reuse the stable Android app's signing identity.
+        create("nativePreview") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".nativepreview"
+            versionNameSuffix = "-native-preview"
+            manifestPlaceholders["appLabel"] = "Mikuchin Native Dev"
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     compileOptions {
@@ -75,4 +85,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.1")
     implementation("androidx.webkit:webkit:1.11.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

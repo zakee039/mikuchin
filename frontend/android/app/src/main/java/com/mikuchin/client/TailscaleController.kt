@@ -44,6 +44,10 @@ class TailscaleController(private val context: Context) {
     companion object {
         const val DEFAULT_HOSTNAME = "mikuchin-android"
     }
+    private val nodeHostname: String by lazy {
+        if (context.packageName.endsWith(".nativepreview")) "mikuchin-native-android"
+        else DEFAULT_HOSTNAME
+    }
 
     private val stateRootDir: File by lazy {
         File(context.noBackupFilesDir, "tailscale").apply { mkdirs() }
@@ -83,7 +87,7 @@ class TailscaleController(private val context: Context) {
     fun ensureStarted(): TailscaleStatus {
         return try {
             ensureSeqContext()
-            Tsnetbridge.start(stateRootDir.absolutePath, DEFAULT_HOSTNAME)
+            Tsnetbridge.start(stateRootDir.absolutePath, nodeHostname)
             registerNetworkCallbackIfNeeded()
             getStatus()
         } catch (t: Throwable) {
@@ -239,7 +243,7 @@ class TailscaleController(private val context: Context) {
                 state = j.optString("state", "Stopped"),
                 authUrl = j.optString("authUrl", ""),
                 tailscaleIp = j.optString("tailscaleIp", ""),
-                hostname = j.optString("hostname", DEFAULT_HOSTNAME),
+                hostname = j.optString("hostname", nodeHostname),
                 socksPort = j.optInt("socksPort", 0),
                 httpProxyPort = j.optInt("httpProxyPort", 0),
                 proxyToken = j.optString("proxyToken", ""),

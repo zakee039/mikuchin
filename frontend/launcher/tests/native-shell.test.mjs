@@ -146,3 +146,12 @@ test("Native request monitor is authenticated and renders bounded privacy-safe m
   assert.match(source,/单次精确 Token 用量暂无来源/);
   assert.doesNotMatch(source,/request\.prompt|req\.messages/);
 });
+
+test("Native release installation never silently adopts the compiled developer worktree", () => {
+  assert.match(rust, /std::env::current_exe\(\)/);
+  assert.match(rust, /if cfg!\(debug_assertions\)/);
+  assert.match(rust, /MIKUCHIN_NATIVE_HOME/);
+  assert.match(rust, /MIKUCHIN_NATIVE_RUNTIME_HOME/);
+  assert.match(rust, /backend\/polystrata\/serve\/server\.py/);
+  assert.match(rust, /Native backend not found beside launcher/);
+});

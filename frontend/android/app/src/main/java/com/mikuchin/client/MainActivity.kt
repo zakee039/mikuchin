@@ -384,12 +384,28 @@ class MainActivity : ComponentActivity() {
                     return "Tailscale 未就绪，请先完成设备授权"
             }
 
-            // Probe first without the API key. Never send credentials to an
-            // address that has not been explicitly saved in this profile.
+            // Probe without credentials first. Legacy main exposes /health
+            // (HTTP 200); the Native Gateway deliberately protects it and
+            // responds with its characteristic 401 JSON. Only after either
+            // compatible response do we send this profile's own saved key
+            // to /v1/strata/sessions. Never relax Native server auth.
             val health = tailscaleController.openMikuchinConnection(mode, endpoint, "/health", "")
-            val healthCode = try {health.responseCode} finally {health.disconnect()}
+            val healthCode: Int
+            val healthChallenge: String?
+            try {
+                healthCode = health.responseCode
+                healthChallenge = if (healthCode == 401) {
+                    health.errorStream?.reader(Charsets.UTF_8)?.use { reader ->
+                        val buffer = CharArray(2048)
+                        val count = reader.read(buffer)
+                        if (count > 0) String(buffer, 0, count) else null
+                    }
+                } else null
+            } finally { health.disconnect() }
             if (generation != connectGeneration.get()) return "连接已取消"
-            if (healthCode !in 200..299) return "健康检查 HTTP $healthCode"
+            if (!ServerHealthPreflight.accepts(healthCode, healthChallenge)) {
+                return "健康检查 HTTP $healthCode（非 Mikuchin Native 鉴权响应）"
+            }
 
             val request = tailscaleController.openMikuchinConnection(
                 mode, endpoint, "/v1/strata/sessions", key)

@@ -33,30 +33,58 @@ pub(crate) fn state_dir() -> PathBuf {
 }
 
 fn project_root() -> Result<PathBuf, String> {
+    fn has_native_backend(root: &Path) -> bool {
+        root.join("backend/gateway/supervisor.py").is_file()
+            && root.join("backend/polystrata/serve/server.py").is_file()
+    }
     if let Some(explicit) = std::env::var_os("MIKUCHIN_NATIVE_HOME") {
         let root = PathBuf::from(explicit);
-        if root.join("backend/gateway/supervisor.py").is_file()
-            && root.join("backend/polystrata/serve/server.py").is_file() {
+        if has_native_backend(&root) {
             return root.canonicalize().map_err(|e| e.to_string());
         }
-        return Err("MIKUCHIN_NATIVE_HOME is not a native worktree".into());
+        return Err("MIKUCHIN_NATIVE_HOME must contain the Native Gateway and official engine".into());
     }
-    for ancestor in Path::new(env!("CARGO_MANIFEST_DIR")).ancestors() {
-        if ancestor.join("backend/gateway/supervisor.py").is_file()
-            && ancestor.join("backend/polystrata/serve/server.py").is_file() {
-            return ancestor.canonicalize().map_err(|e| e.to_string());
+    // A packaged/portable launcher must use files adjacent to itself; it
+    // must never silently jump back to a build-time developer source tree.
+    if let Ok(executable) = std::env::current_exe() {
+        for ancestor in executable.ancestors().skip(1) {
+            if has_native_backend(ancestor) {
+                return ancestor.canonicalize().map_err(|e| e.to_string());
+            }
         }
     }
-    Err("Native worktree not found; provide MIKUCHIN_NATIVE_HOME".into())
+    // Only an unbundled DEBUG preview may find sources via Cargo's build
+    // directory. Release installers cannot accidentally adopt dev files.
+    if cfg!(debug_assertions) {
+        for ancestor in Path::new(env!("CARGO_MANIFEST_DIR")).ancestors() {
+            if has_native_backend(ancestor) {
+                return ancestor.canonicalize().map_err(|e| e.to_string());
+            }
+        }
+    }
+    Err("Native backend not found beside launcher; configure MIKUCHIN_NATIVE_HOME".into())
 }
 
 fn runtime_root(root: &Path) -> Result<PathBuf, String> {
-    let parent = root.parent().ok_or("Invalid native worktree path")?;
-    let runtime = parent.join("mikuchin-native-runtime");
-    if runtime == root || !runtime.join(".venv/Scripts/python.exe").is_file() {
-        return Err(format!("Native Python environment not installed: {}", runtime.display()));
+    if let Some(explicit) = std::env::var_os("MIKUCHIN_NATIVE_RUNTIME_HOME") {
+        let runtime = PathBuf::from(explicit);
+        let stable = root.parent().ok_or("Invalid Native tree")?.join("mikuchin");
+        // An explicit override must never recycle the stable main runtime.
+        if runtime.starts_with(stable) {
+            return Err("The stable Mikuchin runtime cannot be used by Native".into());
+        }
+        if runtime != root && runtime.join(".venv/Scripts/python.exe").is_file() {
+            return runtime.canonicalize().map_err(|e| e.to_string());
+        }
+        return Err("MIKUCHIN_NATIVE_RUNTIME_HOME must contain .venv/Scripts/python.exe".into());
     }
-    Ok(runtime)
+    let parent = root.parent().ok_or("Invalid native worktree path")?;
+    for runtime in [parent.join("mikuchin-native-runtime"), root.join("runtime")] {
+        if runtime != root && runtime.join(".venv/Scripts/python.exe").is_file() {
+            return runtime.canonicalize().map_err(|e| e.to_string());
+        }
+    }
+    Err("Native Python runtime missing; provide MIKUCHIN_NATIVE_RUNTIME_HOME".into())
 }
 
 pub(crate) fn project_root_for_network() -> Result<PathBuf, String> { project_root() }

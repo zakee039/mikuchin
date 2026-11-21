@@ -1,5 +1,34 @@
 # Mikuchin Android Client (`frontend/android`)
 
+## Native P3 独立预览（2026-11-21）
+
+此分支另有不覆盖稳定版的 `nativePreview` 构建类型，产物包名
+`com.mikuchin.client.nativepreview`、界面名 `Mikuchin Native Dev`，
+其 Android Keystore、入口配置、Tailscale 节点状态和稳定版相互独立。
+用户态 Tailscale 节点名为 `mikuchin-native-android`。
+
+本次修复了 Native Gateway 的鉴权预检：不带 Key 访问 `/health` 时，
+旧版服务器返回 2xx，Native 专有的 401 JSON 同样可通过预检，
+随后仍必须提供本入口的 **Native 独立 API Key** 才能读取会话。
+不接受普通 401/403 或其他错误，也不在首次预检时发送 Key。
+
+已准备 JDK17、SDK34、Gradle8.7 和 `tsnetbridge.aar` 时，执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build-native-preview.ps1 -ToolchainRoot "你自己的工具链目录"
+```
+
+默认产物 `native-preview-output/Mikuchin-Native-Android-Preview.apk`。
+此预览 APK 使用**独立包名和调试证书**，非正式版更新包；不修改
+`Mikuchin.apk`，也不发布到 GitHub Releases。
+手机可填写 `http://<电脑的 Tailscale IPv4>:15249`（Tailscale 入口）
+或已启用的局域网地址；前提是两台设备网络/ACL 实际可达。
+长期 HTTPS 需先建立**全新的 Native Cloudflare Tunnel**。
+
+这轮 2 个 Kotlin 单元测试、Gradle APK 构建、APK v2 签名校验已通过；
+**未有在线的 Android 真机**，不能宣称跨设备安装或 SSE 验收已经完成。
+详细 P3 验证记录见 `../../docs/NATIVE_P3_ACCESS_PACKAGING_2026-11-21.md`。
+
 独立的安卓手机客户端工程，**完全不修改 `frontend/web` 网页端与 `backend/polystrata` 后端推理引擎**，内置用户态 Tailscale (`tsnet`) 网络，无需 Android `VpnService`，可与 Clash Mi / Mihomo 等系统 VPN 并存。
 
 ## 目录结构
