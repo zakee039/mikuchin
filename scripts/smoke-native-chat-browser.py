@@ -36,6 +36,7 @@ class FakeChatEngine(BaseHTTPRequestHandler):
     tools_mode = False
     vision_images = 0
     decisions = []
+    context_audits = []
     worker_offline = False
     fail_vision_once = False
 
@@ -118,6 +119,17 @@ class FakeChatEngine(BaseHTTPRequestHandler):
             c=latest.get("content","")
             user_text=c if isinstance(c,str) else " ".join(p.get("text","")
                 for p in c if isinstance(p,dict) and p.get("type")=="text")
+            if "再生成一张二次元的" in user_text:
+                past=chat[:-1]
+                earlier_miku=any(
+                    "初音未来" in str(m.get("content","")) or
+                    "Hatsune Miku" in str(m.get("tool_calls",[]))
+                    for m in past)
+                FakeChatEngine.context_audits.append({
+                    "has_prior_miku_subject":earlier_miku,
+                    "roles":[m.get("role") for m in chat],
+                    "has_prior_tool_call":any(m.get("tool_calls") for m in past),
+                })
             if "测试模型决策取消" in user_text and not body.get("stream"):
                 time.sleep(4)
             if "测试Worker失联" in user_text:
@@ -194,6 +206,7 @@ class FakeChatEngine(BaseHTTPRequestHandler):
 def main():
     FakeChatEngine.tools_mode = "--tools" in sys.argv
     paid_consent_fixture = "--paid" in sys.argv
+    confirm_fixture = "--confirm" in sys.argv
     # All state is disposable. Fixture is explicitly stopped by creating the
     # reported control file so Windows processes and ports can be verified free.
     with tempfile.TemporaryDirectory(prefix="mikuchin-p0-browser-") as root:
@@ -224,6 +237,7 @@ def main():
             "base_url":"http://127.0.0.1:19999/v1",
             "model":"browser-fake-png",
             "api_key":"NO_NETWORK_TEST_KEY","sizes":"standard",
+            "chat_confirm_each_call":confirm_fixture,
             "reference_mode":"multi"})
         cards=CharacterStore(directory / "character")
         cards.set_global({"default_role":"ordinary",
@@ -282,6 +296,7 @@ def main():
                 for c in fake_calls),flush=True)
             print("fake_model_decisions="+",".join(FakeChatEngine.decisions),flush=True)
             print("fake_vision_images="+str(FakeChatEngine.vision_images),flush=True)
+            print("context_audit="+json.dumps(FakeChatEngine.context_audits,ensure_ascii=False),flush=True)
 
 
 if __name__ == "__main__":

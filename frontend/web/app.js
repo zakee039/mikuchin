@@ -823,9 +823,12 @@ async function streamInto(m, el, signal) {
   try { await refreshCurrentSampling(); } catch (e) { console.warn("Sampling refresh failed", e); }
   const stateless=window.polyIsStateless?.()===true;
   const history=apiMessages();
-  // Keep full conversation in UI/storage, send only latest user turn to inference.
-  const assembledMessages=stateless ? [history.filter(x=>x.role==="user").at(-1)] : history;
-  if(stateless && !assembledMessages[0]) throw Error("无状态模式需要本次用户输入");
+  // Stateless is a persona/memory boundary, NOT a conversation-history reset.
+  // Keep every turn in this session, including preceding tool calls, so that
+  // follow-ups such as "再生成一张二次元的" retain their original subject.
+  const assembledMessages=history;
+  if(stateless && !assembledMessages.some(x=>x.role==="user"))
+    throw Error("无状态模式需要本次用户输入");
   const roleSystem = stateless ? null : await window.polyCharacterPrompt?.(assembledMessages);
   const workflowInitPending = roleSystem?.workflowInitPending === true;
   const workflowSessionId = sessionId;
@@ -1087,15 +1090,12 @@ function answerHtml(m) {
       const path = "v1/images/files/" + t.image_file;
       const original = t.image_original_file && /^[a-f0-9]{32}\.png$/.test(t.image_original_file)
         ? "v1/images/files/" + t.image_original_file : "";
-      // Session history can render before the async /health probe finishes.
-      // The persisted job marker is sufficient to enforce private Blob fetch.
-      const nativeSecure=!!health.chat_image_jobs || !!t.image_request_id;
-      html += `<figure class="st-generated-image"><a href="${nativeSecure ? "#" : path}"
-                ${nativeSecure ? `data-native-image-download="${path}"` : 'target="_blank" rel="noopener noreferrer"'}>` +
-              `<img ${nativeSecure ? `data-native-image-src="${path}"` : `src="${path}"`} alt="${esc(t.image_prompt || "Generated image")}" loading="lazy"></a>` +
+      // Never expose the private image as a URL for an unauthenticated <img>.
+      // Clicking is a read-only viewer; saving is only via its top-right button.
+      html += `<figure class="st-generated-image"><a href="#" data-native-image-preview="${path}">` +
+              `<img data-native-image-src="${path}" alt="${esc(t.image_prompt || "Generated image")}" loading="lazy"></a>` +
               `<figcaption>${t.upscale_applied ? "Anime 4× · " : ""}${((window.MIKUCHIN_TRANSLATIONS || {})[$("ui-language")?.value] || {})[t.edited_previous ? "Edited image" : "Generated image"] || (t.edited_previous ? "Edited image" : "Generated image")}` +
-              (original ? ` · <a href="${nativeSecure ? "#" : original}"
-                  ${nativeSecure ? `data-native-image-download="${original}"` : 'target="_blank" rel="noopener noreferrer"'}>Original</a>` : "") +
+              (original ? ` · <a href="#" data-native-image-preview="${original}">Original</a>` : "") +
               (t.upscale_fallback ? " · Upscale failed; showing original" : "") + `</figcaption></figure>`;
     }
   });
@@ -1263,6 +1263,16 @@ function nearBottom() { const s = $("chat-scroll"); return s.scrollHeight - s.sc
 function scrollDown(force) { const s = $("chat-scroll"); if (force || nearBottom()) s.scrollTop = s.scrollHeight; }
 
 $("chat").addEventListener("click", (e) => {
+  const preview=e.target.closest("[data-native-image-preview]");
+  if(preview){
+    e.preventDefault();
+    const path=preview.dataset.nativeImagePreview;
+    const alt=preview.querySelector("img")?.alt || "聊天生成图片";
+    if(!window.MikuchinChatImageViewer)return;
+    void window.MikuchinChatImageViewer.open(path,alt)
+      .catch(error=>toast("error","无法预览图片",String(error)));
+    return;
+  }
   const download=e.target.closest("[data-native-image-download]");
   if (download) {
     e.preventDefault();
@@ -1489,8 +1499,12 @@ async function submitModelToolTurn(m,el,signal) {
   catch (error) { console.warn("Native turn sampling refresh failed",error); }
   const stateless=window.polyIsStateless?.()===true;
   const history=apiMessages();
-  const context=stateless ? [history.filter(x => x.role === "user").at(-1)] : history;
-  if (stateless && !context[0]) throw Error("当前无状态会话没有用户消息");
+  // "无状态" disables the role/persona injection, not within-session context.
+  // The original one-user-only projection caused the model to explicitly
+  // report it had no prior image topic (confirmed in production Turn SQLite).
+  const context=history;
+  if (stateless && !context.some(x=>x.role==="user"))
+    throw Error("当前无状态会话没有用户消息");
   const roleSystem=stateless ? null : await window.polyCharacterPrompt?.(context);
   if (roleSystem) context.unshift({role:roleSystem.role,content:roleSystem.content});
   if (signal?.aborted || fixedSession!==sessionId) return;

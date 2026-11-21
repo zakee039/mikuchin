@@ -114,7 +114,7 @@ class DurableTurns(unittest.TestCase):
         token=self.store.decision_tool(SESSION,TURN,{"name":"generate_image",
             "tool_call_id":"c1","arguments":{"prompt":"red cat"}},
             {"prompt":"red cat","strata_image_profile":"api-pay","size":"512x512"},
-            {"profile":"api-pay","online":True})
+            {"profile":"api-pay","online":True,"require_approval":True})
         self.assertGreater(len(token),30)
         self.assertEqual(self.store.get(SESSION,TURN)["state"],"awaiting_approval")
         self.assertNotIn(token,Path(self.store.path).read_bytes().decode("utf-8","ignore"))
@@ -133,7 +133,7 @@ class DurableTurns(unittest.TestCase):
         self.store.create(SESSION,TURN,self.request)
         self.store.decision_tool(SESSION,TURN,{"name":"generate_image",
             "tool_call_id":"c1","arguments":{"prompt":"cat"}}, {"prompt":"cat"},
-            {"profile":"api-pay","online":True})
+            {"profile":"api-pay","online":True,"require_approval":True})
         self.assertTrue(self.store.cancel_approval(SESSION,TURN))
         self.assertEqual(self.store.get(SESSION,TURN)["state"],"cancelled")
 
@@ -240,7 +240,7 @@ class NativeToolHTTP(unittest.TestCase):
     def test_paid_approval_and_cancel(self):
         turn="e"*32
         req={"prompt":"a cat","strata_image_profile":"api-fake","size":"512x512","strata_upscale":"off"}
-        meta={"profile":"api-fake","online":True,"edit_previous":False,"model_name":"pay/mock"}
+        meta={"profile":"api-fake","online":True,"require_approval":True,"edit_previous":False,"model_name":"pay/mock"}
         with patch.object(self.gateway.chat_turns,"_official",return_value=model_decision("generate_image")), \
              patch.object(service_module,"resolve_image_request",return_value=(req,meta)):
             status,started=self.request("POST","/v1/mikuchin/chat/turns",self.payload(turn))
@@ -255,6 +255,27 @@ class NativeToolHTTP(unittest.TestCase):
             {"session_id":SESSION})
         self.assertEqual(status,200)
         self.assertEqual(end["state"],"cancelled")
+
+    def test_online_default_unchecked_dispatches_once_without_dialog(self):
+        ident="5"*32
+        req={"prompt":"a cat","strata_image_profile":"api-fake",
+             "size":"1024x1024","strata_upscale":"off"}
+        meta={"profile":"api-fake","online":True,"require_approval":False,
+              "edit_previous":False,"model_name":"pay/mock"}
+        with patch.object(self.gateway.chat_turns,"_official",
+                          return_value=model_decision("generate_image")), \
+             patch.object(service_module,"resolve_image_request",return_value=(req,meta)), \
+             patch.object(self.images,"worker_healthy",return_value=True), \
+             patch.object(self.images,"_require_provider",return_value=None):
+            status,first=self.request("POST","/v1/mikuchin/chat/turns",self.payload(ident))
+            self.assertEqual(status,200)
+            self.assertEqual(first["state"],"running")
+            self.assertTrue(first["online"])
+            self.assertNotIn("approval_token",first)
+            status,repeat=self.request("POST","/v1/mikuchin/chat/turns",self.payload(ident))
+            self.assertEqual(status,200)
+            self.assertEqual(repeat["job_id"],first["job_id"])
+            self.assertEqual(self.images.chat_lookup(SESSION,ident)["id"],first["job_id"])
 
     def test_origin_and_authentication(self):
         status,_=self.request("POST","/v1/mikuchin/chat/turns",self.payload(),"invalid")

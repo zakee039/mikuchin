@@ -149,9 +149,10 @@ class ChatTurnStore:
         decision = json.dumps(public_tool, ensure_ascii=False, allow_nan=False)
         request = json.dumps(image_request, ensure_ascii=False, allow_nan=False)
         online = bool(profile["online"])
-        token = secrets.token_urlsafe(32) if online else None
+        require_approval = online and profile.get("require_approval",False) is True
+        token = secrets.token_urlsafe(32) if require_approval else None
         succeeded = self.transition(session_id,turn_id,"deciding",
-            "awaiting_approval" if online else "queued",
+            "awaiting_approval" if require_approval else "queued",
             decision_json=decision,image_request_json=request,
             profile_id=profile["profile"],online=int(online),
             reasoning_text=reasoning[:140000],

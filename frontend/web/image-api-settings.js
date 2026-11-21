@@ -92,6 +92,7 @@
     get("mk-api-negative").checked = !!item?.negative;
     get("mk-api-seed").checked = !!item?.seed;
     get("mk-api-steps").checked = !!item?.steps;
+    get("mk-api-chat-confirm").checked = item?.chat_confirm_each_call === true;
     get("mk-api-sizes").value = item?.sizes || "standard";
     get("mk-api-concurrency").value = String(item?.concurrency || 1);
     get("mk-api-connect-timeout").value = String(item?.connect_timeout_seconds || 15);
@@ -227,6 +228,7 @@
       reference_mode: mode,
       negative: get("mk-api-negative").checked,
       seed: get("mk-api-seed").checked, steps: get("mk-api-steps").checked,
+      chat_confirm_each_call: get("mk-api-chat-confirm").checked,
       sizes: get("mk-api-sizes").value,
       concurrency: Number(get("mk-api-concurrency").value),
       connect_timeout_seconds: Number(get("mk-api-connect-timeout").value),

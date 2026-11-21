@@ -39,7 +39,7 @@ test("Native composer uses model-chosen tool calls, never keyword-triggered auto
 });
 test("Native images use authenticated Blob URLs instead of bare image URLs or secrets", () => {
   assert.match(app,/data-native-image-src/);
-  assert.match(app,/\|\| !!t\.image_request_id/);
+  assert.match(app,/data-native-image-preview/);
   assert.match(app,/MikuchinSecureImages\.load/);
   assert.match(app,/MikuchinSecureImages\.prefetch/);
   assert.match(secure,/Authorization/);

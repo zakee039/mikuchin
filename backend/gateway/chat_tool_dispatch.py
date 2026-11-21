@@ -142,4 +142,6 @@ def resolve_image_request(cards, jobs, decision: dict):
     # Catalog is the only authority on online vs local.
     return request, {"profile": matching["id"], "model_name": matching.get("name", matching["id"]),
                      "online": matching.get("family") == "api",
+                     "require_approval": (matching.get("family") == "api" and
+                                          matching.get("chat_confirm_each_call",False) is True),
                      "edit_previous": decision["name"] == "edit_image"}

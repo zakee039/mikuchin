@@ -181,7 +181,7 @@ class TurnCoordinator:
             # Edit may only use this session's latest successful image. The
             # ImageJobStore revalidates and resolves reference SERVER-side.
             token=self.store.decision_tool(session,turn,decision,req,profile,reasoning)
-            if profile["online"]:
+            if profile.get("require_approval",False):
                 result=self.store.public(session,turn,self.server.image_jobs)
                 result["approval_token"]=token  # one-time; never stored in plaintext
                 result["model_name"]=profile["model_name"]

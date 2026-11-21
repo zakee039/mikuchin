@@ -108,9 +108,11 @@ def public(entry):
     return {k: entry[k] for k in (
         "id", "name", "base_url", "model", "proxy", "proxy_url",
         "reference_mode", "negative", "seed", "steps", "sizes", "concurrency",
+        "chat_confirm_each_call",
         "timeout_seconds", "connect_timeout_seconds",
     ) if k in entry} | {"has_key": bool(entry.get("api_key")),
                        "concurrency": entry.get("concurrency", 1),
+                       "chat_confirm_each_call": entry.get("chat_confirm_each_call", False),
                        "timeout_seconds": entry.get("timeout_seconds", 240),
                        "connect_timeout_seconds": entry.get("connect_timeout_seconds", _CONNECT_TIMEOUT)}
 
@@ -160,6 +162,12 @@ def save_service(svc, payload):
         proxy = payload.get("proxy", False)
         if not isinstance(proxy, bool):
             raise ImageServiceError("proxy must be a boolean")
+        # The optional consent dialog belongs to chat Tool Calling only,
+        # NEVER to explicit standalone Image Studio actions.
+        confirm = payload.get("chat_confirm_each_call",
+                              prev.get("chat_confirm_each_call", False) if prev else False)
+        if type(confirm) is not bool:
+            raise ImageServiceError("Chat-only confirmation must be boolean")
         proxy_url = _url(payload.get("proxy_url"), proxy=True) if proxy else ""
         key = payload.get("api_key", "")
         if key is None:
@@ -178,6 +186,7 @@ def save_service(svc, payload):
             "negative": payload.get("negative") is True,
             "seed": payload.get("seed") is True,
             "steps": payload.get("steps") is True, "sizes": sizes,
+            "chat_confirm_each_call": confirm,
             "concurrency": concurrency,
             "timeout_seconds": timeout_seconds,
             "connect_timeout_seconds": connect_timeout,
@@ -207,6 +216,7 @@ def catalog(svc):
             "sizes": s["sizes"], "reference_mode": s["reference_mode"],
             "negative": s["negative"], "seed": s["seed"],
             "supports_steps": s["steps"], "model": s["model"],
+            "chat_confirm_each_call": s["chat_confirm_each_call"],
             "upscale_available": False,  # native GPU/upscale worker not ported yet
         })
     return result
