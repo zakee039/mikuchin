@@ -25,6 +25,8 @@
 
 实际结果：Worker 并发测试 **4/4**、Gateway 全量 **154/154**、Web 全量 **94/94**、版本一致性校验 **13/13** 通过。
 
+此外发现 GitHub 的旧 Launcher 合约测试仍断言「关于页」从 `/health` 动态取引擎版本（已经在上一轮改成立即读取固定版本）；只调整了这条过时的测试断言，让它验证早加载 `versions.js` 与 Gateway 固定版本一致，**没有修改启动器实现或二进制**。Launcher 测试 **22/22** 通过。
+
 ## 生产发布规则
 
 - 版本仍为 **Mikuchin v0.5.0**，不更新 Launch/Android 的二进制。只需更新独立 Image Worker 进程；Gateway 不需要重启（提交 API 配置和队列结构不变），官方 PolyStrata 不重启。

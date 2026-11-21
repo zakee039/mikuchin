@@ -5,6 +5,7 @@ const source=readFileSync(new URL("../src/main.ts",import.meta.url),"utf8");
 const rust=readFileSync(new URL("../src-tauri/src/native.rs",import.meta.url),"utf8");
 const gateway=readFileSync(new URL("../../../backend/gateway/app.py",import.meta.url),"utf8");
 const app=readFileSync(new URL("../../../frontend/web/app.js",import.meta.url),"utf8");
+const versions=readFileSync(new URL("../../../frontend/web/versions.js",import.meta.url),"utf8");
 
 test("promoted Native launcher retains old-mixed configuration UX and language controls", () => {
   assert.match(source, /data-action="choose-config"/);
@@ -33,5 +34,7 @@ test("promoted Native launcher retains old-mixed configuration UX and language c
 
 test("Gateway about page shows unchanged pinned PolyStrata release suffix",()=>{
   assert.match(gateway,/official_polystrata_release.*v0\.1\.45-poly\.10/);
-  assert.match(app,/health\?\.official_polystrata_release/);
+  assert.match(versions,/polystrata: "v0\.1\.45-poly\.10"/);
+  assert.match(app,/v\.polystrata/);
+  assert.doesNotMatch(app,/health\?\.official_polystrata_release/);
 });
