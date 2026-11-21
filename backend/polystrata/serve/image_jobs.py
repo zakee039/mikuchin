@@ -119,18 +119,6 @@ def _public(row):
     return result
 
 
-def _submission_timestamp(value):
-    """Use the button-click time if client clock is plausible; otherwise server receipt time.
-
-    The short permitted skew covers reference upload time and normal latency,
-    without allowing an arbitrary client-supplied date to distort the history.
-    """
-    now = time.time()
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and now - 300 <= value <= now + 5:
-        return min(float(value), now)
-    return now
-
-
 def _reference_file(svc, asset_id):
     if not isinstance(asset_id, str) or not _REF_ID.fullmatch(asset_id):
         raise ValueError("invalid reference asset ID")
@@ -365,7 +353,7 @@ def delete_records(svc, *, job_id=None, clear_completed=False):
     return {"deleted": count}
 
 
-def _mark(svc, job_id, phase, state="working", result=None, error=None, provider="local"):
+def _mark(svc, job_id, phase, state="working", result=None, error=None, provider="local", start=False):
     now = time.time()
     with _LOCK, _db(svc) as db:
         row = db.execute("SELECT kind FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -374,10 +362,11 @@ def _mark(svc, job_id, phase, state="working", result=None, error=None, provider
         terminal = row is not None and row["kind"] == "generate" and db_state in ("success", "failed")
         db.execute("UPDATE jobs SET phase=?, state=?, result=COALESCE(?,result), "
                    "error=COALESCE(?,error), updated=?, "
+                   "started_at=CASE WHEN ? AND started_at IS NULL THEN ? ELSE started_at END, "
                    "finished_at=CASE WHEN ? AND finished_at IS NULL THEN ? ELSE finished_at END WHERE id=?",
                    (str(phase)[:100], db_state,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
-                    str(error)[:500] if error else None, now, terminal, now, job_id))
+                    str(error)[:500] if error else None, now, start, now, terminal, now, job_id))
     image_task_status.mark(job_id, phase, state=state, error=error, provider=provider)
 
 
@@ -385,7 +374,7 @@ def _generate(svc, req, job_id):
     req = _expand_request(svc, req)
     profile_id = req.get("strata_image_profile", "default")
     if isinstance(profile_id, str) and profile_id.startswith("api-"):
-        _mark(svc, job_id, "正在请求 API", provider="api")
+        _mark(svc, job_id, "正在请求 API", provider="api", start=True)
         out = api_images.generate(svc, req, ident=profile_id,
             on_status=lambda phase: _mark(svc, job_id, phase, provider="api"),
             diagnostic_id=job_id)
@@ -416,7 +405,7 @@ def _generate(svc, req, job_id):
         gen.keep_files = 2**31 - 1
     _mark(svc, job_id, "等待本地生成任务")
     with images_api.gpu_turn(svc, gen, job) as _policy:
-        _mark(svc, job_id, "本地模型生成中")
+        _mark(svc, job_id, "本地模型生成中", start=True)
         generated, figures = gen.run(job)  # no browser cancellation event
         _mark(svc, job_id, "正在执行本地超分")
         generated, upscale = images_api.postprocess(gen, generated, job)
@@ -451,7 +440,7 @@ def _upscale(svc, source_id, job_id):
         raise ValueError("超分后最长边不能超过 6144 像素")
     _mark(svc, job_id, "等待超分 GPU 任务")
     with images_api.gpu_turn(svc, gen, {"width": w, "height": h}) as _policy:
-        _mark(svc, job_id, "正在执行 4x 超分")
+        _mark(svc, job_id, "正在执行 4x 超分", start=True)
         png, secs = _upscale_one(original, cfg)
     _mark(svc, job_id, "正在保存 4x 图片")
     cover = gallery_api.attach_upscaled(svc, source_id, png)
@@ -463,7 +452,7 @@ def _run_one(svc, job_id, kind, payload):
     try:
         if kind == "chat":
             hub, arguments, call_id = payload
-            _mark(svc, job_id, "正在执行聊天生图")
+            _mark(svc, job_id, "正在执行聊天生图", start=True)
             output = hub._execute_image("polystrata__generate_image", arguments)
             if not output.get("ok"):
                 raise RuntimeError(output.get("text") or "聊天生图失败")
@@ -589,7 +578,7 @@ def _enqueue(svc, ident, kind, payload):
         state["queue"].put((ident,kind,payload))
 
 
-def _insert_studio(db, request, state="draft", started_at=None):
+def _insert_studio(db, request, state="draft"):
     job_id = "img-" + secrets.token_hex(12)
     now = time.time()
     db.execute("INSERT INTO jobs(id,kind,source_id,state,phase,created,updated,"
@@ -600,7 +589,7 @@ def _insert_studio(db, request, state="draft", started_at=None):
                request.get("strata_image_profile", "default"),
                " ".join((request.get("prompt") or request.get("natural_prompt") or "").split())[:180],
                str(request.get("size") or "")[:40], json.dumps(request,ensure_ascii=False),
-               started_at if state == "running" else None))
+               None))
     return job_id
 
 
@@ -694,8 +683,8 @@ def submit(svc, req):
                 if not (payload.get("prompt") or "").strip():
                     raise ValueError("image prompt is required")
                 db.execute("UPDATE jobs SET state='running',phase='排队等待执行',updated=?,"
-                           "started_at=?,finished_at=NULL WHERE id=?",
-                           (time.time(), _submission_timestamp(req.get("client_started_at")), ident))
+                           "started_at=NULL,finished_at=NULL WHERE id=?",
+                           (time.time(), ident))
                 response = _public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
             _enqueue(svc,ident,"generate",payload)
             return response
@@ -727,8 +716,7 @@ def submit(svc, req):
                 failed_source = source["state"] == "failed"
                 if not failed_source:
                     _trim_studio(svc,db,protected_ids=(original_id,))
-                ident = _insert_studio(db, request, "running",
-                                       started_at=_submission_timestamp(req.get("client_started_at")))
+                ident = _insert_studio(db, request, "running")
                 if failed_source:
                     db.execute("DELETE FROM jobs WHERE id=? AND kind='generate' AND state='failed'",
                                (original_id,))
@@ -747,8 +735,7 @@ def submit(svc, req):
                 if _pending_count(db) >= _MAX_PENDING:
                     raise ValueError("图像任务队列已满")
                 _trim_studio(svc,db)
-                ident = _insert_studio(db, request, "running",
-                                       started_at=_submission_timestamp(req.get("client_started_at")))
+                ident = _insert_studio(db, request, "running")
                 response = _public(db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone())
             _enqueue(svc,ident,"generate",request)
             _gc_references(svc)

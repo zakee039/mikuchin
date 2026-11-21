@@ -91,47 +91,44 @@ class DesktopJobsTest(unittest.TestCase):
             self.assertLess(time.monotonic() - begun, .10)
             self.assertEqual(self._wait(job["id"])["state"], "success")
 
-    def test_generation_timer_starts_at_submit_and_stops_on_success(self):
-        """Editing a draft for a long time must not count as generation time."""
-        drafted = image_jobs.submit(self.svc, {"action":"draft", "request":{"prompt":"a landscape"}})
-        self.assertIsNone(drafted["started_at"])
-        self.assertIsNone(drafted["finished_at"])
-        original_created = drafted["created"]
-        retouched = image_jobs.submit(self.svc, {"action":"draft", "id":drafted["id"]})
-        self.assertEqual(retouched["id"], drafted["id"])
-        self.assertIsNone(retouched["started_at"])
-        self.assertIsNone(retouched["elapsed_s"])
-        waiting = threading.Event()
-        release = threading.Event()
-        def fake_generate(*_args):
-            waiting.set()
-            self.assertTrue(release.wait(timeout=4))
+    def test_generation_timer_starts_when_worker_executes_and_ignores_queue(self):
+        """A second task may wait in the queue without its timer advancing."""
+        entered=threading.Event()
+        release=threading.Event()
+        def fake_generate(svc, req, job_id):
+            image_jobs._mark(svc,job_id,"调用模型",start=True)
+            if req["prompt"] == "block first":
+                entered.set()
+                self.assertTrue(release.wait(timeout=4))
             return {"image_ids":[self.original_id]}
-        clicked = time.time() - 2.0
-        with mock.patch.object(image_jobs, "_generate", side_effect=fake_generate):
-            running = image_jobs.submit(self.svc, {"action":"activate", "id":drafted["id"],
-                "client_started_at":clicked})
-            self.assertEqual(running["state"], "running")
-            self.assertEqual(running["id"], drafted["id"])
-            self.assertAlmostEqual(running["started_at"], clicked, delta=.2)
-            self.assertNotEqual(running["started_at"], original_created)
-            self.assertIsNone(running["finished_at"])
-            self.assertTrue(waiting.wait(3))
-            in_flight = image_jobs.snapshot(self.svc, running["id"])
-            self.assertGreater(in_flight["elapsed_s"], 1.5)
-            release.set()
-            finished = self._wait(running["id"])
-        self.assertEqual(finished["state"], "success")
+        with mock.patch.object(image_jobs,"_generate",side_effect=fake_generate):
+            try:
+                first=image_jobs.submit(self.svc,{"kind":"generate","request":{"prompt":"block first"}})
+                self.assertTrue(entered.wait(3))
+                queued=image_jobs.submit(self.svc,{"kind":"generate","request":{"prompt":"second"},
+                    "client_started_at":time.time()-120})
+                self.assertIsNone(queued["started_at"])
+                self.assertIsNone(queued["elapsed_s"])
+                time.sleep(.08)
+                self.assertIsNone(image_jobs.snapshot(self.svc,queued["id"])["started_at"])
+            finally:
+                release.set()
+            self.assertEqual(self._wait(first["id"])["state"],"success")
+            finished=self._wait(queued["id"])
+        self.assertEqual(finished["state"],"success")
+        self.assertIsNotNone(finished["started_at"])
         self.assertIsNotNone(finished["finished_at"])
-        self.assertAlmostEqual(finished["elapsed_s"],
-            finished["finished_at"] - clicked, delta=.2)
-        time.sleep(.06)
-        again = image_jobs.snapshot(self.svc, running["id"])
-        self.assertEqual(again["finished_at"], finished["finished_at"])
-        self.assertEqual(again["elapsed_s"], finished["elapsed_s"])
-
+        self.assertLess(finished["elapsed_s"],5)
+        frozen=image_jobs.snapshot(self.svc,queued["id"])
+        self.assertEqual(frozen["elapsed_s"],finished["elapsed_s"])
     def test_failed_and_retried_jobs_have_independent_start_finish_timestamps(self):
-        with mock.patch.object(image_jobs, "_generate", side_effect=RuntimeError("upstream broke")):
+        def fake_failure(svc,req,job_id):
+            image_jobs._mark(svc,job_id,"调用 API",start=True)
+            raise RuntimeError("upstream broke")
+        def fake_success(svc,req,job_id):
+            image_jobs._mark(svc,job_id,"调用 API",start=True)
+            return {"image_ids":[self.original_id]}
+        with mock.patch.object(image_jobs, "_generate", side_effect=fake_failure):
             failed_id = image_jobs.submit(self.svc, {"kind":"generate",
                 "request":{"prompt":"try again"}})["id"]
             failed = self._wait(failed_id)
@@ -139,13 +136,14 @@ class DesktopJobsTest(unittest.TestCase):
         self.assertIsNotNone(failed["started_at"])
         self.assertIsNotNone(failed["finished_at"])
         clicked = time.time() - 1.0
-        with mock.patch.object(image_jobs, "_generate", return_value={"image_ids":[self.original_id]}):
+        with mock.patch.object(image_jobs, "_generate", side_effect=fake_success):
             retried = image_jobs.submit(self.svc, {"action":"retry", "id":failed_id,
                 "client_started_at":clicked})
             done = self._wait(retried["id"])
         self.assertNotEqual(done["id"], failed_id)
         self.assertEqual(retried["deleted_original_id"], failed_id)
-        self.assertAlmostEqual(done["started_at"], clicked, delta=.2)
+        self.assertGreater(done["started_at"], clicked)
+        self.assertLess(done["elapsed_s"],5)
         self.assertIsNotNone(done["finished_at"])
         self.assertEqual(image_jobs.snapshot(self.svc, failed_id)["state"], "unknown")
         self.assertNotIn(failed_id, [job["id"] for job in

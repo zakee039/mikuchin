@@ -82,3 +82,16 @@ test("draft edits never start the clock and legacy tasks do not invent a start t
   const failed={state:"failed",created:10,started_at:15,finished_at:20,updated:5000};
   assert.equal(ctx.taskElapsed(failed, 9000000), "00:00:05", "subsequent edits/updates must not change a finished job clock");
 });
+
+test("queued tasks never tick even if an older server had written a submit timestamp", () => {
+  const ctx=createHarness();
+  const first=createRow(), second=createRow();
+  ctx.taskRows.set("new",first.row);
+  ctx.taskRecords.set("new",{state:"running",phase:"排队等待执行",created:10,started_at:null});
+  ctx.taskRows.set("legacy",second.row);
+  ctx.taskRecords.set("legacy",{state:"running",phase:"排队等待执行",created:10,started_at:15});
+  ctx.tickTaskTimers(5_000_000);
+  assert.equal(first.clock.textContent,"");
+  assert.equal(second.clock.textContent,"");
+  assert.match(source,/activeJob\(job\) \? "排队中"/);
+});
