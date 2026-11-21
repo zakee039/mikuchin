@@ -366,7 +366,8 @@ class ImageJobStore:
             self._start_worker()
         return {**created,"already_submitted":False}
 
-    def chat_submit(self, session_id, request_id, request, *, edit_previous=False):
+    def chat_submit(self, session_id, request_id, request, *, edit_previous=False,
+                    runtime_mode="exclusive"):
         """One explicit button press => one paid job at most, including retries.
 
         The UNIQUE ledger and job record commit in one SQLite transaction. A
@@ -379,6 +380,8 @@ class ImageJobStore:
             raise ValueError("invalid chat request ID")
         if type(edit_previous) is not bool:
             raise ValueError("edit_previous must be a boolean")
+        if runtime_mode not in ("exclusive","concurrent"):
+            raise ValueError("invalid local image execution mode")
         with self.lock,self._db() as db:
             existing=db.execute("""SELECT job_id FROM chat_image_requests
                 WHERE session_id=? AND request_id=?""",(session_id,request_id)).fetchone()
@@ -394,8 +397,11 @@ class ImageJobStore:
                 raise ValueError("image request queue is full")
             source_id=""
             if edit_previous:
-                if not isinstance(request,dict) or request.get("strata_reference_assets"):
-                    raise ValueError("edit previous must use only the server-side chat image")
+                if not isinstance(request,dict):
+                    raise ValueError("invalid edit request")
+                user_refs=request.get("strata_reference_assets") or []
+                if not isinstance(user_refs,list) or len(user_refs)>7:
+                    raise ValueError("invalid chat edit reference list")
                 candidates=db.execute("""SELECT jobs.id,jobs.result_json FROM jobs
                     JOIN chat_image_requests c ON c.job_id=jobs.id
                     WHERE c.session_id=? AND jobs.state='success'
@@ -413,16 +419,42 @@ class ImageJobStore:
                         break
                 if not source_id:
                     raise ValueError("本会话尚无可编辑的已生成图片")
-                try:
-                    raw=gallery._file(self,image_file.removesuffix(".png")).read_bytes()
-                except (OSError, gallery.GalleryError) as exc:
-                    raise ValueError("上张生成图已删除或不可读取，无法作为参考") from exc
-                if not 0 < len(raw) <= 5*1024*1024:
-                    raise ValueError("上张图片过大，不能用作图生图参考")
-                reference="data:image/png;base64,"+base64.b64encode(raw).decode("ascii")
-                request={**request,"strata_reference_assets":[{
-                    "name":"previous-chat-image.png","data_url":reference}]}
+                profile_id=request.get("strata_image_profile","")
+                if profile_id.startswith("local-"):
+                    model=local_images.get(self,profile_id)
+                    reference_mode="single" if model and model.get("llm_vision") else "none"
+                else:
+                    provider=providers.get(self,profile_id)
+                    reference_mode=provider.get("reference_mode","none") if provider else "none"
+                if reference_mode in ("single","multi"):
+                    try:
+                        raw=gallery._file(self,image_file.removesuffix(".png")).read_bytes()
+                    except (OSError, gallery.GalleryError) as exc:
+                        raise ValueError("上张生成图已删除或不可读取，无法作为参考") from exc
+                    if not 0 < len(raw) <= 5*1024*1024:
+                        raise ValueError("上张图片过大，不能用作图生图参考")
+                    reference="data:image/png;base64,"+base64.b64encode(raw).decode("ascii")
+                    references=[{"name":"previous-chat-image.png","data_url":reference}]
+                    if reference_mode=="multi":
+                        references.extend(user_refs[:7])
+                    request={**request,"strata_reference_assets":references}
+                else:
+                    # A text-only redraw is preferable to rejecting edits for
+                    # an otherwise usable image API. The original prompt is
+                    # recovered from this session's successful task, not
+                    # invented by model heuristics or another user's image.
+                    previous_request=json.loads(db.execute(
+                        "SELECT request_json FROM jobs WHERE id=?",(source_id,)).fetchone()[0])
+                    previous_prompt=str(previous_request.get("prompt") or "")[:7000]
+                    request={**request,"strata_reference_assets":[],
+                             "prompt":("重绘同一主题的图片（不支持图片参考）：\n"
+                                       "原图主题及细节："+previous_prompt+"\n"
+                                       "用户的新修改要求："+str(request.get("prompt") or "")[:7000])[:16000]}
             prepared=self._prepare(request)
+            if prepared["strata_image_profile"].startswith("local-"):
+                # Set *after* input schema validation. Cannot be supplied by
+                # Image Studio or forged through the model's function args.
+                prepared["strata_chat_runtime_mode"]=runtime_mode
             if not (prepared.get("prompt") or "").strip():
                 raise ValueError("image prompt is required")
             self._require_provider(prepared)
@@ -644,7 +676,7 @@ class ImageJobStore:
                     elif response.get("upscale_warning"):
                         result["upscale_applied"] = False
                         result["upscale_warning"] = response["upscale_warning"]
-                    result["gpu_handoffs"] = 1
+                    result["gpu_handoffs"] = response.get("gpu_handoffs",1)
                 elif local_images.should_upscale(self, request):
                     try:
                         status("Running Real-ESRGAN 4x")

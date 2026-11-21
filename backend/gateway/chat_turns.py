@@ -205,6 +205,12 @@ class ChatTurnStore:
                 "job_id":row["job_id"] or None,"profile_id":row["profile_id"],
                 "online":bool(row["online"]),"created":row["created"],
                 "updated":row["updated"]}
+        if decision:
+            frozen=json.loads(row["image_request_json"] or "{}")
+            # API work never occupies the local LLM GPU. The concurrent
+            # local mode likewise keeps the engine loaded during Qwen-Image.
+            result["background"]=bool(row["online"] or
+                                      frozen.get("_chat_runtime_mode")=="concurrent")
         # Completed image/vision turns must still expose their owned picture
         # after a refresh; only the safe, small result fields cross the wire.
         if decision and row["state"] not in ("awaiting_approval", "cancelled"):

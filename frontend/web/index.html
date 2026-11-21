@@ -7,11 +7,11 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
-<link rel="stylesheet" href="web/app.css?v=20261120-native-intent-p1">
+<link rel="stylesheet" href="web/app.css?v=20261121-image-runtime-mode">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
 <link rel="stylesheet" href="web/image-api.css?v=20261119-width-height-presets">
 <link rel="stylesheet" href="web/gallery.css?v=20261119-instant-swipe">
-<link rel="stylesheet" href="web/chat-image-viewer.css?v=20261121-readonly">
+<link rel="stylesheet" href="web/chat-image-viewer.css?v=20261121-fullscreen-floating">
 <script>
   // the theme before the first paint: the saved choice, else the system's
   try {
@@ -374,6 +374,7 @@
           <span id="gallery-position">1 / 1</span>
         </div>
         <span class="gallery-viewer-top-actions">
+          <button class="gallery-icon-button" type="button" id="gallery-viewer-download" aria-label="下载当前图片">下载</button>
           <button class="gallery-icon-button gallery-landscape-button" type="button" id="gallery-fullscreen" aria-label="全屏">⤢</button>
           <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-original" hidden>删除原图</button>
           <button class="gallery-icon-button gallery-variant-delete" type="button" id="gallery-delete-upscaled" hidden>删除4×</button>
@@ -490,11 +491,20 @@
             </select>
           </label>
           <p class="muted small">只影响新会话。无状态不注入用户身份与角色设定，但会正常使用本会话的历史消息。</p>
-          <label>聊天生图模型
-            <select class="st-input" id="global-chat-image-profile" disabled>
-              <option value="default">正在读取生图模型…</option>
-            </select>
-          </label>
+          <div class="chat-image-model-mode-row">
+            <label>聊天生图模型
+              <select class="st-input" id="global-chat-image-profile" disabled>
+                <option value="default">正在读取生图模型…</option>
+              </select>
+            </label>
+            <label>运行方式
+              <select class="st-input" id="global-chat-image-runtime-mode">
+                <option value="exclusive">互斥切换（卸载 LLM → 生图 → 恢复）</option>
+                <option value="concurrent">同时运行（不卸载 LLM）</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted small" id="global-chat-image-runtime-note">默认互斥切换。仅本地聊天生图使用此选项；同时运行需要足够的 GPU 显存或独立 GPU。在线 API 无需卸载本地 LLM。</p>
           <div class="chat-image-controls" role="group" aria-label="聊天生图参数">
             <label>LoRA
               <select class="st-input" id="global-chat-image-lora" disabled>
@@ -715,20 +725,20 @@
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/versions.js?v=0.4.0"></script>
 <script src="web/chat-capabilities.js?v=20261121-no-answer-cap"></script>
-<script src="web/native-tool-client.js?v=20261121-stream-stages"></script>
+<script src="web/native-tool-client.js?v=20261121-async-image-runtime"></script>
 <script src="web/native-turn-stream.js?v=20261121-native-stream-fix"></script>
-<script src="web/app.js?v=20261121-context-preview-fix"></script>
+<script src="web/app.js?v=20261121-async-image-runtime"></script>
 <script src="web/image-resolution.js?v=20261119-square-1536"></script>
 <script src="web/auth-images.js?v=20261120-secure-image-blob"></script>
 <script src="web/chat-image-viewer.js?v=20261121-readonly"></script>
 <script src="web/image-studio.js?v=20261121-worker-start-timer"></script>
 <script src="web/sessions.js?v=20261121-native-switch-fix"></script>
-<script src="web/characters.js?v=20261121-auto-chat-image"></script>
+<script src="web/characters.js?v=20261121-chat-image-runtime-mode"></script>
 <script src="web/i18n-data.js?v=20261121-stateless-context"></script>
 <script src="web/gallery-i18n.js?v=20261119-mobile-viewer"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 <script src="web/image-api-settings.js?v=20261121-chat-confirm"></script>
-<script src="web/gallery.js?v=20261120-native-manual-upscale"></script>
+<script src="web/gallery.js?v=20261121-download-button"></script>
 </body>
 </html>

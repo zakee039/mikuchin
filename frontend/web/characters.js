@@ -7,7 +7,8 @@ const characterSubTabs = ["card", "world", "workflow"];
 let chatImageModelsReady = false;
 let chatImageCatalog = [], chatImageLoras = [];
 let lastChatImageModel = "";
-const CHAT_IMAGE_DEFAULTS = {lora_id:"none",height:768,width:768,upscale:"auto",steps:null};
+const CHAT_IMAGE_DEFAULTS = {lora_id:"none",height:768,width:768,upscale:"auto",steps:null,
+  runtime_mode:"exclusive"};
 // Pre-Native profiles used display-oriented IDs. Resolve them only to the
 // corresponding LOCAL model; never silently replace a missing one with a
 // potentially billable online API profile.
@@ -32,6 +33,11 @@ function chatImageDimensions() {
 }
 function syncChatImageControls() {
   const selected = chatImageModel();
+  const mode=$("global-chat-image-runtime-mode");
+  mode.disabled=!chatImageModelsReady || selected?.family==="api";
+  $("global-chat-image-runtime-note").textContent=selected?.family==="api"
+    ? "在线 API 在服务端执行生图，始终与本地 LLM 独立运行，无需卸载模型。本选项只对本地聊天生图有效。"
+    : "默认互斥切换。选择同时运行需要足够的显存或独立 GPU，聊天期间不会卸载本地 LLM；显存不足可能使任务失败。";
   const max = Number(selected?.max_side || 2048);
   const pack = chatImageSizes.pack(selected);
   const visiblePair = pack !== "standard" && pack !== "custom";
@@ -70,6 +76,8 @@ function syncChatImageControls() {
 }
 function loadChatImageControls() {
   const saved = {...CHAT_IMAGE_DEFAULTS, ...(characterState.global.chat_image_settings || {})};
+  $("global-chat-image-runtime-mode").value =
+    ["exclusive","concurrent"].includes(saved.runtime_mode)?saved.runtime_mode:"exclusive";
   for (const dim of ["height","width"]) $("global-chat-image-" + dim).value = String(saved[dim]);
   const restoredSize = `${saved.width}x${saved.height}`;
   $("global-chat-image-standard-size").value = chatImageSizes.isStandard(restoredSize) ? restoredSize : "1024x1024";
@@ -90,7 +98,8 @@ function chatImageSettingsFromControls() {
   return {lora_id:$("global-chat-image-lora").value || "none",
     height:chatImageDimensions().height,
     width:chatImageDimensions().width,
-    upscale:$("global-chat-image-upscale").value, steps};
+    upscale:$("global-chat-image-upscale").value, steps,
+    runtime_mode:$("global-chat-image-runtime-mode").value};
 }
 async function refreshChatImageModels() {
   const selector = $("global-chat-image-profile");
@@ -914,7 +923,8 @@ for (const id of ["global-user-name","global-user-description","global-default-r
   "global-chat-image-profile","global-chat-image-lora","global-chat-image-height",
   "global-chat-image-width","global-chat-image-standard-size",
   "global-chat-image-custom-width","global-chat-image-custom-height",
-  "global-chat-image-upscale","global-chat-image-steps"]) {
+  "global-chat-image-upscale","global-chat-image-steps",
+  "global-chat-image-runtime-mode"]) {
   $(id).addEventListener("input",scheduleGlobalSave);
   $(id).addEventListener("change",scheduleGlobalSave);
   $(id).addEventListener("blur",()=>{if(globalDirty)void flushGlobalSave();});

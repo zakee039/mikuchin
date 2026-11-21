@@ -425,6 +425,10 @@ main { flex: 1; min-height: 0; display: flex; }
 /* Settings: shared identity, API credentials, and model configuration. */
 .settings-identity .character-panel-heading{margin-bottom:16px}
 .settings-identity .character-editor-grid{max-width:100%}
+.chat-image-model-mode-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(240px,1fr);gap:12px;align-items:end;min-width:0}
+.chat-image-model-mode-row>label{display:grid;min-width:0;gap:6px;font-size:13px;font-weight:650;color:var(--st-ink)}
+.chat-image-model-mode-row .st-input{width:100%;min-width:0;font-size:13px}
+@media(max-width:650px){.chat-image-model-mode-row{grid-template-columns:minmax(0,1fr)}}
 .chat-image-controls{display:grid;grid-template-columns:minmax(160px,2fr) repeat(4,minmax(80px,1fr));gap:12px;align-items:end;min-width:0}
 .chat-image-controls>label{display:grid;min-width:0;gap:6px;font-size:13px;font-weight:650;color:var(--st-ink)}
 .chat-image-controls .st-input{min-width:0;width:100%;font-size:13px}

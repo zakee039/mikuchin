@@ -129,6 +129,13 @@ def resolve_image_request(cards, jobs, decision: dict):
     prompt = decision["arguments"][parameter]
     request = {"prompt": prompt, "strata_image_profile": matching["id"],
                "size": f"{w}x{h}", "strata_upscale": upscale}
+    if matching.get("family") == "qwen_turbo":
+        mode=config.get("runtime_mode","exclusive")
+        if mode not in ("exclusive","concurrent"):
+            raise ValueError("无效的聊天生图运行方式")
+        # Trusted preference only. The regular Image Studio request schema
+        # deliberately does not expose this private chat execution mode.
+        request["_chat_runtime_mode"]=mode
     steps = config.get("steps")
     if steps is not None:
         if type(steps) is not int or not 1 <= steps <= 100:

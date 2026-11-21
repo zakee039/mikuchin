@@ -501,6 +501,19 @@
   });
   $g("gallery-more").addEventListener("click",()=>load(false));
   $g("gallery-close").addEventListener("click",close);
+  $g("gallery-viewer-download").addEventListener("click",async()=>{
+    const item=items[lightbox];
+    if(!item)return;
+    const path=fullSrc(item,variant);
+    try{
+      const blob=await secure.prefetch(path);
+      if(lightbox<0 || fullSrc(items[lightbox],variant)!==path)return;
+      const url=URL.createObjectURL(blob),anchor=document.createElement("a");
+      anchor.href=url;anchor.download=path.split("/").pop();
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),5000);
+    }catch(error){toast("error","无法下载图片",String(error),4500);}
+  });
   $g("gallery-create-upscale").addEventListener("click",()=>void createUpscale());
   $g("gallery-show-original").addEventListener("click",()=>{variant="original";showViewer();});
   $g("gallery-show-upscaled").addEventListener("click",()=>{variant="upscaled";showViewer();});

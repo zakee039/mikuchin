@@ -251,6 +251,26 @@ def gpu_handoff(svc, *, on_status=None):
                 publish_state(root, "idle")
 
 
+@contextlib.contextmanager
+def chat_image_execution(svc, req, *, on_status=None):
+    """Run the user-selected chat image mode without changing LLM config.
+
+    In concurrent mode we hold a SHARED GPU turn (as does an LLM request):
+    no unload, no slot swap, and any exclusive Studio handoff still waits.
+    Insufficient VRAM is an explicit task failure, not a hidden retry.
+    """
+    mode=req.get("strata_chat_runtime_mode","exclusive")
+    if mode=="exclusive":
+        with gpu_handoff(svc,on_status=on_status):
+            yield
+    elif mode=="concurrent":
+        with gpu_turn(Path(svc.root).parent,exclusive=False,timeout=300):
+            if on_status:on_status("LLM and local image model running concurrently")
+            yield
+    else:
+        raise LocalImageError("invalid local image execution mode")
+
+
 def _image_png(raw):
     with Image.open(io.BytesIO(raw)) as im:
         if im.width * im.height > 20_000_000:
@@ -331,8 +351,10 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
         timeout = max(60, min(int(profile.get("timeout_seconds", 1200)), 3600))
         t0 = time.monotonic()
         postprocess = {}
-        with gpu_handoff(svc, on_status=on_status):
-            publish_state(Path(svc.root).parent, "generating")
+        with chat_image_execution(svc,req,on_status=on_status):
+            concurrent=req.get("strata_chat_runtime_mode")=="concurrent"
+            if not concurrent:
+                publish_state(Path(svc.root).parent, "generating")
             if on_status:
                 on_status("Local Qwen-Image inference")
             _run(cmd, work=work, env=_environment(profile), timeout=timeout)
@@ -351,7 +373,8 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
             # Real-ESRGAN fails, never mislabel generated content as failed.
             try:
                 if should_upscale(svc, req):
-                    publish_state(Path(svc.root).parent, "upscaling")
+                    if not concurrent:
+                        publish_state(Path(svc.root).parent, "upscaling")
                     started = time.monotonic()
                     postprocess["upscaled_png"] = _upscale_inside_gpu(svc, image, on_status=on_status)
                     postprocess["upscale_seconds"] = round(time.monotonic() - started, 2)
@@ -359,6 +382,7 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
                 postprocess["upscale_warning"] = type(exc).__name__
         return {"model": profile.get("model", profile["id"]), "size": req["size"],
                 "strata": {"image_file": name, "seconds": round(time.monotonic()-t0, 2)},
+                "gpu_handoffs":0 if req.get("strata_chat_runtime_mode")=="concurrent" else 1,
                 **postprocess}
 
 

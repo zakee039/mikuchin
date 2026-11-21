@@ -218,7 +218,7 @@ def main():
         # Preserve the same capability mismatch as a real local Qwen model:
         # Image Studio is available, but the in-chat tool is NOT.
         original_catalog = gateway_app.local_images.catalog
-        gateway_app.local_images.catalog = lambda _jobs: ([{"id":"local-mock","available":True}], [])
+        gateway_app.local_images.catalog = lambda _jobs: ([{"id":"local-mock","name":"Local Qwen fixture","family":"qwen_turbo","max_side":1024,"available":True,"steps":8}], [])
         jobs=ImageJobStore(directory / "images",embedded_worker=True)
         # The disposable embedded worker can execute immediately; unlike the
         # production independent worker it never sends heartbeats. Report

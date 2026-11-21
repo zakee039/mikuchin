@@ -139,12 +139,13 @@ class CharacterTests(unittest.TestCase):
             configs = {"default": {"family": "qwen_turbo", "max_side": 1024},
                        "sdxl": {"family": "sdxl", "max_side": 768}}
             image = {"lora_id":"none", "height":512, "width":1024, "upscale":"4x", "steps":12}
+            migrated={**image,"runtime_mode":"exclusive"}
             saved = store.set_global({"chat_image_profile":"default","chat_image_settings":image},
                                      allowed_image_profiles={"default","sdxl"}, image_profile_configs=configs)
-            self.assertEqual(saved["chat_image_settings"], image)
-            self.assertEqual(CharacterStore(Path(tmp) / "character").chat_image_settings(), image)
+            self.assertEqual(saved["chat_image_settings"], migrated)
+            self.assertEqual(CharacterStore(Path(tmp) / "character").chat_image_settings(), migrated)
             store.set_global({"user_name": "edited"})
-            self.assertEqual(store.chat_image_settings(), image)
+            self.assertEqual(store.chat_image_settings(), migrated)
             for invalid in ({**image,"height":777}, {**image,"steps":0},
                             {**image,"steps":101}, {**image,"steps":True},
                             {**image,"width":"512"}, {**image,"upscale":"unlimited"},
@@ -156,11 +157,20 @@ class CharacterTests(unittest.TestCase):
                 store.set_global({"chat_image_profile":"sdxl","chat_image_settings":image},
                                  allowed_image_profiles={"default","sdxl"}, image_profile_configs=configs)
             self.assertEqual(store.chat_image_profile(), "default")
-            self.assertEqual(store.chat_image_settings(), image)
+            self.assertEqual(store.chat_image_settings(), migrated)
             store.set_global({"chat_image_profile":"sdxl",
                               "chat_image_settings":{**image,"width":768}},
                              allowed_image_profiles={"default","sdxl"}, image_profile_configs=configs)
             self.assertEqual(store.chat_image_settings()["width"], 768)
+            current=store.chat_image_settings()
+            store.set_global({"chat_image_settings":{**current,"runtime_mode":"concurrent"}},
+                             image_profile_configs=configs)
+            self.assertEqual(CharacterStore(Path(tmp) / "character").chat_image_settings()["runtime_mode"],
+                             "concurrent")
+            for invalid_mode in ("parallel","auto",True,None,42):
+                with self.subTest(mode=invalid_mode),self.assertRaises(ValueError):
+                    store.set_global({"chat_image_settings":{**current,"runtime_mode":invalid_mode}},
+                                     image_profile_configs=configs)
 
     def test_card_roundtrip(self):
         x = valid_card(self.sample())

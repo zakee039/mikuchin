@@ -54,6 +54,7 @@
     message.native_tool_state=turn.state;
     message.native_tool_finished=terminal.has(turn.state);
     message.native_tool_online=turn.online===true;
+    if(turn.background===true)message.native_background=true;
     if(typeof turn.reasoning==="string" &&
        turn.reasoning.length>(message.reasoning || "").length)
       message.reasoning=turn.reasoning;
@@ -88,6 +89,10 @@
     t.arguments=tool.arguments;
     t.image_prompt=String(tool.arguments?.prompt || tool.arguments?.instruction || "");
     t.edited_previous=tool.name==="edit_image";
+    if(message.native_background){
+      t.native_hide_image=true; // shown only by the independent completion message
+      t.round=null; // not a completed tool exchange in intervening chats
+    }
     if(turn.job_id) t.image_job_id=turn.job_id;
     const job=turn.job || {};
     const picture=job.result || {};
@@ -106,18 +111,31 @@
     } else if(turn.state==="queued" || turn.state==="running"){
       t.state="running";t.result=stage(job.phase);
       t.status_label=turn.state==="queued"?"排队中":t.result;
-      message.text="";
+      message.text=message.native_background ?
+        "已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。" : "";
     } else if(turn.state==="image_done" || turn.state==="vision_running"){
       t.state="running";t.ok=true;t.status_label="正在理解图片";
       t.result="图像已生成，正在识别实际画面…";
-      message.text="";
+      message.text=message.native_background ?
+        "已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。" : "";
     } else if(turn.state==="vision_done" || turn.state==="vision_failed"){
       t.state="done";t.ok=true;
       t.status_label="已完成";
       t.result="Image generation succeeded; image available in this chat.";
-      t.round=1;
-      message.text=turn.text || (turn.state==="vision_failed" ?
-        "图片已生成；视觉尾部回复未完成。" : "图片已生成。");
+      if(message.native_background){
+        // Keep the acknowledgement. Append the completed image as a NEW
+        // message after any active user conversation has finished.
+        t.round=null;
+        t.native_hide_image=true;
+        message.native_completion_text=turn.text || (turn.state==="vision_failed" ?
+          "图片画好了，但这次视觉理解未完成。":"图片画好了，你看看！");
+        message.native_completion_ready=true;
+        message.text="已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。";
+      }else{
+        t.round=1;
+        message.text=turn.text || (turn.state==="vision_failed" ?
+          "图片已生成；视觉尾部回复未完成。" : "图片已生成。");
+      }
     } else {
       t.state="error";t.ok=false;
       t.status_label="失败";

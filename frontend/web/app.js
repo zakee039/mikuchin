@@ -1085,8 +1085,8 @@ function answerHtml(m) {
     const at = Math.min(Math.max(t.at || 0, pos), m.text.length);
     if (at > pos) html += markdown(m.text.slice(pos, at));
     pos = at;
-    html += toolHtml(t, k);
-    if (t.image_file && /^[a-f0-9]{32}\.png$/.test(t.image_file)) {
+    if (!t.native_hide_header) html += toolHtml(t, k);
+    if (!t.native_hide_image && t.image_file && /^[a-f0-9]{32}\.png$/.test(t.image_file)) {
       const path = "v1/images/files/" + t.image_file;
       const original = t.image_original_file && /^[a-f0-9]{32}\.png$/.test(t.image_original_file)
         ? "v1/images/files/" + t.image_original_file : "";
@@ -1377,6 +1377,7 @@ async function send() {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy || sessionTransition) return;
   if (chatImageVisionPending || messages.some(x => x.role === "assistant" &&
+        !x.native_background &&
         ((x.tools || []).some(t => t.image_request_id && t.state === "running") ||
          window.MikuchinNativeToolClient?.unfinished(x)))) {
     toast("info","Image generation in progress","Wait for this conversation's image task to finish before sending the next turn.");
@@ -1416,6 +1417,7 @@ async function send() {
     updateAssistant(el, m, false);
     saveChat();
     if (sessionV1) sessionSaveChain.then(refreshSessionPicker).catch(console.warn);
+    deliverNativeBackgroundCompletions();
     scrollDown();
   }
 }
@@ -1490,6 +1492,29 @@ function applyNativeTurn(m,turn) {
   saveChat();
   if (!busy || busy.msg === m) renderChat();
 }
+function deliverNativeBackgroundCompletions() {
+  // Persist a separate result/vision message, never replacing a reply that
+  // the user received while an online/concurrent image task was working.
+  if(busy || !sessionId)return;
+  let changed=false;
+  for(const parent of [...messages]){
+    if(!parent.native_background || !parent.native_completion_ready)continue;
+    const ident=parent.native_turn_id;
+    if(!ident)continue;
+    if(!messages.some(m=>m.native_completion_of===ident)){
+      const tool=(parent.tools || []).find(t=>t.native_turn_id===ident);
+      if(!tool?.image_file)continue;
+      const visibleTool={...tool,round:1,at:0,
+        native_hide_image:false,native_hide_header:true};
+      messages.push({role:"assistant",text:parent.native_completion_text ||
+        "画好了，你看看这张图片！",reasoning:"",time:Date.now(),
+        tools:[visibleTool],native_completion_of:ident});
+    }
+    parent.native_completion_ready=false;
+    changed=true;
+  }
+  if(changed){saveChat();renderChat();scrollDown();}
+}
 async function submitModelToolTurn(m,el,signal) {
   if (!sessionV1 || !sessionId || !window.MikuchinNativeToolClient)
     throw Error("原生 Tool Calling 需要已验证的 Native 会话服务");
@@ -1540,6 +1565,8 @@ async function submitModelToolTurn(m,el,signal) {
   }
   if (sessionId!==fixedSession) return;
   applyNativeTurn(m,decision);
+  if(m.native_background && m.native_completion_ready)
+    deliverNativeBackgroundCompletions();
   if (m.native_abort_requested && window.MikuchinNativeToolClient.unfinished(m)) {
     await cancelActiveNativeTurn(m);
     return;
@@ -1617,6 +1644,7 @@ let nativeTurnPolling=false;
 async function refreshNativeToolTurns() {
   if (!sessionV1 || !sessionId || nativeTurnPolling || document.hidden ||
       !window.MikuchinNativeToolClient) return;
+  deliverNativeBackgroundCompletions();
   const currentId=sessionId;
   const pending=messages.filter(m => m.role==="assistant" &&
     window.MikuchinNativeToolClient.unfinished(m) &&
@@ -1647,6 +1675,8 @@ async function refreshNativeToolTurns() {
         if (m.native_poll_signature!==signature) {
           m.native_poll_signature=signature;
           applyNativeTurn(m,turn);
+          if(m.native_background && m.native_completion_ready)
+            deliverNativeBackgroundCompletions();
         }
       }
     }

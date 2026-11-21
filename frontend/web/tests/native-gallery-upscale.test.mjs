@@ -10,7 +10,7 @@ test("gallery exposes 4x only when unpaired and native worker is configured",()=
   assert.match(gallery,/\["queued","working","running"\]/);
   assert.match(gallery,/\["done","success"\]/);
   assert.doesNotMatch(gallery,/has not been ported yet/);
-  assert.match(html,/gallery\.js\?v=20261120-native-manual-upscale/);
+  assert.match(html,/gallery\.js\?v=20261121-download-button/);
 });
 test("manual gallery job only requests offline upscale on an existing image",()=>{
   assert.match(gallery,/body:JSON\.stringify\(\{kind:"upscale",image_id:item\.id\}\)/);

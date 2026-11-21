@@ -183,10 +183,13 @@ class ImageTaskTest(unittest.TestCase):
         again=self.jobs.chat_submit("1"*32,"5"*32,self.request,edit_previous=False)
         self.assertTrue(again["already_submitted"])
         self.assertEqual(again["id"],edited["id"])
-        with self.assertRaisesRegex(ValueError,"server-side chat image"):
-            self.jobs.chat_submit("1"*32,"6"*32,{
-                **self.request,"strata_reference_assets":[{"id":image_id}]},
-                edit_previous=True)
+        # A chat edit can merge the server-owned previous picture with an
+        # explicitly attached user reference when the provider supports it.
+        merged=self.jobs.chat_submit("1"*32,"6"*32,{
+            **self.request,"strata_reference_assets":[{"id":image_id}]},
+            edit_previous=True)
+        self.assertEqual(merged["source_id"],edited["id"])
+        self.assertEqual(len(merged["request"]["strata_reference_assets"]),2)
         with self.assertRaisesRegex(ValueError,"boolean"):
             self.jobs.chat_submit("1"*32,"7"*32,self.request,edit_previous="true")
 

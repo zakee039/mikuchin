@@ -190,12 +190,19 @@ class CharacterStore:
     @staticmethod
     def default_chat_image_settings() -> dict:
         # None means use the chosen model's own step count until the user saves.
-        return {"lora_id": "none", "height": 768, "width": 768, "upscale": "auto", "steps": None}
+        return {"lora_id": "none", "height": 768, "width": 768, "upscale": "auto",
+                "steps": None, "runtime_mode": "exclusive"}
 
     @classmethod
     def validate_chat_image_settings(cls, value: object, config: dict | None = None) -> dict:
-        if not isinstance(value, dict) or set(value) != set(cls.default_chat_image_settings()):
+        expected=set(cls.default_chat_image_settings())
+        if not isinstance(value,dict) or set(value)-expected or (expected-{"runtime_mode"})-set(value):
             raise ValueError("chat image settings have incomplete or unknown fields")
+        # Upgrade old user settings without changing the previously selected
+        # image model, LoRA, dimensions or upscaling options.
+        value={**cls.default_chat_image_settings(),**value}
+        if value["runtime_mode"] not in ("exclusive","concurrent"):
+            raise ValueError("invalid chat image runtime mode")
         if value["lora_id"] != "none":
             if config is None or config.get("family") != "qwen_turbo" or (
                     value["lora_id"] not in config.get("available_loras", set())):

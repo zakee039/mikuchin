@@ -39,12 +39,17 @@ class TurnCoordinator:
         self.store = ChatTurnStore(data_dir)
         self._active_visions = set()
         self._lock = threading.Lock()
+        self._conversation_decisions={}
         self._stop = threading.Event()
         self._watcher = threading.Thread(target=self._watch, name="native-tool-turn-watch", daemon=True)
         self._watcher.start()
 
     def close(self):
         self._stop.set()
+
+    def _session_decision_lock(self,session):
+        with self._lock:
+            return self._conversation_decisions.setdefault(session,threading.RLock())
 
     def _official(self, payload, timeout=240):
         data=json.dumps(payload,ensure_ascii=False,allow_nan=False).encode("utf-8")
@@ -164,8 +169,9 @@ class TurnCoordinator:
         if not self.store.create(session,turn,payload):
             return self.store.public(session,turn,self.server.image_jobs)
         try:
-            result=(self._official_stream(payload,on_delta) if on_delta is not None
-                    else self._official(payload))
+            with self._session_decision_lock(session):
+                result=(self._official_stream(payload,on_delta) if on_delta is not None
+                        else self._official(payload))
             # The user may have cancelled while the official model was
             # computing. Its answer must then be discarded, never dispatched.
             if self.store.get(session,turn)["state"]!="deciding":
@@ -178,6 +184,29 @@ class TurnCoordinator:
                 self.store.decision_text(session,turn,decision["text"],reasoning)
                 return self.store.public(session,turn,self.server.image_jobs)
             req,profile=resolve_image_request(self.server.characters,self.server.image_jobs,decision)
+            if decision["name"]=="edit_image":
+                # Only the user's latest turn may provide additional reference
+                # images. The model is NEVER allowed to choose filesystem paths.
+                latest=next((m for m in reversed(payload["messages"])
+                             if m.get("role")=="user"),{})
+                content=latest.get("content")
+                assets=[]
+                if isinstance(content,list):
+                    for item in content:
+                        if not isinstance(item,dict) or item.get("type")!="image_url":
+                            continue
+                        url=(item.get("image_url") or {}).get("url")
+                        if (not isinstance(url,str) or
+                            not url.startswith(("data:image/png;base64,",
+                                                "data:image/jpeg;base64,",
+                                                "data:image/webp;base64,")) or
+                            len(url)>7_200_000):
+                            raise ValueError("无效的聊天参考图")
+                        assets.append({"name":"user-chat-reference.png","data_url":url})
+                        if len(assets)>7:
+                            raise ValueError("最多允许七张额外参考图")
+                if assets:
+                    req["strata_reference_assets"]=assets
             # Edit may only use this session's latest successful image. The
             # ImageJobStore revalidates and resolves reference SERVER-side.
             token=self.store.decision_tool(session,turn,decision,req,profile,reasoning)
@@ -217,8 +246,10 @@ class TurnCoordinator:
                 raise ValueError("独立 Image Worker 未就绪，未提交图像任务")
             req=json.loads(row["image_request_json"])
             decision=json.loads(row["decision_json"])
+            runtime_mode=req.pop("_chat_runtime_mode","exclusive")
             job=self.server.image_jobs.chat_submit(
-                session,turn,req,edit_previous=decision["name"]=="edit_image")
+                session,turn,req,edit_previous=decision["name"]=="edit_image",
+                runtime_mode=runtime_mode)
             self.store.transition(session,turn,"queued","running",job_id=job["id"])
         except (ValueError,OSError,TypeError) as exc:
             self.store.transition(session,turn,"queued","unavailable",
@@ -315,13 +346,43 @@ class TurnCoordinator:
                         json.dumps(original["arguments"],ensure_ascii=False)}}]})
             context.append({"role":"tool","tool_call_id":original["tool_call_id"],
                             "content":"Image generation succeeded. The attached image is the result."})
-            context.append({"role":"user","content":[
-                {"type":"text","text":"Inspect the actual image produced by the tool. Reply once naturally in the user's language, briefly, using the previous conversation. Do not call tools or invent unseen details."},
-                {"type":"image_url","image_url":{"url":image}}]})
-            response=self._official({"model":saved["model"],"stream":False,
-                "messages":context,"tool_choice":"none","strata_mcp":False,
-                "reasoning_effort":"none","reasoning_budget_tokens":0,
-                "max_tokens":256},timeout=180)
+            # Wait for any already-streaming answer in this session first.
+            # Then load the freshest settled messages before visual feedback.
+            with self._session_decision_lock(session):
+                try:
+                    web=self.server.conversations.get(session)["web_messages"]
+                    original_user=next((m for m in reversed(saved["messages"])
+                                        if m.get("role")=="user"),{})
+                    body=original_user.get("content","")
+                    anchor=(body if isinstance(body,str) else
+                            " ".join(str(x.get("text","")) for x in body
+                                     if isinstance(x,dict) and x.get("type")=="text"))
+                    anchor_index=max((i for i,m in enumerate(web) if m.get("role")=="user"
+                                      and str(m.get("text") or "")==anchor),default=-1)
+                    if anchor_index>=0:
+                        for webmsg in web[anchor_index+1:][-30:]:
+                            role=webmsg.get("role")
+                            text=str(webmsg.get("text") or "")[:2500]
+                            if role in ("user","assistant") and text:
+                                context.append({"role":role,"content":text})
+                except (AttributeError,KeyError,LookupError,ValueError,TypeError,sqlite3.Error):
+                    LOG.debug("No additional settled session messages available for vision tail")
+                context.append({"role":"user","content":[
+                    {"type":"text","text":(
+                        "The image job you started for the user has now FINISHED. This is the actual "
+                        "result, not a new user request. Using the user's original image request and "
+                        "the most recent conversation, write a warm, natural completion message "
+                        "addressed directly to the user (in the user's language). In Chinese start "
+                        "naturally like '画好了，你看看！' then describe one or two specific details "
+                        "actually visible in this image and how they relate to the requested subject "
+                        "or style. If the user has since discussed changes, acknowledge that context "
+                        "without falsely claiming those changes were applied. Avoid generic flattery, "
+                        "invisible details, and new tool calls. Keep it brief, up to 150 Chinese chars.")},
+                    {"type":"image_url","image_url":{"url":image}}]})
+                response=self._official({"model":saved["model"],"stream":False,
+                    "messages":context[-85:],"tool_choice":"none","strata_mcp":False,
+                    "reasoning_effort":"none","reasoning_budget_tokens":0,
+                    "max_tokens":256},timeout=180)
             choice=(response.get("choices") or [{}])[0]
             text=(choice.get("message") or {}).get("content")
             if not isinstance(text,str) or not text.strip() or choice.get("finish_reason")=="tool_calls":
