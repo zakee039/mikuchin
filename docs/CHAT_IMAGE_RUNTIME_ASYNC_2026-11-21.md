@@ -17,6 +17,8 @@
 
 ## 验证与限制
 
+**2026-11-21 实际交付状态（重要）：** 代码提交 `4acb77ee3d675af84262f03d0b0ad1a0b9df796b` 已推送 `origin/main`，GitHub 三项 CI 均成功。Python **132/132**、Node **75/75** 通过；隔离浏览器的后台提示、独立回复、全局运行方式自动保存、画廊下载、聊天全屏预览通过。正式数据已在 `runtime/migration-backups/chat-image-runtime-async-20261121-181908` 备份。生产先前进行中的本地 Qwen 任务已自然成功，当前 13 个成功图片任务、0 个图像在途。然而正式 Gateway `15239` 还有来自 Tailscale `100.96.95.122` 的活跃 `Established` 连接。为保护用户正在使用的会话，**没有重启 Gateway 或 Image Worker；新版服务端逻辑尚未在正式进程中载入**。正式生效前需重新核验无在途任务和活跃客户端，安全重载 Gateway 与 Worker，官方 PolyStrata 不动。禁止将目前状态误报为生产已上线。
+
 离线 Python 全量、Node 全量测试；另用独立无收费的 Mock 网页验证后台开始提示、普通聊天独立回复、完成结果、全屏浮动控件、画廊下载，用户选择的 runtime_mode 持久 SQLite。单图/多图/无参考 API 及运行锁分别由单测覆盖。**没有再次使用真实收费图像 API，也没有将本机 RTX 3070 Ti 8GB 上的真实双模型同时驻留验证为可用**：同时运行是用户显式开启的资源模式，若不足需手动改回互斥模式。
 
 部署要求：先备份 SQLite 与配置、核实 15239 无活跃请求、Worker 无在途图像任务、Turn 无未完成，再仅重载 Mikuchin Gateway；更改 Image Worker 代码只有在确保无在途任务时才能让 Supervisor 安全重载 Worker，不能杀掉已发送的在线请求。不得修改官方 PolyStrata 子模块、模型 JSON 或产品版本/Tag/Release。
