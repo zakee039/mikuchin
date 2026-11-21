@@ -422,7 +422,8 @@ class ImageJobStore:
                 profile_id=request.get("strata_image_profile","")
                 if profile_id.startswith("local-"):
                     model=local_images.get(self,profile_id)
-                    reference_mode="single" if model and model.get("llm_vision") else "none"
+                    reference_mode="single" if model and (
+                        model.get("family")=="sdxl" or model.get("llm_vision")) else "none"
                 else:
                     provider=providers.get(self,profile_id)
                     reference_mode=provider.get("reference_mode","none") if provider else "none"
@@ -619,7 +620,8 @@ class ImageJobStore:
                 def status(phase):
                     # Local GPU requests may wait for the shared GPU lease or
                     # LLM unload. Only start the timer at actual inference.
-                    if phase in ("Local Qwen-Image inference", "Real-ESRGAN 4x upscale"):
+                    if phase in ("Local Qwen-Image inference", "Local SDXL inference",
+                                 "Real-ESRGAN 4x upscale"):
                         self._begin_execution(ident,phase)
                     with self.lock,self._db() as db:
                         db.execute("UPDATE jobs SET phase=?,updated=? WHERE id=? AND state='running'",

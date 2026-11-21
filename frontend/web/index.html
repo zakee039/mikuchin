@@ -719,21 +719,28 @@
 </div>
 <div class="mk-api-backdrop" id="mk-local-import-backdrop" hidden>
   <div class="st-card mk-api-dialog" role="dialog" aria-modal="true" aria-labelledby="mk-local-import-title">
-    <div class="mk-api-heading"><span class="card-title" id="mk-local-import-title">导入现有本地 Qwen-Image 模型</span>
+    <div class="mk-api-heading"><span class="card-title" id="mk-local-import-title">导入本地生图模型</span>
       <button class="st-btn st-btn--secondary" id="mk-local-import-close" type="button" aria-label="关闭">✕</button></div>
     <form id="mk-local-import-form" class="mk-api-form">
       <p class="muted small">只注册本机已有模型文件，不上传或复制大模型。复用已安装的 sd-cli 推理程序和参数；不会执行安装脚本。仅服务器本机浏览器能够导入。</p>
-      <label class="st-field">模型名称<input class="st-input" id="mk-local-name" maxlength="80" placeholder="例如：Qwen-Image Turbo 我的模型" required></label>
+      <label class="st-field">模型类型
+        <select class="st-input" id="mk-local-family">
+          <option value="qwen_turbo">Qwen-Image Turbo（分组件）</option>
+          <option value="sdxl">SDXL / Animagine XL（单文件 Checkpoint）</option>
+        </select></label>
+      <label class="st-field">模型名称<input class="st-input" id="mk-local-name" maxlength="80" placeholder="例如：Animagine XL 4.0 Opt" required></label>
       <label class="st-field">基础推理环境<select class="st-input" id="mk-local-base" required></select></label>
-      <label class="st-field">Diffusion 文件（绝对路径）
+      <label class="st-field mk-local-qwen">Diffusion 文件（绝对路径）
         <input class="st-input" id="mk-local-diffusion" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\diffusion.gguf"></label>
-      <label class="st-field">VAE 文件（绝对路径）
+      <label class="st-field mk-local-qwen">VAE 文件（绝对路径）
         <input class="st-input" id="mk-local-vae" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\vae.safetensors"></label>
-      <label class="st-field">LLM / 文本编码器文件（绝对路径）
+      <label class="st-field mk-local-qwen">LLM / 文本编码器文件（绝对路径）
         <input class="st-input" id="mk-local-llm" required spellcheck="false" placeholder="E:\LLM\models\qwen-image\llm.gguf"></label>
-      <label class="st-field">视觉编码器文件（选填）
+      <label class="st-field mk-local-qwen">视觉编码器文件（选填）
         <input class="st-input" id="mk-local-vision" spellcheck="false" placeholder="E:\LLM\models\qwen-image\vision.gguf"></label>
-      <p class="muted small">仅支持现有 sd-cli 兼容的 Qwen-Image Turbo 文件。导入只检查路径与文件类型，不会自动进行 GPU 推理验证。</p>
+      <label class="st-field mk-local-sdxl" hidden>SDXL Checkpoint（完整单文件 .safetensors / .ckpt）
+        <input class="st-input" id="mk-local-checkpoint" spellcheck="false" placeholder="E:\LLM\models\SDXL-Base-1.0\sd_xl_base_1.0.safetensors"></label>
+      <p class="muted small" id="mk-local-import-hint">选择本机现有 sd-cli 兼容文件。导入只验证路径和文件类型，不会自动进行 GPU 推理测试。</p>
       <div class="mk-api-actions">
         <button type="button" class="st-btn st-btn--secondary" id="mk-local-import-cancel">取消</button>
         <button type="submit" class="st-btn st-btn--primary" id="mk-local-import-save">注册模型</button>
@@ -772,7 +779,7 @@
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
 <script src="web/image-api-settings.js?v=20261121-chat-confirm"></script>
-<script src="web/local-model-settings.js?v=20261121-local-model-import"></script>
+<script src="web/local-model-settings.js?v=20261121-sdxl-adapter"></script>
 <script src="web/gallery.js?v=20261121-download-button"></script>
 </body>
 </html>

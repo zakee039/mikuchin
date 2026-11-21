@@ -13,6 +13,7 @@
     if(/Restoring official text model|正在恢复语言模型/i.test(s))return "正在加载语言模型";
     if(/Real-ESRGAN|upscal|超分/i.test(s))return "正在进行 4× 超分";
     if(/Local Qwen-Image inference/i.test(s))return "正在使用 Qwen-Image 生成图片";
+    if(/Local SDXL inference/i.test(s))return "正在使用 SDXL 生成图片";
     if(/排队|waiting|queued/i.test(s))return "排队等待图像 Worker";
     if(/调用图像 API|request_start|response_headers/i.test(s))return "正在调用在线图像模型";
     return s.slice(0,100) || "等待图像 Worker";

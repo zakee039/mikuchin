@@ -1,4 +1,4 @@
-// Register an existing on-host Qwen-Image file set. No model uploads, no
+// Register an existing on-host Qwen-Image or SDXL file set. No model uploads, no
 // executable paths, no GPU execution, no cross-origin administrator endpoints.
 "use strict";
 (() => {
@@ -9,6 +9,20 @@
   const backdrop=get("mk-local-import-backdrop");
   const form=get("mk-local-import-form");
   let localModels=[],busy=false;
+  function syncFamily(){
+    const sdxl=get("mk-local-family").value==="sdxl";
+    for(const el of document.querySelectorAll("#mk-local-import-form .mk-local-qwen"))
+      el.hidden=sdxl;
+    for(const id of ["mk-local-diffusion","mk-local-vae","mk-local-llm"])
+      get(id).required=!sdxl;
+    for(const el of document.querySelectorAll("#mk-local-import-form .mk-local-sdxl"))
+      el.hidden=!sdxl;
+    get("mk-local-checkpoint").required=sdxl;
+    get("mk-local-import-hint").textContent=sdxl ?
+      "SDXL / Animagine 使用单个完整 Checkpoint；默认 28 步、CFG 7.0、支持 Negative Prompt 和单图 img2img。不会应用 Qwen Turbo Sigmas。" :
+      "Qwen-Image Turbo 使用 Diffusion、VAE、LLM 和可选视觉编码器组件。";
+  }
+  get("mk-local-family").addEventListener("change",syncFamily);
   function close(){
     if(busy)return;
     backdrop.hidden=true;
@@ -23,9 +37,10 @@
     name.textContent=model.name || model.id;
     const meta=document.createElement("span");
     meta.className="muted small";
-    meta.textContent=(model.available?"可用":"文件缺失")+
-      " · Qwen-Image Turbo · "+
-      (model.reference_mode==="single"?"支持单张参考图":"不支持参考图")+
+    meta.textContent=(model.available?"文件就绪":"文件缺失")+
+      " · "+(model.family==="sdxl"?"SDXL / Animagine XL":"Qwen-Image Turbo")+" · "+
+      (model.reference_mode==="single" ?
+        (model.family==="sdxl"?"支持 img2img":"支持单张参考图"):"不支持参考图")+
       " · 最大边长 "+model.max_side;
     detail.append(name,meta);
     entry.append(detail);
@@ -37,7 +52,8 @@
       const r=await fetch("v1/mikuchin/image-models",{headers:headers(),cache:"no-store"});
       if(!r.ok)throw Error("HTTP "+r.status);
       const result=await r.json();
-      localModels=(result.models || []).filter(x=>x.type==="local" || (!x.type && x.family==="qwen_turbo"));
+      localModels=(result.models || []).filter(x=>x.type==="local" ||
+        (!x.type && ["qwen_turbo","sdxl"].includes(x.family)));
       list.replaceChildren();
       if(!localModels.length){
         const empty=document.createElement("p");
@@ -67,6 +83,7 @@
   button.addEventListener("click",()=>{
     if(!localHost || button.disabled)return;
     form.reset();
+    syncFamily();
     backdrop.hidden=false;
     get("mk-local-name").focus();
   });
@@ -82,14 +99,17 @@
     busy=true;
     const submit=get("mk-local-import-save");
     submit.disabled=true;
-    const model={
+    const common={
       name:get("mk-local-name").value.trim(),
-      base_id:get("mk-local-base").value,
-      diffusion_model:get("mk-local-diffusion").value.trim(),
-      vae:get("mk-local-vae").value.trim(),
-      llm:get("mk-local-llm").value.trim(),
-      llm_vision:get("mk-local-vision").value.trim()
+      base_id:get("mk-local-base").value
     };
+    const model=get("mk-local-family").value==="sdxl" ?
+      {...common,family:"sdxl",checkpoint:get("mk-local-checkpoint").value.trim()} :
+      {...common,
+        diffusion_model:get("mk-local-diffusion").value.trim(),
+        vae:get("mk-local-vae").value.trim(),
+        llm:get("mk-local-llm").value.trim(),
+        llm_vision:get("mk-local-vision").value.trim()};
     try {
       const r=await fetch("v1/mikuchin/local-image-models",{
         method:"POST",headers:headers(true),body:JSON.stringify({action:"import",model})

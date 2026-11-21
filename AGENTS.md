@@ -1,5 +1,12 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 SDXL / Animagine XL 单文件模型适配（本次更新）
+
+- 本机实际存在的 SDXL 家族权重是 `E:\LLM\models\SDXL-Base-1.0\sd_xl_base_1.0.safetensors` 与 `E:\LLM\models\Animagine-XL-4.0-Opt\animagine-xl-4.0-opt.safetensors`。没有发现单独命名为 Anything 的 Checkpoint；勿把 Animagine 误命名为 Anything。
+- 参照只读的 old-mixed `backend/polystrata/serve/images.py` 原 SDXL 适配，Mikuchin Native 自己的 `backend/gateway/local_images.py` 支持第二个模型族 `sdxl`：`sd-cli --model checkpoint`、默认 28 步、CFG 7.0、Negative Prompt 与单图 `img2img --init-img --strength`。SDXL **不得复用** Qwen Turbo Sigmas、Qwen 文本编码器、Qwen LoRA 或特定 Flash Attention 组合。
+- 本地模型导入在本机 localhost + Bearer 门槛之下可以选择 Qwen-Image 组件或 SDXL 单文件，基于已有可信 sd-cli exe/backend/offload flags 注册；不执行上传、下载或安装脚本，不修改 LLM 模型 JSON、官方 PolyStrata 或旧版仓库。注册重复 SDXL 文件需返回已有记录，不能制造重复 profile。
+- 生产使用独立 Image Worker；**有任何进行中的图像任务／Native Turn 时绝不能重启 Gateway 或 Worker，也不要修改生产注册文件**。对 SDXL 进行 GPU 实测须单独记录确证结果，不得用单元测试或文件就绪冒充 GPU 成功。见 `docs/NATIVE_SDXL_ANIMAGINE_ADAPTER_2026-11-21.md`。
+
 ## 2026-11-21 顶栏状态、聊天工具计时与本地生图导入
 
 - 顶栏状态**只能**通过 `native-header-status.js` 的单一状态仲裁与 `paintHeaderStatus()` 渲染；禁止 Metrics 与 Native Health 各自调用 `setPill()` 抢占标签。后台可并行生图用单独 `生图 N` 副标签。

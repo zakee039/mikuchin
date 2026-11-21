@@ -1,4 +1,4 @@
-"""Safe local Qwen Image model registration; no model execution or network access."""
+"""Safe local Qwen-Image / SDXL model registration; no GPU or network providers."""
 from __future__ import annotations
 import http.client
 import json
@@ -96,6 +96,35 @@ class LocalImportTests(unittest.TestCase):
                 model={**self.model,"diffusion_model":bad}
                 status,_=self.request({"action":"import","model":model},origin=self.origin())
                 self.assertEqual(status,400)
+        self.assertEqual(len(local_images._settings(self.jobs)["profiles"]),1)
+
+    def test_sdxl_single_checkpoint_import_preserves_qwen_and_loras(self):
+        checkpoint=self.root/"sdxl-base.safetensors"
+        checkpoint.write_bytes(b"mock SDXL checkpoint; no GPU work")
+        model={"name":"SDXL Base 1.0","family":"sdxl","base_id":"local-base",
+               "checkpoint":str(checkpoint)}
+        status,result=self.request({"action":"import","model":model},origin=self.origin())
+        self.assertEqual(status,200,result)
+        data=local_images._settings(self.jobs)
+        self.assertEqual(len(data["profiles"]),2)
+        self.assertEqual(data["profiles"][0],self.base_config["profiles"][0])
+        self.assertEqual(data["loras"],self.base_config["loras"])
+        self.assertEqual(data["upscaler"],self.base_config["upscaler"])
+        profile=data["profiles"][1]
+        self.assertEqual(profile["checkpoint"],str(checkpoint))
+        self.assertEqual(profile["family"],"sdxl")
+        self.assertEqual(profile["steps"],28)
+        self.assertEqual(profile["cfg_scale"],7.0)
+        self.assertEqual(profile["args"],[])
+        self.assertNotIn("diffusion_model",profile)
+
+    def test_sdxl_import_rejects_executable_override(self):
+        checkpoint=self.root/"sdxl.safetensors"
+        checkpoint.write_bytes(b"fake checkpoint")
+        model={"name":"SDXL","family":"sdxl","base_id":"local-base",
+               "checkpoint":str(checkpoint),"exe":self.files["exe"]}
+        status,_=self.request({"action":"import","model":model},origin=self.origin())
+        self.assertEqual(status,400)
         self.assertEqual(len(local_images._settings(self.jobs)["profiles"]),1)
 
     def test_only_same_origin_localhost_browser_with_auth(self):

@@ -1,4 +1,4 @@
-"""Native-owned local Qwen-Image (sd-cli), LoRA and optional Real-ESRGAN.
+"""Native-owned local Qwen-Image / SDXL (sd-cli), LoRA and Real-ESRGAN.
 
 All binary/model paths come from a private, administrator-provisioned JSON file
 in the isolated Native data root; browser input can select only opaque IDs.
@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     from .gpu_gate import gpu_turn, publish_state
@@ -75,9 +75,16 @@ def _file(value):
 
 def _profile_good(p):
     return (isinstance(p, dict) and isinstance(p.get("id"), str) and
-            bool(ID.fullmatch(p["id"])) and p.get("family") == "qwen_turbo" and
-            all(_file(p.get(k)) for k in ("exe", "diffusion_model", "vae", "llm")) and
-            (not p.get("llm_vision") or _file(p["llm_vision"])) and
+            bool(ID.fullmatch(p["id"])) and
+            ((
+                p.get("family") == "qwen_turbo" and
+                all(_file(p.get(k)) for k in ("exe", "diffusion_model", "vae", "llm")) and
+                (not p.get("llm_vision") or _file(p["llm_vision"]))
+            ) or (
+                p.get("family") == "sdxl" and
+                _file(p.get("exe")) and _file(p.get("checkpoint")) and
+                Path(p["checkpoint"]).suffix.lower() in (".safetensors", ".ckpt")
+            )) and
             isinstance(p.get("args", []), list) and
             all(isinstance(a, str) and len(a) < 180 for a in p.get("args", [])))
 
@@ -90,8 +97,10 @@ def register_existing_model(svc, payload):
     engine executable and its arguments are deliberately not accepted from
     the request, and no GPU job is started during registration.
     """
-    if not isinstance(payload,dict) or set(payload)!={"name","base_id",
-            "diffusion_model","vae","llm","llm_vision"}:
+    family=payload.get("family","qwen_turbo") if isinstance(payload,dict) else None
+    expected=({"name","base_id","family","checkpoint"} if family=="sdxl" else
+              {"name","base_id","diffusion_model","vae","llm","llm_vision"})
+    if not isinstance(payload,dict) or set(payload)!=expected:
         raise ValueError("本地模型导入参数不完整或存在未知字段")
     name=payload["name"]
     if not isinstance(name,str) or not 1<=len(name.strip())<=80 or any(ord(c)<32 for c in name):
@@ -100,13 +109,16 @@ def register_existing_model(svc, payload):
     if not isinstance(base_id,str) or not ID.fullmatch(base_id):
         raise ValueError("请选择已有的本地 Qwen 推理环境")
     files={}
-    for key in ("diffusion_model","vae","llm","llm_vision"):
+    required=("checkpoint",) if family=="sdxl" else (
+        "diffusion_model","vae","llm","llm_vision")
+    for key in required:
         value=payload[key]
         if key=="llm_vision" and value=="":continue
         if not isinstance(value,str) or not 3<=len(value)<=1024 or not Path(value).is_absolute():
             raise ValueError("模型文件需要使用本机绝对路径")
         path=Path(value)
-        if not path.is_file() or path.is_symlink() or path.suffix.lower() not in (".gguf",".safetensors"):
+        suffixes=(".safetensors",".ckpt") if family=="sdxl" else (".gguf",".safetensors")
+        if not path.is_file() or path.is_symlink() or path.suffix.lower() not in suffixes:
             raise ValueError("模型文件不存在或类型不受支持："+key)
         files[key]=str(path.resolve())
     with _REGISTRY_LOCK:
@@ -114,11 +126,36 @@ def register_existing_model(svc, payload):
         base=next((p for p in data["profiles"] if p.get("id")==base_id),None)
         if not base or not _profile_good(base):
             raise ValueError("基础 sd-cli 推理环境不可用")
+        if family=="sdxl":
+            existing=next((p for p in data["profiles"]
+                           if p.get("family")=="sdxl" and
+                           str(p.get("checkpoint","")).casefold()==
+                           files["checkpoint"].casefold()),None)
+            if existing and _profile_good(existing):
+                return {"id":existing["id"],"name":existing["name"],
+                        "available":True,"existing":True}
         if len(data["profiles"])>=12:
             raise ValueError("最多可注册 12 个本地图像模型")
         ident="local-import-"+secrets.token_hex(7)
-        profile={k:base[k] for k in ("exe","family","args","max_side")
-                 if k in base}
+        if family=="sdxl":
+            # Old Mikuchin/PolyStrata used sd-cli --model <SDXL checkpoint>
+            # with CFG 7 and 28 steps. Inherit the trusted sd-cli executable,
+            # Vulkan backend and CPU offload, NOT Qwen Turbo's flash-attn flags.
+            original=list(base.get("args",[]))
+            safe=[]
+            index=0
+            while index<len(original):
+                flag=original[index]
+                if flag=="--flash-attn" and index+1<len(original):
+                    index+=2
+                    continue
+                safe.append(flag)
+                index+=1
+            profile={"exe":base["exe"],"family":"sdxl","args":safe,
+                     "max_side":1024,"cfg_scale":7.0,"steps":28}
+        else:
+            profile={k:base[k] for k in ("exe","family","args","max_side")
+                     if k in base}
         profile.update({"id":ident,"name":name.strip(),
                         "model":name.strip(),"timeout_seconds":base.get("timeout_seconds",1200),
                         **files})
@@ -161,14 +198,17 @@ def catalog(svc):
     for p in cfg["profiles"]:
         if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not ID.fullmatch(p["id"]):
             continue
+        family=p.get("family","qwen_turbo")
+        if family not in ("qwen_turbo","sdxl"):
+            continue
         models.append({
             "id": p["id"], "name": str(p.get("name") or p["id"])[:100],
-            "family": "qwen_turbo", "type": "local",
+            "family": family, "type": "local",
             "available": _profile_good(p), "model": str(p.get("model") or p["id"])[:120],
             "max_side": min(max(int(p.get("max_side", 1024)), 256), 2048),
-            "steps": 8, "sizes": "all",
-            "reference_mode": "single" if p.get("llm_vision") else "none",
-            "negative": False, "seed": True, "supports_steps": True,
+            "steps": 28 if family=="sdxl" else 8, "sizes": "all",
+            "reference_mode": "single" if family=="sdxl" or p.get("llm_vision") else "none",
+            "negative": family=="sdxl", "seed": True, "supports_steps": True,
             "upscale_available": ready_upscale,
         })
     loras = []
@@ -188,15 +228,18 @@ def catalog(svc):
 def validate(svc, req):
     profile = get(svc, req["strata_image_profile"])
     if not profile or not _profile_good(profile):
-        raise ValueError("selected local Qwen-Image files or executable are unavailable")
+        raise ValueError("selected local image checkpoint or executable is unavailable")
+    family=profile["family"]
     width, height = map(int, req["size"].split("x"))
     max_side = min(max(int(profile.get("max_side", 1024)), 256), 2048)
     if not all(256 <= side <= max_side and side % 32 == 0 for side in (width, height)):
         raise ValueError("local Qwen-Image dimensions must be 256..max_side, divisible by 32")
-    if len(req.get("strata_reference_assets", [])) > (1 if profile.get("llm_vision") else 0):
+    if len(req.get("strata_reference_assets", [])) > (1 if family=="sdxl" or profile.get("llm_vision") else 0):
         raise ValueError("this local image model cannot use the requested reference images")
     lora_id = req.get("strata_lora_id", "none")
     if lora_id not in (None, "", "none"):
+        if family != "qwen_turbo":
+            raise ValueError("the Qwen LoRA registry cannot be used for SDXL")
         if not isinstance(lora_id, str) or not LORA_ID.fullmatch(lora_id):
             raise ValueError("invalid local LoRA id")
         match = next((i for i in _settings(svc)["loras"]
@@ -367,42 +410,58 @@ def _environment(profile):
 
 def generate(svc, req, *, on_status=None, diagnostic_id=None):
     profile = validate(svc, req)
+    family=profile["family"]
     w, h = map(int, req["size"].split("x"))
     ref = req.get("strata_reference_images", [])
     prompt = req.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip() or "\x00" in prompt:
         raise LocalImageError("invalid prompt for local image generation")
-    steps = int(req.get("steps") or 8)
+    steps = int(req.get("steps") or (28 if family=="sdxl" else 8))
     seed = req.get("seed")
     if seed is None:
         seed = random.SystemRandom().randrange(0, 2**31)
-    with tempfile.TemporaryDirectory(prefix="mikuchin-qwen-") as temp:
+    with tempfile.TemporaryDirectory(prefix="mikuchin-image-") as temp:
         work = Path(temp)
         # sd-cli's -o uses printf-style batch numbering, including n=1.
         out = work / "generated_0.png"
-        cmd = [profile["exe"], "--diffusion-model", profile["diffusion_model"],
-               "--vae", profile["vae"], "--llm", profile["llm"]]
-        if profile.get("llm_vision"):
+        cmd=([profile["exe"],"--model",profile["checkpoint"]] if family=="sdxl"
+             else [profile["exe"], "--diffusion-model", profile["diffusion_model"],
+                   "--vae", profile["vae"], "--llm", profile["llm"]])
+        if family=="qwen_turbo" and profile.get("llm_vision"):
             cmd += ["--llm_vision", profile["llm_vision"]]
         if ref:
-            if len(ref) != 1 or not profile.get("llm_vision"):
+            if len(ref) != 1 or (family=="qwen_turbo" and not profile.get("llm_vision")):
                 raise LocalImageError("reference image is unsupported by this local model")
             prefix, encoded = ref[0].split(",", 1)
             if not prefix.startswith("data:image/"):
                 raise LocalImageError("invalid local reference image")
             source = work / "reference.png"
-            source.write_bytes(_image_png(base64.b64decode(encoded, validate=True)))
-            cmd += ["--ref-image", str(source)]
+            raw=_image_png(base64.b64decode(encoded, validate=True))
+            if family=="sdxl":
+                with Image.open(io.BytesIO(raw)) as original:
+                    resized=ImageOps.fit(original.convert("RGB"),(w,h),
+                                         method=Image.Resampling.LANCZOS)
+                    resized.save(source,format="PNG")
+                strength=req.get("strata_denoise_strength",0.65)
+                if type(strength) not in (int,float) or not 0.05<=strength<=1:
+                    raise LocalImageError("invalid SDXL img2img denoise strength")
+                cmd += ["--init-img",str(source),"--strength",str(strength)]
+            else:
+                source.write_bytes(raw)
+                cmd += ["--ref-image", str(source)]
         lora_id = req.get("strata_lora_id", "none")
         if lora_id not in (None, "", "none"):
             entry = next(p for p in _settings(svc)["loras"] if p["id"] == lora_id)
             lora = Path(entry["path"])
             prompt += f" <lora:{lora.stem}:1>"
             cmd += ["--lora-model-dir", str(lora.parent), "--lora-apply-mode", "at_runtime"]
-        cmd += ["-p", prompt, "--steps", str(steps), "--cfg-scale", "1.0",
+        cmd += ["-p", prompt, "--steps", str(steps),
+                "--cfg-scale", str(profile.get("cfg_scale",7.0) if family=="sdxl" else 1.0),
                 "--sampling-method", "euler", "-W", str(w), "-H", str(h),
                 "-s", str(seed), "-o", str(work / "generated_%d.png")]
-        if steps == 8:
+        if family=="sdxl" and req.get("negative_prompt"):
+            cmd += ["--negative-prompt", str(req["negative_prompt"])]
+        if family=="qwen_turbo" and steps == 8:
             cmd += ["--sigmas", TURBO_SIGMAS]
         cmd += [str(a) for a in profile.get("args", [])]
         timeout = max(60, min(int(profile.get("timeout_seconds", 1200)), 3600))
@@ -413,10 +472,10 @@ def generate(svc, req, *, on_status=None, diagnostic_id=None):
             if not concurrent:
                 publish_state(Path(svc.root).parent, "generating")
             if on_status:
-                on_status("Local Qwen-Image inference")
+                on_status("Local SDXL inference" if family=="sdxl" else "Local Qwen-Image inference")
             _run(cmd, work=work, env=_environment(profile), timeout=timeout)
             if not out.is_file():
-                raise LocalImageError("local Qwen-Image did not produce a PNG")
+                raise LocalImageError("local image model did not produce a PNG")
             image = _image_png(out.read_bytes())
             with Image.open(io.BytesIO(image)) as im:
                 if im.size != (w, h):

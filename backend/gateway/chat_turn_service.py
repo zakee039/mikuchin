@@ -156,6 +156,28 @@ class TurnCoordinator:
                  # budget AND a complete structured JSON tool call. Truncation
                  # must not be mistaken for an executable tool decision.
                  "max_tokens":min(17024,max(768,limit+512))}
+        # SDXL checkpoints need descriptive English phrases / booru-style
+        # tags, unlike Qwen-Image's natural-language Turbo prompts. This is
+        # tool-specific guidance, not a change to the user's character.
+        try:
+            from . import local_images
+        except ImportError:
+            import local_images
+        selected=(self.server.characters.snapshot().get("global",{})
+                  .get("chat_image_profile","")) if self.server.characters else ""
+        image_profile=(local_images.get(self.server.image_jobs,selected)
+                       if self.server.image_jobs and isinstance(selected,str)
+                       and selected.startswith("local-") else None)
+        if image_profile and image_profile.get("family")=="sdxl":
+            payload["tools"]=[
+                {**spec,"function":{**spec["function"],
+                    "description":spec["function"]["description"]+
+                    (" For the selected SDXL/Animagine checkpoint, "
+                     "describe the visual scene in concise ENGLISH phrases "
+                     "or anime tags, preserving explicitly requested "
+                     "characters, pose, costume and setting.")}}
+                if spec["function"]["name"]=="generate_image" else spec
+                for spec in TOOL_SCHEMAS]
         for item in ("temperature","top_p","top_k","seed"):
             if item in request:
                 v=request[item]
