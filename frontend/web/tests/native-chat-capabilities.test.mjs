@@ -29,10 +29,10 @@ test("Legacy Mikuchin without feature flags retains image and MCP tool request b
   assert.equal(body.answer_budget_tokens,256);
 });
 
-test("Missing native capabilities never silently become max_tokens", () => {
+test("Retired Native answer cap never silently becomes max_tokens", () => {
   const body = {messages:[], reasoning_budget_tokens:4096};
-  assert.throws(() => compat.apply(body, {answer_budget_tokens:false,image_generation:true},
-    {max:"128"}, {stateless:false,mcpTools:0}), /尚不支持独立正文 Token 上限/);
+  compat.apply(body, {answer_budget_tokens:false,image_generation:true,chat_image_tool:false},
+    {max:"128"}, {stateless:false,mcpTools:0});
   assert.equal(body.max_tokens, undefined);
   assert.equal(body.answer_budget_tokens, undefined);
   assert.equal(body.reasoning_budget_tokens, 4096);
@@ -68,7 +68,8 @@ test("Native official MCP tools activate only when advertised and opted in", () 
 test("Capability shim is loaded before main app and Image Studio keeps explicit tool opt-out", () => {
   assert.ok(html.indexOf('web/chat-capabilities.js') < html.indexOf('web/app.js'));
   assert.match(app,/MikuchinChatCapabilities\.apply\(body, health, settings/);
-  assert.match(html,/id="s-max-support"/);
-  assert.match(app,/answer_budget_tokens === false/);
+  assert.ok(html.indexOf('web/chat-image-router.js') < html.indexOf('web/app.js'));
+  assert.doesNotMatch(html,/id="s-max"/);
+  assert.match(html,/id="s-budget"/);
   assert.match(studio,/mikuchin_stateless: true, strata_image_tool: false/);
 });

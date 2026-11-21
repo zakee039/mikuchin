@@ -1,5 +1,14 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 聊天自动生图与 MeroMero 运行配置（最新决策）
+
+- 正式 Native main 在 `E:\LLM\mikuchin`，旧版 `E:\LLM\mikuchin-old` 仅供回退；产品 v0.4.0 与官方 PolyStrata `v0.1.45-poly.10` 子模块版本不变。
+- 正式模型选择 `runtime/config/G4-MeroMero-26B-Q4_K_M.json`：MeroMero 26B-A4B Q4_K_M GGUF、**131072 上下文、14 CPU 线程、INT8 KV、15 分钟空闲卸载**，官方 CPU 视觉编码器由固定上游版本独立构建；模型权重仍在 `E:\LLM\models`。旧 `official-sm86-model-test.json` 保留作本机回滚。
+- 聊天内用户明确提出生图/修改请求时，前端使用经过用户授权且带唯一 `request_id` 的 Native `chat_submit` 图像任务，不经原版 `strata_image_tool`，避免把 `dalle.text2im` JSON 当作回复。纯文本讨论、教程、否定句不能触发生图；有收费可能的在线模型，每次调用都必须再次确认。完成后用本地视觉一次短回复，**禁用思考、最多 256 总 Token，不再发起新生图任务**。
+- 本地图像 GPU 交接使用 Gateway 全局互斥及官方引擎私有接口。单活动槽位 KV 使用 `slot_save_path` + `/slots/0?action=save|restore` 临时文件进行尽力保存恢复，**它不是按会话独立持久化的完整 KV 系统**；失败时只能重新 prefill，不得假称命中。图片生成任务先完成再交付，不因 KV 恢复异常重试可能收费的生图。
+- Native 当前不支持独立正文 Token 上限；采样设置仅显示独占一行的思考预算，旧会话残留 `max` 不转换成 `max_tokens`。
+- 相关源码：`frontend/web/chat-image-router.js`、`frontend/web/app.js`、`frontend/web/characters.js`、`backend/gateway/local_images.py`；验证与限制见 `docs/NATIVE_AUTO_CHAT_IMAGE_2026-11-21.md`。
+
 ## 2026-11-21 最终本机目录（最高优先级）
 
 用户将最终部署路径统一为：

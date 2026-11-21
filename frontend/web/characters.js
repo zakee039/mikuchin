@@ -8,6 +8,14 @@ let chatImageModelsReady = false;
 let chatImageCatalog = [], chatImageLoras = [];
 let lastChatImageModel = "";
 const CHAT_IMAGE_DEFAULTS = {lora_id:"none",height:768,width:768,upscale:"auto",steps:null};
+// Pre-Native profiles used display-oriented IDs. Resolve them only to the
+// corresponding LOCAL model; never silently replace a missing one with a
+// potentially billable online API profile.
+const CHAT_IMAGE_MIGRATED_IDS = Object.freeze({
+  "qwen-image-2.1-turbo-official": "local-qwen-official",
+  "qwen-image-2.1-turbo-uncensored": "local-qwen-uncensored"
+});
+const resolveChatImageProfile = (id) => CHAT_IMAGE_MIGRATED_IDS[id] || id;
 const chatImageModel = () => chatImageCatalog.find(m => m.id === $("global-chat-image-profile").value);
 const chatImageSizes = window.MikuchinImageSizes;
 for (const item of chatImageSizes.standard)
@@ -103,7 +111,7 @@ async function refreshChatImageModels() {
     }
     const configured = characterState.global.chat_image_profile || "default";
     const first = models.find(m => m.available);
-    const match = models.find(m => m.id === configured && m.available);
+    const match = models.find(m => m.id === resolveChatImageProfile(configured) && m.available);
     if (match || first) {
       selector.value = (match || first).id;
       selector.disabled = false;
@@ -129,6 +137,8 @@ window.polyNativeChatImageRequest = async (prompt) => {
   if (!chatImageModelsReady) await refreshChatImageModels();
   const selected=characterState.global.chat_image_profile;
   let model=chatImageCatalog.find(m => m.id === selected && m.available);
+  if (!model && resolveChatImageProfile(selected) !== selected)
+    model=chatImageCatalog.find(m => m.id === resolveChatImageProfile(selected) && m.available);
   // A brand-new Native profile still contains "default". Pick an available
   // *local* model only as a preview; the user must approve its name in the
   // confirmation dialog. Never silently fall back to a chargeable API.

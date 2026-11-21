@@ -7,7 +7,7 @@ const html=readFileSync(new URL("../index.html",import.meta.url),"utf8");
 const characters=readFileSync(new URL("../characters.js",import.meta.url),"utf8");
 const secure=readFileSync(new URL("../auth-images.js",import.meta.url),"utf8");
 
-test("Native composer removes image generation and automatic image routing", () => {
+test("Native composer uses automatic image routing without extra buttons", () => {
   assert.doesNotMatch(html,/id="chat-draw-btn"/);
   assert.doesNotMatch(html,/id="chat-auto-btn"/);
   assert.doesNotMatch(html,/id="chat-image-confirm"/);
@@ -15,6 +15,11 @@ test("Native composer removes image generation and automatic image routing", () 
   assert.doesNotMatch(app,/sendNativeChatImage|autoImageEnabled|intentRouting/);
   assert.match(html,/id="tab-btn-images"/);
   assert.match(app,/async function send\(\)/);
+  assert.match(app,/submitAutoChatImage\(m,autoAction/);
+  assert.match(app,/action:"chat_submit"/);
+  assert.match(app,/image_request_id:requestId/);
+  assert.match(app,/if \(plan.online && !confirm/);
+  assert.match(characters,/resolveChatImageProfile/);
 });test("Chat image polling matches by session and request ID, handles Native success/failed", () => {
   assert.match(app,/image_request_id\) && t\.state === "running"/);
   assert.match(app,/requests\.get\(t\.image_request_id\)/);
@@ -38,6 +43,9 @@ test("Native vision is one bounded local follow-up with no thinking or new image
   assert.match(app,/max_tokens:256/);
   assert.match(app,/reasoning_effort:"none"/);
   assert.match(app,/strata_image_tool:false,strata_mcp:false/);
+  assert.match(app,/strata_session_id:currentId/);
+  assert.match(app,/const tailMessages = apiMessages\(\)\.slice\(0, -1\)/);
+  assert.match(app,/messages\.indexOf\(message\) !== messages\.length - 1/);
   assert.match(app,/canvas\.toDataURL\("image\/jpeg",0\.8\)/);
   assert.match(app,/tool\.vision_state="done"/);
   assert.match(app,/tool\.vision_state="failed"/);

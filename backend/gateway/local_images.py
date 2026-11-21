@@ -158,7 +158,7 @@ def validate(svc, req):
     return profile
 
 
-def _control(method):
+def _control(method, payload=None):
     key = os.environ.get("MIKUCHIN_UPSTREAM_API_KEY", "")
     port_text = os.environ.get("MIKUCHIN_NATIVE_OFFICIAL_PORT", "")
     if len(key) < 12 or not port_text.isdecimal():
@@ -168,18 +168,48 @@ def _control(method):
         raise LocalImageError("invalid private official engine port")
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=240)
     try:
-        conn.request("POST", method, body=b"{}",
+        conn.request("POST", method, body=json.dumps(payload or {}).encode("utf-8"),
                      headers={"Authorization": "Bearer " + key,
                               "Content-Type": "application/json"})
         response = conn.getresponse()
         status = response.status
-        response.read(32768)
+        raw = response.read(32768)
         if status != 200:
             raise LocalImageError("private engine refused GPU handoff: HTTP " + str(status))
+        return json.loads(raw) if raw else {}
     except (OSError, http.client.HTTPException) as exc:
         raise LocalImageError("private engine unavailable for GPU handoff") from exc
     finally:
         conn.close()
+
+
+def _save_handoff_slot(data_root):
+    """Best-effort save of the *active* official engine slot.
+
+    This is NOT a per-conversation snapshot: PolyStrata exposes only slot 0.
+    The image GPU lock excludes concurrent Gateway inference while this is
+    captured and restored. Conversation history remains authoritative, so a
+    failed restore is recovered on the next request by normal prefill.
+    """
+    root = Path(data_root) / "kv-handoffs"
+    # Without an explicitly enabled --slot-save-path, do not call a 501 API
+    # or generate partial session files in an unexpected directory.
+    if not root.is_dir() or root.is_symlink():
+        return None
+    name = "handoff-" + secrets.token_hex(16) + ".bin"
+    file = root / name
+    try:
+        result = _control("/slots/0?action=save", {"filename": name})
+        if not file.is_file() or file.is_symlink() or not file.stat().st_size:
+            raise LocalImageError("official slot save produced no snapshot")
+        if not int(result.get("n_saved", 0)):
+            file.unlink(missing_ok=True)
+            return None
+        return name
+    except (LocalImageError, OSError, ValueError) as exc:
+        file.unlink(missing_ok=True)
+        LOG.warning("Active-slot save unavailable; next chat will prefill (%s)", type(exc).__name__)
+        return None
 
 
 @contextlib.contextmanager
@@ -191,6 +221,7 @@ def gpu_handoff(svc, *, on_status=None):
         publish_state(root, "unloading")
         if on_status:
             on_status("Waiting for official model unload")
+        snapshot = _save_handoff_slot(root)
         try:
             _control("/v1/unload?wait=180")
             yield
@@ -200,11 +231,23 @@ def gpu_handoff(svc, *, on_status=None):
                 on_status("Restoring official text model")
             try:
                 _control("/v1/load")
+                if snapshot:
+                    if on_status:
+                        on_status("Restoring active KV snapshot")
+                    try:
+                        _control("/slots/0?action=restore", {"filename": snapshot})
+                    except (LocalImageError, ValueError, OSError) as exc:
+                        # An engine restart or full-context prefill must not
+                        # turn a successfully generated image into a retry.
+                        LOG.warning("KV slot restore unavailable; next chat will prefill (%s)",
+                                    type(exc).__name__)
             except LocalImageError:
                 # Image files are already generated. Reload may be retried on
                 # the next inference; do not turn a completed image into retry.
                 LOG.exception("Official model reload failed after GPU job")
             finally:
+                if snapshot:
+                    (root / "kv-handoffs" / snapshot).unlink(missing_ok=True)
                 publish_state(root, "idle")
 
 

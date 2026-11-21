@@ -103,7 +103,7 @@ $("api-key").value = store.get("apikey", "");
 $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
 
 let health = {model: "strata", images: false, max_context: 0};
-// Chat input remains text-only. Image generation lives on the Images tab.
+// Chat image generation is routed through authenticated ImageJobStore tasks.
 async function loadHealth() {
   try {
     const response = await fetch("health", {headers: headers(), cache: "no-store"});
@@ -810,7 +810,12 @@ async function streamInto(m, el, signal) {
   if (stateless) body.mikuchin_stateless = true;
 
   let firstAt = null, thinkStart = null, usage = null, frame = 0;
-  const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
+  const paint = () => {
+    frame = 0;
+    // Do not flash half of a model's legacy tool-call JSON to the user.
+    if (m.text.trimStart().startsWith("{") || m.text.trimStart().startsWith("```json")) return;
+    updateAssistant(el, m, true); scrollDown();
+  };
   try {
     const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true),
                                                    body: JSON.stringify(body), signal});
@@ -1066,6 +1071,7 @@ function onTool(m, x) {
 }
 // Chat image jobs are executed by desktop workers. Browser polling is only
 // presentation; closing the tab cannot cancel or erase a finished image.
+let chatImageVisionPending = false;
 let chatImageJobPolling = false;
 async function refreshChatImageJobs() {
   if (!sessionV1 || !sessionId || chatImageJobPolling || document.hidden) return;
@@ -1299,6 +1305,12 @@ function setBusy(on) {
 async function send() {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy) return;
+  if (chatImageVisionPending || messages.some(x => x.role === "assistant" &&
+        (x.tools || []).some(t => t.image_request_id && t.state === "running"))) {
+    toast("info","Image generation in progress","Wait for this conversation's image task to finish before sending the next turn.");
+    return;
+  }
+  const hadAttachments = attachments.length > 0;
   messages.push({role: "user", text, images: attachments.filter((a) => a.kind !== "file"),
                  files: attachments.filter((a) => a.kind === "file"), time: Date.now()});
   attachments = [];
@@ -1314,7 +1326,23 @@ async function send() {
   busy = {controller, msg: m};
   setBusy(true);
   try {
-    await streamInto(m, el, controller.signal);
+    const hasImage = messages.slice(0,-2).some(x => x.role === "assistant" &&
+      (x.tools || []).some(t => t.state === "done" && t.image_file));
+    const parser = window.MikuchinChatImageRouter;
+    const autoAction = !hadAttachments && parser?.intent(text,hasImage);
+    if (autoAction && autoAction !== "text") {
+      await submitAutoChatImage(m,autoAction,text,controller.signal);
+    } else {
+      await streamInto(m,el,controller.signal);
+      const legacy=parser?.tool(m.text);
+      if (!m.stopped && (legacy || parser?.looksLikeTool(m.text))) {
+        m.text="";m.reasoning="";
+        if (legacy && parser.intent(text,hasImage) !== "text")
+          await submitAutoChatImage(m,legacy.action,legacy.prompt,controller.signal);
+        else
+          m.text="模型返回了旧版生图工具格式，但未收到有效的用户图像指令；未执行生图任务。";
+      }
+    }
   } catch (e) {
     m.error = e.message || String(e);
     toast("error", "The request failed", m.error, 6000);
@@ -1326,6 +1354,43 @@ async function send() {
   saveChat();
   if (sessionV1) sessionSaveChain.then(refreshSessionPicker).catch(console.warn);
   scrollDown();
+}
+
+async function submitAutoChatImage(m,action,instruction,signal) {
+  if (!sessionV1 || !sessionId || health.chat_image_jobs !== true)
+    throw Error("当前聊天尚未连接可用的 Native 会话图像任务服务。");
+  if (!health.image_worker_ready)
+    throw Error("图像 Worker 尚未就绪，未提交生图请求。");
+  const fixedSession=sessionId;
+  const prompt=instruction; // Preserve the current session KV; never overwrite it with a rewrite prompt.
+  if (signal.aborted) return;
+  const plan=await window.polyNativeChatImageRequest(prompt);
+  if (sessionId !== fixedSession) throw Error("会话已切换，未提交生图任务。");
+  // Local models can run automatically. Online API calls may charge money.
+  if (plan.online && !confirm("这次生图将调用在线服务，可能产生费用。确认提交一次？")) {
+    m.text="已取消在线生图请求，未调用图像 API。";return;
+  }
+  const requestId=makeSessionId();
+  const t={id:requestId,name:"生成图片",state:"running",ok:null,
+    at:0,rat:0,created_at:Date.now(),image_request_id:requestId,
+    image_prompt:prompt,result:"等待图像 Worker 接收任务"};
+  m.tools=[t];m.text="正在提交图像任务…";
+  saveChat(); // Persist the idempotency key BEFORE the HTTP POST.
+  const response=await fetch("v1/mikuchin/image-jobs",{method:"POST",headers:headers(true),
+    // Never abort a request that could have already reached a paid provider.
+    body:JSON.stringify({action:"chat_submit",session_id:fixedSession,
+      request_id:requestId,request:plan.request,edit_previous:action==="edit"})});
+  if (!response.ok) {
+    const data=await response.json().catch(()=>({}));
+    t.state="error";t.ok=false;
+    t.result=data.error?.message || ("任务未被接受：HTTP "+response.status);
+    m.text="图像任务提交失败，没有自动重试。";
+    throw Error(t.result);
+  }
+  const job=await response.json();
+  t.image_job_id=job.id;
+  m.text="正在生成图片，完成后会显示在当前会话中。";
+  saveChat();
 }
 
 $("composer").onsubmit = (e) => { e.preventDefault(); send(); };
@@ -1352,6 +1417,7 @@ async function describeNativeChatImage(message, tool, currentId) {
   // Persist the 'requested' marker before this async operation to avoid
   // repeating it after a reload. A failed vision call never retries generation.
   if (!health.images || !tool.image_file || !window.MikuchinSecureImages) return;
+  chatImageVisionPending = true;
   try {
     const path="v1/images/files/"+tool.image_file;
     const blob=await window.MikuchinSecureImages.prefetch(path);
@@ -1363,13 +1429,19 @@ async function describeNativeChatImage(message, tool, currentId) {
     canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);
     image.close?.();
     const dataUrl=canvas.toDataURL("image/jpeg",0.8);
+    // Keep the same session context that was active before the GPU handoff.
+    // The generated image is provided as a new multimodal user turn; never
+    // start another image tool, and never send a stale image to another chat.
+    if (sessionId !== currentId || messages.indexOf(message) !== messages.length - 1) return;
+    const tailMessages = apiMessages().slice(0, -1).slice(-24);
+    tailMessages.push({role:"user", content:[
+      {type:"text",text:"This image was just generated for the user's latest request. Refer to the actual visible image and the previous conversation. Reply naturally in the user's language in at most 120 Chinese characters (or similar length), and invite a specific follow-up change. Do not invent invisible details or generate another image."},
+      {type:"image_url",image_url:{url:dataUrl}}]});
     const response=await fetch("v1/chat/completions",{method:"POST",headers:headers(true),
       body:JSON.stringify({model:health.model,stream:false,reasoning_effort:"none",
         reasoning_budget_tokens:0,max_tokens:256,
-        mikuchin_stateless:true,strata_image_tool:false,strata_mcp:false,
-        messages:[{role:"user",content:[
-          {type:"text",text:"这张图片是刚生成的，请用不超过 120 字的自然语言描述实际可见的主体、服装、动作、色彩和背景。不要虚构看不见的细节。"},
-          {type:"image_url",image_url:{url:dataUrl}}]}]})});
+        strata_session_id:currentId,strata_image_tool:false,strata_mcp:false,
+        messages:tailMessages})});
     if (!response.ok) throw Error("视觉理解 HTTP "+response.status);
     const data=await response.json();
     const caption=String(data.choices?.[0]?.message?.content || "").trim();
@@ -1383,7 +1455,7 @@ async function describeNativeChatImage(message, tool, currentId) {
     tool.vision_state="failed";
     tool.vision_error=String(error).slice(0,140);
     if(sessionId===currentId){message.text="图片已生成；本次视觉理解未完成。";saveChat();renderChat();}
-  }
+  } finally { chatImageVisionPending = false; }
 }
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
@@ -1542,16 +1614,7 @@ function loadDrawer(s = settings) {
   for (const b of $("s-thinking").children) b.setAttribute("aria-checked", String(b.dataset.v === s.thinking));
   $("s-budget").value = s.thinking === "none" ? 0 : s.budget;
   $("s-temp").value = s.temperature; $("s-topp").value = s.top_p; $("s-topk").value = s.top_k;
-  $("s-max").value = s.max; $("s-seed").value = s.seed;
-  const unsupportedAnswerCap = health.answer_budget_tokens === false;
-  // If a saved session has an older cap, let the user erase it. Otherwise
-  // disable a control that would submit unsupported semantics.
-  $("s-max").disabled = unsupportedAnswerCap && !s.max;
-  $("s-max").placeholder = unsupportedAnswerCap ? "Native 暂不支持" : "No limit";
-  $("s-max-support").hidden = !unsupportedAnswerCap;
-  $("s-max").title = unsupportedAnswerCap
-    ? "Native 引擎不支持仅限制正文 Token；请清空旧的设置（不要用 max_tokens 替代）"
-    : "";
+  $("s-seed").value = s.seed;
   $("s-show").setAttribute("aria-checked", String(!!s.show));
   $("s-esp").setAttribute("aria-checked", String(s.esp !== false));
   $("esp-row").hidden = !projectionLoaded();
@@ -1589,11 +1652,8 @@ function readDrawerSampling() {
   if (!Number.isInteger(budget) || (thinking !== "none" && budget < 1) || budget > 262144) {
     throw Error("Choose a whole number from 1 to 262144 for the thinking budget.");
   }
-  if (health.answer_budget_tokens === false && $("s-max").value.trim()) {
-    throw Error("Native 暂不支持仅限制正文 Token。请清空 Answer Token budget；Thinking Token budget 不受影响。");
-  }
   return {thinking, budget, temperature: +$("s-temp").value, top_p: +$("s-topp").value,
-                top_k: +$("s-topk").value, max: $("s-max").value.trim() ? +$("s-max").value : "",
+                top_k: +$("s-topk").value, max: "",
                 seed: $("s-seed").value.trim() ? +$("s-seed").value : "",
                 show: $("s-show").getAttribute("aria-checked") === "true",
                 esp: $("s-esp").getAttribute("aria-checked") === "true",

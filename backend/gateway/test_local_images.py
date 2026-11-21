@@ -71,6 +71,46 @@ class NativeGpuGateTests(unittest.TestCase):
                                    capture_output=True, text=True, timeout=7)
             self.assertEqual(child.stdout.strip(), "ENTERED", child.stderr)
 
+    def test_handoff_saves_and_restores_slot_inside_gpu_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            (data / "images").mkdir()
+            (data / "kv-handoffs").mkdir()
+            service = type("Svc", (), {"root": data / "images"})()
+            events = []
+            def private_control(path, payload=None):
+                events.append(path)
+                if path.endswith("action=save"):
+                    (data / "kv-handoffs" / payload["filename"]).write_bytes(b"fake-kv")
+                    return {"n_saved": 16}
+                return {"n_restored": 16}
+            with mock.patch.object(local_images, "_control", side_effect=private_control):
+                with local_images.gpu_handoff(service):
+                    self.assertEqual(events[:2], ["/slots/0?action=save", "/v1/unload?wait=180"])
+                    self.assertTrue(list((data / "kv-handoffs").iterdir()))
+                    self.assertTrue(read_state(directory)["busy"])
+            self.assertEqual(events[-2:], ["/v1/load", "/slots/0?action=restore"])
+            self.assertEqual(list((data / "kv-handoffs").iterdir()), [])
+
+    def test_restore_failure_does_not_replay_image_or_leave_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            (data / "images").mkdir()
+            (data / "kv-handoffs").mkdir()
+            service = type("Svc", (), {"root": data / "images"})()
+            def private_control(path, payload=None):
+                if path.endswith("action=save"):
+                    (data / "kv-handoffs" / payload["filename"]).write_bytes(b"fake-kv")
+                    return {"n_saved": 16}
+                if path.endswith("action=restore"):
+                    raise local_images.LocalImageError("simulated restore unavailable")
+                return {}
+            with mock.patch.object(local_images, "_control", side_effect=private_control):
+                with local_images.gpu_handoff(service):
+                    pass
+            self.assertEqual(list((data / "kv-handoffs").iterdir()), [])
+            self.assertFalse(read_state(directory)["busy"])
+
 
 class LocalNativeImageTests(unittest.TestCase):
     def setUp(self):

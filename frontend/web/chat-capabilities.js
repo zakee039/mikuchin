@@ -6,9 +6,7 @@
   function apply(body, health, settings, context = {}) {
     if (!body || !health || !settings) throw Error("Missing chat request state");
     const max = settings.max;
-    if (max !== "" && max !== null && max !== undefined) {
-      if (health.answer_budget_tokens === false)
-        throw Error("当前 Native Gateway 尚不支持独立正文 Token 上限。请在采样设置中清空 Answer Token budget 后重试；思考 Token 预算仍可正常使用。");
+    if (max !== "" && max !== null && max !== undefined && health.answer_budget_tokens !== false) {
       const parsed = Number(max);
       if (!Number.isInteger(parsed) || parsed < 1 || parsed > 262144)
         throw Error("Answer Token budget must be an integer from 1 to 262144");
