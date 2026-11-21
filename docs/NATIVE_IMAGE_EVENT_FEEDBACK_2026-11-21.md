@@ -36,8 +36,12 @@
 - 新 Node 测试覆盖：API 隐藏运行方式、本地保留、started 回复不会被后台轮询覆盖、失败卡片 + 后续独立回复、聊天并发完成后才追加、Turn ID 去重。
 - 隔离 Chrome + 假图像供应商：在线模型 API 设置界面没有「运行方式」；任务开始有一条由假 LLM 输出的自然确认；慢图像期间发送普通聊天成功，图片在普通聊天回答后独立出现；模拟 `ImageProviderError: image API HTTP 400: content_policy_violation (nudity)` 时失败卡片记录具体错误，随后独立 LLM 说明；浏览器 reload 后没有重复消息。Page errors 为空。全部用 Mock，**没有访问真实第三方付费图片服务**。
 
-## 生产部署记录
+## 生产部署记录（已完成）
 
-待上线时按顺序执行：检查 Image Worker 无在途任务和 Native Turn 无在途动作；SQLite Online Backup 备份生产 DB 与配置；在无真实 LLM 活跃请求的窗口**只重启 Mikuchin 自有 Gateway**，其 Supervisor 子进程与官方 PolyStrata 不动；验证授权接口、静态资源、会话数量及图像任务无丢失，最后提交 Git `main`。
-
-如上线遇到活动任务，保留服务并说明未热部署；不人为取消或重放任何生图任务。
+- 本机生产 SQLite Online Backup、图像服务配置、活跃 LLM JSON 已保存在
+  `runtime/migration-backups/native-image-event-followup-20261121-192602`。原有数据没有覆盖、丢弃或人工重放。备份包含 Native Turn、Conversations、Characters、Gallery、Image Jobs 五个 SQLite。
+- 重载前 `ImageJobStore` 共 **22 success、1 failed、1 draft**；`draft` 是用户已保存但尚未执行的草稿，不是正在运行的图像任务；进行中的图像任务 **0**、Native Turn **0**，官方 LLM upstream 没有活动推理连接。
+- 在上面状态复查后，只停止并让 Supervisor 自动恢复 **Mikuchin Gateway** 监听进程（PID `50360 → 9264`；Supervisor Gateway restart `5 → 6`）。有两条空闲客户端连接需要重连；官方 PolyStrata 子进程 `37936`、独立 Image Worker 子进程 `9612` 均未重启。官方子模块 SHA 仍 `3e1642161198c50ff1abed4046f4e4f476099dbb`。
+- 正式页面根路由、`/web/app.js`、`/web/characters.js`、`/web/native-tool-client.js`、`/web/app.css` 全部 HTTP **200**；未提供 Key 的 `/health`、`/v1/mikuchin/chat/turns`、`/v1/mikuchin/image-models` 均 HTTP **401**。旧 Turn 三种已有终止状态和图像数据库计数未变化，新增 `start_state/start_text` SQLite 字段检查通过，Image Worker 心跳正常。
+- 功能提交 `13c1f18cfeb4aba1955d4a97311aa01b253b608e` 已推送 `origin/main`。GitHub Actions **Version consistency**、**Native PolyStrata Gateway contracts**、**pages build and deployment** 三项均为 success。
+- **未发起生产真实付费生图试验**，因此生产中每个不同提供商的错误文案是否可解析仍需用户以后实际失败时检验；隔离 Mock 已覆盖审核失败、未知失败和并发对话，不冒充真实模型输出一致性。
