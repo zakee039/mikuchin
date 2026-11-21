@@ -233,6 +233,12 @@ fn gateway_metrics(spec: &LaunchSpec) -> Option<Value> {
     if status == 200 { serde_json::from_slice(&body).ok() } else { None }
 }
 
+fn gateway_request_monitor(spec: &LaunchSpec) -> Option<Value> {
+    let (status, body) = local_http(spec.gateway_port,
+        "/v1/mikuchin/request-monitor", Some(&spec.key)).ok()?;
+    if status == 200 { serde_json::from_slice(&body).ok() } else { None }
+}
+
 fn gpu_snapshot() -> Option<Value> {
     // Cache NVidia queries: the panel polls frequently, but system utilities
     // should not be spawned for every individual status request.
@@ -399,6 +405,7 @@ struct NativeStatus {
     config_name: String,
     available_configs: Vec<NativeModelConfig>,
     metrics: Option<Value>,
+    request_monitor: Option<Value>,
     host_gpu: Option<Value>,
     supervisor_pid: Option<u32>,
     children: Value,
@@ -545,6 +552,9 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     let model_loaded = health_value.as_ref()
         .and_then(|h| h["official_model_loaded"].as_bool());
     let metrics = if gateway_ready { spec.as_ref().ok().and_then(gateway_metrics) } else { None };
+    let request_monitor = if gateway_ready {
+        spec.as_ref().ok().and_then(gateway_request_monitor)
+    } else { None };
     let host_gpu = gpu_snapshot();
     let model = health_value.as_ref().and_then(|h| h["model"].as_str())
         .unwrap_or("—").to_string();
@@ -586,7 +596,7 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
             .and_then(|p| p.file_name()).map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "未配置".into()),
         available_configs: list_native_model_configs().unwrap_or_default(),
-        metrics, host_gpu, supervisor_pid: pid, children, supervisor_phase,
+        metrics, request_monitor, host_gpu, supervisor_pid: pid, children, supervisor_phase,
         child_restarts, last_recovery, gpu_busy, gpu_phase,
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),

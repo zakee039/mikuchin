@@ -198,6 +198,40 @@ class GatewayContract(unittest.TestCase):
         # Restore fixture state for unrelated tests.
         self.addCleanup(self.store.save_ui_language,"zh-CN")
 
+    def test_request_monitor_auth_streaming_counts_and_privacy(self):
+        path="/v1/mikuchin/request-monitor"
+        self.assertEqual(self.request("GET",path,key=None)[0],401)
+        self.assertEqual(self.request("GET",path,
+                         origin="https://evil.invalid")[0],403)
+        before=json.loads(self.request("GET",path)[1])["total"]
+        private="PRIVATE_UNIQUE_PROMPT_SHOULD_NEVER_BE_LOGGED"
+        status,data=self.request("POST","/v1/chat/completions",payload={
+            "messages":[{"role":"user","content":private}],"model":"mock"})
+        self.assertEqual(status,200)
+        self.assertIn(private.encode(),data,"Mock upstream intentionally echoes private prompt")
+        status,body=self.request("GET",path)
+        self.assertEqual(status,200)
+        snapshot=json.loads(body)
+        self.assertEqual(snapshot["total"],before+1)
+        self.assertEqual(snapshot["active"],0)
+        self.assertEqual(snapshot["recent"][0]["kind"],"chat")
+        self.assertEqual(snapshot["recent"][0]["status"],200)
+        self.assertEqual(snapshot["recent"][0]["outcome"],"completed")
+        self.assertGreater(snapshot["recent"][0]["response_bytes"],0)
+        self.assertNotIn(private,body.decode())
+        self.assertNotIn("client-test-secret",body.decode())
+        self.assertNotIn("official-test-secret",body.decode())
+        self.assertEqual(snapshot["token_usage"],"not_available_per_request")
+        status,stream=self.request("POST","/v1/chat/completions",payload={
+            "messages":[{"role":"user","content":private}],"stream":True})
+        self.assertEqual(status,200)
+        self.assertIn(b"data: ",stream)
+        after=json.loads(self.request("GET",path)[1])
+        self.assertEqual(after["total"],before+2)
+        self.assertEqual(after["recent"][0]["kind"],"chat")
+        self.assertGreater(after["recent"][0]["duration_ms"],100,
+                           "SSE timer must include streaming time")
+
     def test_image_studio_available_does_not_advertise_unported_chat_image_tool(self):
         with patch.object(gateway_app.local_images, "catalog",
                           return_value=([{"id":"local-offline", "available":True}], [])):
@@ -221,6 +255,7 @@ class GatewayContract(unittest.TestCase):
     def test_native_gpu_handoff_is_visible_and_prevents_new_inference(self):
         from backend.gateway.gpu_gate import gpu_turn, publish_state
         root = self.images.root.parent
+        before = json.loads(self.request("GET","/v1/mikuchin/request-monitor")[1])["failed"]
         with gpu_turn(root, exclusive=True):
             publish_state(root, "upscaling")
             status, data = self.request("GET", "/health")
@@ -232,6 +267,10 @@ class GatewayContract(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertEqual(len(FakeOfficial.seen), prior_calls,
                              "GPU-busy requests must not reach the official engine")
+        after=json.loads(self.request("GET","/v1/mikuchin/request-monitor")[1])
+        self.assertEqual(after["failed"],before+1)
+        self.assertEqual(after["recent"][0]["outcome"],"gpu_busy")
+        self.assertEqual(after["recent"][0]["status"],503)
         self.assertEqual(json.loads(self.request("GET", "/health")[1])["native_gpu"],
                          {"busy": False, "phase": "idle"})
 

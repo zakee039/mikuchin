@@ -10,6 +10,12 @@ type Metrics = {
   requests?: Array<Record<string, number>>;
   conversation_cache?: {requests?: number; requests_reused?: number};
 };
+type RequestMetrics = {
+  uptime_s: number; total: number; failed: number; active: number;
+  by_kind: Record<string, number>;
+  recent: Array<{kind: string; status: number; outcome: string;
+    duration_ms: number; response_bytes: number; completed_at: number}>;
+};
 type NativePrefs = {
   autostart: boolean; auto_start_service: boolean; watchdog: boolean;
   manual_unloaded: boolean;
@@ -22,7 +28,8 @@ type Status = {
   error: string; restarts: number; gateway_port: number; official_port: number;
   gateway_ready: boolean; model_loaded: boolean | null; api_key_present: boolean; model: string; config_name: string;
   available_configs: Array<{file: string; name: string}>;
-  metrics: Metrics | null; host_gpu: Record<string, number> | null;
+  metrics: Metrics | null; request_monitor: RequestMetrics | null;
+  host_gpu: Record<string, number> | null;
   supervisor_pid: number | null; children: Record<string, number>;
   supervisor_phase: string; child_restarts: Record<string, number>;
   last_recovery: {role: string; at: number} | null;
@@ -239,6 +246,14 @@ const processRow = (label: string, id: string) => {
 function nativePage(): string {
   const s = status;
   const restarts = Object.values(s?.child_restarts || {}).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  const requests=s?.request_monitor;
+  const requestNames:Record<string,string> = {
+    chat:"Chat", messages:"Messages", responses:"Responses", images:"Images",
+  };
+  const recent=(requests?.recent || []).slice(0,5).map(req =>
+    `<div class="metric-row"><span>${esc(requestNames[req.kind] || req.kind)}
+      · HTTP ${Number(req.status)}</span><strong>${Math.max(0,Number(req.duration_ms)||0)} ms</strong></div>`
+  ).join("");
   return `<section class="native-status-page">
     <div class="setting-card native-card">
       <div class="native-title"><h3>进程守护</h3><small>Supervisor ${s?.supervisor_pid ? "PID " + s.supervisor_pid : "未启动"}</small></div>
@@ -256,6 +271,19 @@ function nativePage(): string {
       ${s?.image_jobs_running ? `<p class="native-hint">${esc(s.image_jobs_phase)}</p>` : ""}
       <div class="metric-row"><span>Image Worker</span><strong>${s?.image_worker_ready ? "已就绪" : "未就绪"}</strong></div>
       <div class="metric-row"><span>Real-ESRGAN 4×</span><strong>${s?.upscaler_ready ? "已配置" : "尚未配置"}</strong></div>
+    </div>
+    <div class="setting-card native-card">
+      <div class="native-title"><h3>请求监控</h3><small>本次 Gateway 运行期间</small></div>
+      <div class="metric-row"><span>总请求 / 失败</span>
+        <strong>${requests ? requests.total+" / "+requests.failed : "—"}</strong></div>
+      <div class="metric-row"><span>执行中的请求</span>
+        <strong>${requests?.active ?? "—"} 项</strong></div>
+      <div class="metric-row"><span>Chat / Messages / Responses</span>
+        <strong>${requests ? [requests.by_kind.chat,requests.by_kind.messages,
+          requests.by_kind.responses].map(v=>v||0).join(" / ") : "—"}</strong></div>
+      ${recent}
+      <p class="native-hint">只记录请求类别、状态、耗时和响应字节数；
+        不记录聊天正文、凭据或设备地址。重启后清零，单次精确 Token 用量暂无来源。</p>
     </div>
     <div class="setting-card native-card">
       <div class="native-title"><h3>服务端口</h3></div>

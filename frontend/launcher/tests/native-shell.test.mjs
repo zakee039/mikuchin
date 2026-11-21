@@ -135,3 +135,14 @@ test("API key rotation is only available when native service is fully unloaded",
   assert.match(rust,/security::store\("api-key", &key\)/);
   assert.match(source,/旧密钥将立即失效/);
 });
+
+test("Native request monitor is authenticated and renders bounded privacy-safe metrics", () => {
+  assert.match(rust,/fn gateway_request_monitor\(/);
+  assert.match(rust,/request_monitor: Option<Value>/);
+  assert.match(rust,/request_monitor = if gateway_ready/);
+  assert.match(source,/request_monitor: RequestMetrics \| null/);
+  assert.match(source,/请求监控/);
+  assert.match(source,/requests\?\.recent \|\| \[\]/);
+  assert.match(source,/单次精确 Token 用量暂无来源/);
+  assert.doesNotMatch(source,/request\.prompt|req\.messages/);
+});

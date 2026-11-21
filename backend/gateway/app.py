@@ -32,6 +32,7 @@ try:
     from . import gallery
     from . import local_images
     from .gpu_gate import gpu_turn, GPUUnavailable, read_state
+    from .request_monitor import RequestMonitor
 except ImportError:  # unittest discover -s backend/gateway imports app as a top-level module
     from conversations import ConversationStore, MissingConversation, valid_id
     from characters import CharacterStore, card_from_tavern
@@ -42,6 +43,7 @@ except ImportError:  # unittest discover -s backend/gateway imports app as a top
     import gallery
     import local_images
     from gpu_gate import gpu_turn, GPUUnavailable, read_state
+    from request_monitor import RequestMonitor
 
 LOG = logging.getLogger("mikuchin.gateway")
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -66,6 +68,7 @@ IMAGE_REFERENCE = "/v1/mikuchin/image-job-reference/"
 GALLERY = "/v1/mikuchin/gallery"
 GALLERY_THUMB = GALLERY + "/thumb/"
 GALLERY_ITEM = GALLERY + "/item"
+REQUEST_MONITOR = "/v1/mikuchin/request-monitor"
 WEB_ROOT = Path(__file__).resolve().parents[2] / "frontend" / "web"
 STATIC_FILE = re.compile(r"^/web/([a-z][a-z0-9_-]{0,80}\.(?:js|css|svg))$")
 STATIC_MIME = {"js":"text/javascript; charset=utf-8", "css":"text/css; charset=utf-8",
@@ -95,6 +98,7 @@ class GatewayServer(ThreadingHTTPServer):
         self.conversations = conversations
         self.characters = characters
         self.image_jobs = image_jobs
+        self.request_monitor = RequestMonitor()
         super().__init__(address, GatewayHandler)
 
 
@@ -257,6 +261,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "native_upscaler_ready": bool(self.server.image_jobs and
                                               local_images.upscaler_ready(self.server.image_jobs)),
             })
+            return
+        if path == REQUEST_MONITOR:
+            self._json(200, self.server.request_monitor.snapshot())
             return
         if path not in INFERENCE_GETS and not IMAGE_PATH.fullmatch(path):
             self._error(404, "Endpoint is not yet available on the native gateway", "not_found")
@@ -693,17 +700,31 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error(503,"Native gallery storage unavailable","unavailable")
 
     def _proxy(self, method: str, body: bytes | None = None):
+        path = urlsplit(self.path).path
+        kinds = {
+            "/v1/chat/completions": "chat",
+            "/v1/messages": "messages",
+            "/v1/responses": "responses",
+            "/v1/images/generations": "images",
+        }
+        ticket = (self.server.request_monitor.begin(kinds[path])
+                  if method == "POST" and path in kinds else None)
         root = self.server.image_jobs.root.parent if self.server.image_jobs else None
         try:
             with gpu_turn(root, timeout=1) if root else contextlib.nullcontext():
-                self._proxy_unguarded(method, body)
+                self._proxy_unguarded(method, body, monitor_ticket=ticket)
         except GPUUnavailable:
+            if ticket is not None:
+                self.server.request_monitor.finish(ticket, status=503, outcome="gpu_busy")
             self._error(503, "Native GPU is reserved for an image task", "gpu_busy")
 
-    def _proxy_unguarded(self, method: str, body: bytes | None = None):
+    def _proxy_unguarded(self, method: str, body: bytes | None = None, monitor_ticket=None):
         conn = http.client.HTTPConnection(self.server.upstream_host,
                                           self.server.upstream_port, timeout=1800)
         sent_headers = False
+        upstream_status = 502
+        transferred = 0
+        outcome = "completed"
         headers = {
             "Authorization": "Bearer " + self.server.upstream_key,
             "Accept": self.headers.get("Accept", "application/json"),
@@ -714,6 +735,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try:
             conn.request(method, self.path, body=body, headers=headers)
             upstream = conn.getresponse()
+            upstream_status = upstream.status
             # Do not buffer SSE or tool-call events. Force close framing for
             # clients; upstream's chunking is decoded by HTTPResponse.read1().
             self.send_response(upstream.status)
@@ -732,9 +754,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 data = upstream.read1(65536)
                 if not data:
                     break
+                transferred += len(data)
                 self.wfile.write(data)
                 self.wfile.flush()
         except (OSError, TimeoutError, http.client.HTTPException) as exc:
+            outcome = ("client_disconnect" if sent_headers and
+                       isinstance(exc, (BrokenPipeError, ConnectionResetError))
+                       else "upstream_error")
             # Never retry a POST automatically: upstream may have accepted it.
             LOG.warning("upstream failure class=%s method=%s", type(exc).__name__, method)
             if not sent_headers:
@@ -742,6 +768,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.close_connection = True
         finally:
             conn.close()
+            if monitor_ticket is not None:
+                self.server.request_monitor.finish(monitor_ticket, status=upstream_status,
+                    response_bytes=transferred, outcome=outcome)
 
 
 def main():
