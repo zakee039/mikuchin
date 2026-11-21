@@ -1,5 +1,12 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 Native Tool Calling 开始／失败反馈（最新用户决定）
+
+- 选中在线 API 生图模型时，在「聊天生图模型」整行中**隐藏**「运行方式」控件（包括标签，剩余模型控件占满宽度）。本地 Qwen/SDXL 仍显示且持久保存 `runtime_mode`，不修改 LLM 模型 JSON。
+- 在线 API/本地并行模式：图片任务已提交后，通过 Gateway 发送一次 **`image_job_started` 非工具 LLM 短回复**，根据本会话上下文、角色语气自然报备开始，不直接写死文本；`tool_choice=none`、`reasoning_effort=none`，不阻塞后台生图期间普通聊天。原图生成成功后，保留实际图片视觉理解与自然独立完成回复。
+- 供应商任务失败时，Native Job 保留真实脱敏错误，`image_job_failed` 进入 LLM 生成一条**自然解释＋建议＋询问是否重试**的独立回复（仍无工具、无思考）。真实错误代码不应被吞掉；但**只有明确证据才可以说是敏感／色情审核**，不能从用户描述猜测。绝对不能自动重试付费请求；所有错误归因均基于已保存的单个 Job。
+- 回复必须持久化、按 session/Turn 隔离、防重复；有另一条 LLM 正在回答时，后台图像完成或失败回复在其后插入，不覆盖用户当前对话。SQLite 可加列，但旧数据不可删除。详细见 `docs/NATIVE_IMAGE_EVENT_FEEDBACK_2026-11-21.md`。
+
 ## 2026-11-21 SDXL / Animagine XL 单文件模型适配（本次更新）
 
 - 本机实际存在的 SDXL 家族权重是 `E:\LLM\models\SDXL-Base-1.0\sd_xl_base_1.0.safetensors` 与 `E:\LLM\models\Animagine-XL-4.0-Opt\animagine-xl-4.0-opt.safetensors`。没有发现单独命名为 Anything 的 Checkpoint；勿把 Animagine 误命名为 Anything。

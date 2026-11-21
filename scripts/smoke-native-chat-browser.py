@@ -103,6 +103,21 @@ class FakeChatEngine(BaseHTTPRequestHandler):
                 self.send_error(503,"Deliberate mock vision failure")
                 return
             final=chat[-1].get("content") if chat else None
+            if isinstance(final,str) and "ACCEPTED into the worker queue" in final:
+                self.send_json({"choices":[{"finish_reason":"stop","message":{
+                    "role":"assistant","content":
+                    "好的，我按这段对话里说的要求开始重新画图，出来以后再一起看看。"}}]})
+                return
+            if isinstance(final,str) and "previously submitted by the assistant FAILED" in final:
+                details=next((m.get("content","") for m in reversed(chat)
+                              if m.get("role")=="tool"),"")
+                if "moderation_block" in details:
+                    reply="这次 API 明确返回内容审核拦截。可以调整为普通服饰描述后再试，要我提交吗？"
+                else:
+                    reply="这次图片接口调用失败了，错误详情请看任务卡片。要我帮你调整后再试吗？"
+                self.send_json({"choices":[{"finish_reason":"stop","message":{
+                    "role":"assistant","content":reply}}]})
+                return
             picture=bool(isinstance(final,list) and any(
                 p.get("type")=="image_url" and
                 p.get("image_url",{}).get("url","").startswith("data:image/jpeg;base64,")
@@ -254,6 +269,9 @@ def main():
             on_status("Mock: local PNG only; no network or payment")
             if "测试慢任务" in str(request.get("prompt","")):
                 time.sleep(5)
+            if "测试审核报错" in str(request.get("prompt","")):
+                raise image_providers.ImageProviderError(
+                    "image API HTTP 400: content_policy_violation (nudity)")
             folder=directory/"images"/"generated-images"
             folder.mkdir(exist_ok=True)
             name=secrets.token_hex(16)+".png"

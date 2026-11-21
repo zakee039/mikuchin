@@ -18,7 +18,7 @@ test("Native image runtime mode is autosaved, defaults safely to exclusive",()=>
  assert.match(characters,/runtime_mode:"exclusive"/);
  assert.match(characters,/runtime_mode:\$\("global-chat-image-runtime-mode"\)\.value/);
  assert.match(characters,/"global-chat-image-runtime-mode"\]\)/);
- assert.match(characters,/mode\.disabled=!chatImageModelsReady \|\| selected\?\.family==="api"/);
+ assert.match(characters,/mode\.disabled=!chatImageModelsReady \|\| apiMode/);
 });
 test("Full-screen viewer buttons float above image, gallery adds download",()=>{
  const preview=file("chat-image-viewer.css");

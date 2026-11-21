@@ -15,7 +15,7 @@ test("online tool immediately acknowledges and remains free for subsequent user 
  const m=initial();
  client.apply(m,response("running",{job:{id:"img-test",state:"running",phase:"调用图像 API"}}));
  assert.equal(m.native_background,true);
- assert.match(m.text,/已经开始/);
+ assert.match(m.text,/正在准备/);
  assert.equal(m.tools[0].round,null);
  assert.equal(m.tools[0].native_hide_image,true);
  assert.equal(client.unfinished(m),true);

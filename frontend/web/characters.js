@@ -34,9 +34,12 @@ function chatImageDimensions() {
 function syncChatImageControls() {
   const selected = chatImageModel();
   const mode=$("global-chat-image-runtime-mode");
-  mode.disabled=!chatImageModelsReady || selected?.family==="api";
+  const apiMode=selected?.family==="api";
+  $("global-chat-image-runtime-field").hidden=apiMode;
+  $("global-chat-image-runtime-field").parentElement.classList.toggle("chat-image-model-mode-row--api",apiMode);
+  mode.disabled=!chatImageModelsReady || apiMode;
   $("global-chat-image-runtime-note").textContent=selected?.family==="api"
-    ? "在线 API 在服务端执行生图，始终与本地 LLM 独立运行，无需卸载模型。本选项只对本地聊天生图有效。"
+    ? "在线 API 独立生成图片，无需卸载本地语言模型。"
     : "默认互斥切换。选择同时运行需要足够的显存或独立 GPU，聊天期间不会卸载本地 LLM；显存不足可能使任务失败。";
   const max = Number(selected?.max_side || 2048);
   const pack = chatImageSizes.pack(selected);

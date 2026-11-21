@@ -1526,12 +1526,14 @@ function deliverNativeBackgroundCompletions() {
     if(!ident)continue;
     if(!messages.some(m=>m.native_completion_of===ident)){
       const tool=(parent.tools || []).find(t=>t.native_turn_id===ident);
-      if(!tool?.image_file)continue;
-      const visibleTool={...tool,round:1,at:0,
+      const failed=parent.native_completion_type==="failed";
+      if(!failed && !tool?.image_file)continue;
+      const visibleTool=failed?null:{...tool,round:1,at:0,
         native_hide_image:false,native_hide_header:true};
       messages.push({role:"assistant",text:parent.native_completion_text ||
-        "画好了，你看看这张图片！",reasoning:"",time:Date.now(),
-        tools:[visibleTool],native_completion_of:ident});
+        (failed?"这次生图失败了，请查看任务卡片中的错误。":"画好了，你看看这张图片！"),
+        reasoning:"",time:Date.now(),tools:visibleTool?[visibleTool]:null,
+        native_completion_of:ident});
     }
     parent.native_completion_ready=false;
     changed=true;
@@ -1694,6 +1696,7 @@ async function refreshNativeToolTurns() {
       } else {
         const job=turn.job || {};
         const signature=JSON.stringify([turn.state,turn.text,turn.error,
+          turn.start_text,turn.start_state,
           job.id,job.state,job.phase,job.result?.image_file]);
         if (m.native_poll_signature!==signature) {
           m.native_poll_signature=signature;

@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 ID = re.compile(r"[0-9a-f]{32}\Z")
-PENDING = ("queued", "running", "image_done", "vision_running")
+PENDING = ("queued", "running", "image_done", "vision_running", "failure_running")
 FINISHED = ("text_done", "decision_error", "tool_rejected", "unavailable",
             "cancelled", "image_failed", "vision_done", "vision_failed")
 VALID_STATES = frozenset(PENDING + FINISHED + ("deciding", "awaiting_approval"))
@@ -49,6 +49,8 @@ class ChatTurnStore:
                 approval_expires REAL NOT NULL DEFAULT 0,
                 job_id TEXT NOT NULL DEFAULT '',
                 text TEXT NOT NULL DEFAULT '',
+                start_text TEXT NOT NULL DEFAULT '',
+                start_state TEXT NOT NULL DEFAULT 'none',
                 reasoning_text TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT '',
                 created REAL NOT NULL,
@@ -62,7 +64,17 @@ class ChatTurnStore:
             columns={r["name"] for r in db.execute("PRAGMA table_info(turns)")}
             if "reasoning_text" not in columns:
                 db.execute("ALTER TABLE turns ADD COLUMN reasoning_text TEXT NOT NULL DEFAULT ''")
+            if "start_text" not in columns:
+                db.execute("ALTER TABLE turns ADD COLUMN start_text TEXT NOT NULL DEFAULT ''")
+            if "start_state" not in columns:
+                db.execute("ALTER TABLE turns ADD COLUMN start_state TEXT NOT NULL DEFAULT 'none'")
             db.execute("PRAGMA journal_mode=WAL")
+            # Follow-up LLM completions are non-billable, but cannot be
+            # silently rerun on restart or overwrite a newer conversation.
+            db.execute("UPDATE turns SET start_state='failed' WHERE start_state='running'")
+            db.execute("""UPDATE turns SET state='image_failed',
+                text='图片生成失败了；本次错误解释在服务重启前中断，请查看任务卡片。',
+                updated=? WHERE state='failure_running'""", (time.time(),))
             # Deciding was interrupted at service stop: NEVER automatically repeat.
             db.execute("""UPDATE turns SET state='decision_error',
                 error='模型决策在服务重启前中断，请显式发起新请求',updated=?
@@ -143,6 +155,21 @@ class ChatTurnStore:
         return self.transition(session_id, turn_id, "deciding", "text_done",
                                text=text,reasoning_text=reasoning[:140000])
 
+    def begin_start_reply(self, session_id, turn_id):
+        with self.lock,self._db() as db:
+            cursor=db.execute("""UPDATE turns SET start_state='running' WHERE
+                turn_id=? AND session_id=? AND state IN ('running','image_done',
+                    'vision_running','vision_done','vision_failed','failure_running')
+                AND start_state='none'""",(turn_id,session_id))
+            return cursor.rowcount==1
+
+    def finish_start_reply(self,session_id,turn_id,text):
+        with self.lock,self._db() as db:
+            cursor=db.execute("""UPDATE turns SET start_state='done',
+                start_text=? WHERE turn_id=? AND session_id=? AND start_state='running'""",
+                (str(text)[:500],turn_id,session_id))
+            return cursor.rowcount==1
+
     def decision_tool(self, session_id, turn_id, tool, image_request, profile,reasoning=""):
         """Freeze executable choices, produce one-time approval only if paid."""
         public_tool = {k:tool[k] for k in ("name","tool_call_id","arguments")}
@@ -199,6 +226,7 @@ class ChatTurnStore:
         decision=json.loads(row["decision_json"])
         result={"session_id":row["session_id"],"turn_id":row["turn_id"],
                 "state":row["state"],"text":row["text"],
+                "start_text":row["start_text"],"start_state":row["start_state"],
                 "reasoning":row["reasoning_text"],"error":row["error"][:200],
                 "tool":decision if decision else None,
                 "request_id":row["turn_id"] if decision else None,

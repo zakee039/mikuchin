@@ -20,12 +20,14 @@ try:
     from . import gallery
     from .gpu_gate import gpu_turn, GPUUnavailable
     from .chat_streaming import ToolStreamAssembler, StreamIncomplete
+    from .image_tool_feedback import classify_error, FAILURE_INSTRUCTION
 except ImportError:
     from chat_tool_dispatch import TOOL_SCHEMAS, InvalidToolCall, parse_decision, resolve_image_request
     from chat_turns import ChatTurnStore, TurnForbidden
     import gallery
     from gpu_gate import gpu_turn, GPUUnavailable
     from chat_streaming import ToolStreamAssembler, StreamIncomplete
+    from image_tool_feedback import classify_error, FAILURE_INSTRUCTION
 
 LOG = logging.getLogger("mikuchin.gateway.turns")
 TURN_FIELDS = frozenset(("session_id","turn_id","messages","model","reasoning_effort",
@@ -273,9 +275,123 @@ class TurnCoordinator:
                 session,turn,req,edit_previous=decision["name"]=="edit_image",
                 runtime_mode=runtime_mode)
             self.store.transition(session,turn,"queued","running",job_id=job["id"])
+            if self.store.public(session,turn,self.server.image_jobs).get("background"):
+                self._start_announcement(session,turn)
         except (ValueError,OSError,TypeError) as exc:
             self.store.transition(session,turn,"queued","unavailable",
                                   error=self._safe_error(exc))
+
+    @staticmethod
+    def _reply_text(response):
+        choice=(response.get("choices") or [{}])[0]
+        message=choice.get("message") or {}
+        text=message.get("content")
+        if not isinstance(text,str) or not text.strip() or choice.get("finish_reason")=="tool_calls":
+            raise ValueError("Follow-up model did not return plain text")
+        return text.strip()
+
+    def _session_context(self,session,request,limit=30):
+        """Attach only messages settled in THIS same session after its user turn."""
+        context=list(request["messages"][-45:])
+        try:
+            web=self.server.conversations.get(session)["web_messages"]
+            original_user=next((m for m in reversed(request["messages"])
+                                if m.get("role")=="user"),{})
+            body=original_user.get("content","")
+            anchor=body if isinstance(body,str) else " ".join(
+                str(x.get("text","")) for x in body if isinstance(x,dict) and x.get("type")=="text")
+            index=max((i for i,m in enumerate(web) if m.get("role")=="user"
+                       and str(m.get("text") or "")==anchor),default=-1)
+            if index>=0:
+                for message in web[index+1:][-limit:]:
+                    role=message.get("role")
+                    text=str(message.get("text") or "")[:2400]
+                    if role in ("user","assistant") and text:
+                        context.append({"role":role,"content":text})
+        except (AttributeError,KeyError,LookupError,ValueError,TypeError,sqlite3.Error):
+            LOG.debug("Extra session context unavailable for image follow-up")
+        return context
+
+    def _followup(self,session,turn,kind,event,max_tokens):
+        """No tools, no reasoning and no image provider side effects."""
+        row=self.store.get(session,turn)
+        saved=json.loads(row["request_json"])
+        original=json.loads(row["decision_json"])
+        with self._session_decision_lock(session):
+            context=self._session_context(session,saved)
+            context.append({"role":"assistant","content":"",
+                "tool_calls":[{"id":original["tool_call_id"],"type":"function",
+                    "function":{"name":original["name"],"arguments":
+                        json.dumps(original["arguments"],ensure_ascii=False)}}]})
+            context.append({"role":"tool","tool_call_id":original["tool_call_id"],
+                            "content":json.dumps(event,ensure_ascii=False)})
+            guide=(
+                "This image task has been ACCEPTED into the worker queue but has "
+                "NOT completed yet. Given the existing conversation and the "
+                "original user request, write a brief, natural acknowledgement "
+                "in the assistant's normal persona, e.g. that you are adjusting "
+                "the requested detail and will let them know when it is ready. "
+                "Do not claim image edits are already finished. Do not use a "
+                "fixed canned sentence. User can continue chatting while it runs. "
+                "Do not call tools. Keep under 90 Chinese characters."
+                if kind=="started" else FAILURE_INSTRUCTION)
+            context.append({"role":"user","content":guide})
+            response=self._official({"model":saved["model"],"stream":False,
+                "messages":context[-85:],"tool_choice":"none","strata_mcp":False,
+                "reasoning_effort":"none","reasoning_budget_tokens":0,
+                "max_tokens":max_tokens},timeout=180)
+        return self._reply_text(response)
+
+    def _start_announcement(self,session,turn):
+        if not self.store.begin_start_reply(session,turn):
+            return
+        threading.Thread(target=self._announcement,args=(session,turn),
+                         name="native-image-start-reply",daemon=True).start()
+
+    def _announcement(self,session,turn):
+        try:
+            row=self.store.get(session,turn)
+            decision=json.loads(row["decision_json"])
+            event={"type":"image_job_started","job_kind":
+                   "edit" if decision["name"]=="edit_image" else "generate",
+                   "request_summary":str(decision["arguments"].get("instruction") or
+                       decision["arguments"].get("prompt") or "")[:1000],
+                   "status":"accepted_for_execution","can_continue_chat":True}
+            reply=self._followup(session,turn,"started",event,160)
+        except (ValueError,OSError,TimeoutError,http.client.HTTPException,
+                TypeError,KeyError,GPUUnavailable) as exc:
+            LOG.warning("image start reply unavailable type=%s",type(exc).__name__)
+            reply="图片任务已提交，正在处理。"
+        self.store.finish_start_reply(session,turn,reply)
+
+    def _start_failure_reply(self,session,turn,job):
+        raw=job.get("error") or job.get("phase") or ""
+        category,detail=classify_error(raw)
+        summary=detail[:200]
+        if not self.store.transition(session,turn,("queued","running"),
+                    "failure_running",job_id=job["id"],error=summary):
+            return
+        threading.Thread(target=self._failure_reply,
+                         args=(session,turn,category,detail),
+                         name="native-image-failure-reply",daemon=True).start()
+
+    def _failure_reply(self,session,turn,category,detail):
+        try:
+            row=self.store.get(session,turn)
+            decision=json.loads(row["decision_json"])
+            event={"type":"image_job_failed",
+                   "job_kind":"edit" if decision["name"]=="edit_image" else "generate",
+                   "request_summary":str(decision["arguments"].get("instruction") or
+                       decision["arguments"].get("prompt") or "")[:1000],
+                   "error_category":category,
+                   "provider_error_detail":detail,
+                   "retry_automatic":False,"request_already_submitted":True}
+            text=self._followup(session,turn,"failed",event,300)
+        except (ValueError,OSError,TimeoutError,http.client.HTTPException,
+                TypeError,KeyError,GPUUnavailable) as exc:
+            LOG.warning("image failure reply unavailable type=%s",type(exc).__name__)
+            text="这次图片没有生成成功，错误详情见上方任务卡片。我没有自动重新提交，要我帮你调整后再试吗？"
+        self.store.transition(session,turn,"failure_running","image_failed",text=text[:1500])
 
     def approve(self,session,turn,token):
         self.store.accept_approval(session,turn,token)
@@ -320,8 +436,7 @@ class TurnCoordinator:
                                   job_id=job["id"])
             self._start_vision(session,turn)
         elif job.get("state") in ("failed","error","interrupted"):
-            self.store.transition(session,turn,("queued","running"),"image_failed",
-                                  job_id=job["id"],error="图像生成失败；未自动重试")
+            self._start_failure_reply(session,turn,job)
         else:
             self.store.transition(session,turn,"queued","running",job_id=job["id"])
 

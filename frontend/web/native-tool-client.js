@@ -56,6 +56,8 @@
     message.native_tool_finished=terminal.has(turn.state);
     message.native_tool_online=turn.online===true;
     if(turn.background===true)message.native_background=true;
+    if(typeof turn.start_text==="string" && turn.start_text.trim())
+      message.native_start_text=turn.start_text;
     if(typeof turn.reasoning==="string" &&
        turn.reasoning.length>(message.reasoning || "").length)
       message.reasoning=turn.reasoning;
@@ -119,12 +121,18 @@
       t.state="running";t.result=stage(job.phase);
       t.status_label=turn.state==="queued"?"排队中":t.result;
       message.text=message.native_background ?
-        "已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。" : "";
+        (message.native_start_text || "正在准备这次生图任务的回复…") : "";
     } else if(turn.state==="image_done" || turn.state==="vision_running"){
       t.state="running";t.ok=true;t.status_label="正在理解图片";
       t.result="图像已生成，正在识别实际画面…";
       message.text=message.native_background ?
-        "已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。" : "";
+        (message.native_start_text || "正在准备这次生图任务的回复…") : "";
+    } else if(turn.state==="failure_running"){
+      t.state="error";t.ok=false;
+      t.status_label="失败 · 正在解释";
+      t.result=turn.error || "图像任务失败";
+      message.text=message.native_background ?
+        (message.native_start_text || "正在整理这次调用的错误信息…") : "";
     } else if(turn.state==="vision_done" || turn.state==="vision_failed"){
       t.state="done";t.ok=true;
       t.status_label="已完成";
@@ -137,7 +145,7 @@
         message.native_completion_text=turn.text || (turn.state==="vision_failed" ?
           "图片画好了，但这次视觉理解未完成。":"图片画好了，你看看！");
         message.native_completion_ready=true;
-        message.text="已经开始为你生成图片了，完成后我会告诉你。你可以继续聊天。";
+        message.text=message.native_start_text || "图像任务已提交。";
       }else{
         t.round=1;
         message.text=turn.text || (turn.state==="vision_failed" ?
@@ -147,7 +155,14 @@
       t.state="error";t.ok=false;
       t.status_label="失败";
       t.result=turn.error || "该图像工具请求未执行";
-      message.text=turn.text || t.result;
+      if(turn.state==="image_failed" && message.native_background){
+        message.native_completion_type="failed";
+        message.native_completion_text=turn.text || "图像生成失败了，请查看任务卡片。本次没有自动重试。";
+        message.native_completion_ready=true;
+        message.text=message.native_start_text || "图像任务已提交。";
+      }else{
+        message.text=turn.text || t.result;
+      }
     }
     recordStage(t,t.status_label);
     return message;
