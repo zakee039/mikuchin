@@ -1,23 +1,24 @@
 # Safe PREVIEW-ONLY NSIS packaging. It cannot bundle GGUF or Python runtime.
-# Stop only the separate Native scheduled preview after a strict idle check;
-# always restart it even if packaging fails. Never touch main / port 15239.
+# Stop only the Native scheduled launcher after a strict idle check;
+# always restart it even if packaging fails. Never touch old-mixed / port 25239.
 [CmdletBinding()]
 param()
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
-$runtime=Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime'
+$runtime=Join-Path $root 'runtime'
 $python=Join-Path $runtime '.venv\Scripts\python.exe'
 $cli=Join-Path $root 'frontend\launcher\node_modules\.bin\tauri.cmd'
 $task='Mikuchin-Native-Dev-Launch'
 $log=Join-Path $runtime 'native-p3-nsis-build.log'
 if (!(Test-Path $python -PathType Leaf) -or !(Test-Path $cli -PathType Leaf)) { throw 'Native Python or Tauri CLI missing' }
 $repoBranch=(git -C $root branch --show-current).Trim()
-if($repoBranch -ne 'refactor/official-polystrata-gateway'){throw 'Not on the isolated Native development branch'}
+if($repoBranch -ne 'main'){throw 'Expected current Native main branch'}
 $checker=@'
 from pathlib import Path
+import os
 from backend.gateway.image_jobs import ImageJobStore
 from backend.gateway.gpu_gate import read_state
-p=Path(r'E:\LLM\deploy\mikuchin-native-runtime\launcher-user-data')
+p=Path(os.environ['MIKUCHIN_NATIVE_DATA_DIR'])
 s=ImageJobStore(p/'images')
 activity=s.activity()
 with s._db() as db:
@@ -28,17 +29,18 @@ if activity['running'] or lock['busy'] or pending:raise SystemExit(10)
 '@
 Push-Location $root
 try {
+    $env:MIKUCHIN_NATIVE_DATA_DIR=Join-Path $runtime 'launcher-user-data'
     $checker | & $python -B - 2>&1 | ForEach-Object { Write-Host $_ }
     if($LASTEXITCODE -ne 0){throw 'Image jobs or GPU lease busy: installer build cancelled'}
-} finally { Pop-Location }
+} finally { Remove-Item Env:\MIKUCHIN_NATIVE_DATA_DIR -ErrorAction SilentlyContinue; Pop-Location }
 Add-Type -AssemblyName System.Security
 $keyFile=Join-Path $env:LOCALAPPDATA 'MikuchinNativeLauncher\api-key.dpapi'
 $secret=[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($keyFile),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
 try {
     $headers=@{Authorization='Bearer '+[Text.Encoding]::UTF8.GetString($secret)}
-    $health=Invoke-RestMethod 'http://127.0.0.1:15249/health' -Headers $headers -TimeoutSec 8
-    $metrics=Invoke-RestMethod 'http://127.0.0.1:15249/metrics' -Headers $headers -TimeoutSec 8
-    $monitor=Invoke-RestMethod 'http://127.0.0.1:15249/v1/mikuchin/request-monitor' -Headers $headers -TimeoutSec 8
+    $health=Invoke-RestMethod 'http://127.0.0.1:15239/health' -Headers $headers -TimeoutSec 8
+    $metrics=Invoke-RestMethod 'http://127.0.0.1:15239/metrics' -Headers $headers -TimeoutSec 8
+    $monitor=Invoke-RestMethod 'http://127.0.0.1:15239/v1/mikuchin/request-monitor' -Headers $headers -TimeoutSec 8
     if($health.native_gpu.busy -or $health.native_image_jobs.running -gt 0 -or
        $monitor.active -gt 0 -or $metrics.live.state -in @('reading','generating','loading')){
         throw 'Native currently serving user requests: do not interrupt'
@@ -52,7 +54,7 @@ try {
     Stop-ScheduledTask -TaskName $task
     $stopped=$true
     Start-Sleep -Seconds 5
-    $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 15249,15240 -ErrorAction SilentlyContinue)
+    $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 15239,15240 -ErrorAction SilentlyContinue)
     if($listeners.Count -gt 0 -or (Get-Process mikuchin -ErrorAction SilentlyContinue)){
         throw 'Native processes not cleanly stopped; refusing to package over a running EXE'
     }
@@ -71,8 +73,8 @@ try {
 Start-Sleep -Seconds 12
 $proc=Get-Process mikuchin -ErrorAction Stop
 if(-not $proc.Responding){throw 'Native launcher restarted but not responding'}
-$ports=Get-NetTCPConnection -State Listen -LocalPort 15249,15240 -ErrorAction Stop
-if(-not (@($ports.LocalPort) -contains 15249) -or -not (@($ports.LocalPort) -contains 15240)){throw 'Native stack did not come back'}
+$ports=Get-NetTCPConnection -State Listen -LocalPort 15239,15240 -ErrorAction Stop
+if(-not (@($ports.LocalPort) -contains 15239) -or -not (@($ports.LocalPort) -contains 15240)){throw 'Native stack did not come back'}
 $bundles=Get-ChildItem (Join-Path $runtime 'tauri-target\debug\bundle\nsis') -Filter '*.exe' -File -ErrorAction Stop
 $latest=$bundles|Sort-Object LastWriteTime -Descending|Select-Object -First 1
 if(!$latest){throw 'No Native NSIS installer found'}

@@ -1,5 +1,16 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-21 最终本机目录（最高优先级）
+
+用户将最终部署路径统一为：
+- 当前 Native main 及源代码：`E:\LLM\mikuchin`
+- Native 的唯一私有运行环境（.venv、build-cuda86、launcher-user-data、图像引擎、Tauri 构建目录等）：`E:\LLM\mikuchin\runtime`（Git 忽略）
+- 旧版 old-mixed 主工作树：`E:\LLM\mikuchin-old`
+- 旧版 PolyStrata 未提交资料、研究配置/报告恢复包：`E:\LLM\mikuchin-old\_migration-recovery\20261121`
+- 旧同级 `E:\LLM\deploy` 已决定清理；下面历史记录中以此为前缀的路径仅为历史证据，**不得作为未来执行路径**。
+
+新 Native Gateway 15239、官方 PolyStrata 回环 15240、旧版预留端口 25239，PolyStrata 固定 `v0.1.45-poly.10`。模型权重仍归属于 `E:\LLM\models`；保留迁移后的凭据、SQLite 会话/画廊，不重播图像任务。启动器计划任务应使用 `E:\LLM\mikuchin\runtime\tauri-target\debug\mikuchin.exe`。需要改变目录时先检查私有配置 JSON 的绝对路径和 Git linked worktree/submodule 路径，严禁删除旧版 Git 主仓库。
+
 ## 2026-11-21 Native main 正式迁移（当前最高优先级）
 
 用户明确选择**源码主分支切换**：原始 main 的最后提交 `5dde9ac` 与旧版端口改动 `79f9332` 均保存在 `old-mixed`（原始工作树 `E:\LLM\deploy\mikuchin`），新 Native 工作树 `E:\LLM\deploy\mikuchin-native` 作为 **main**。下面历史文档里“Native 不能使用 main/15239、独立 Key/CF Token 不能迁移”只针对切换前开发隔离，现被用户新决定覆盖。

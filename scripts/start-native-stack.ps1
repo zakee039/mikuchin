@@ -9,7 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$runtime = Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime'
+$runtime = Join-Path $root 'runtime'
 $python = Join-Path $runtime '.venv\Scripts\python.exe'
 if (-not (Test-Path $python)) {throw "Native Python runtime missing: $python"}
 if (-not $env:MIKUCHIN_GATEWAY_API_KEY -or $env:MIKUCHIN_GATEWAY_API_KEY.Length -lt 12) {

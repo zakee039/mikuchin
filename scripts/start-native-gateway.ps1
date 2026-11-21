@@ -9,7 +9,7 @@ if (-not $env:MIKUCHIN_GATEWAY_API_KEY -or -not $env:MIKUCHIN_UPSTREAM_API_KEY) 
   throw 'Set MIKUCHIN_GATEWAY_API_KEY and MIKUCHIN_UPSTREAM_API_KEY in this PowerShell session.'
 }
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$runtime=Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime'
+$runtime=Join-Path $root 'runtime'
 $python=Join-Path $runtime '.venv\Scripts\python.exe'
 if(-not(Test-Path $python)){throw "Isolated Python not found: $python"}
 Push-Location $root

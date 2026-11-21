@@ -77,8 +77,8 @@ fn project_root() -> Result<PathBuf, String> {
 fn runtime_root(root: &Path) -> Result<PathBuf, String> {
     if let Some(explicit) = std::env::var_os("MIKUCHIN_NATIVE_RUNTIME_HOME") {
         let runtime = PathBuf::from(explicit);
-        let stable = root.parent().ok_or("Invalid Native tree")?.join("mikuchin");
-        // An explicit override must never recycle the stable main runtime.
+        let stable = root.parent().ok_or("Invalid Native tree")?.join("mikuchin-old");
+        // An explicit override must never recycle the retained old-mixed runtime.
         if runtime.starts_with(stable) {
             return Err("The stable Mikuchin runtime cannot be used by Native".into());
         }
@@ -87,11 +87,9 @@ fn runtime_root(root: &Path) -> Result<PathBuf, String> {
         }
         return Err("MIKUCHIN_NATIVE_RUNTIME_HOME must contain .venv/Scripts/python.exe".into());
     }
-    let parent = root.parent().ok_or("Invalid native worktree path")?;
-    for runtime in [parent.join("mikuchin-native-runtime"), root.join("runtime")] {
-        if runtime != root && runtime.join(".venv/Scripts/python.exe").is_file() {
-            return runtime.canonicalize().map_err(|e| e.to_string());
-        }
+    let runtime = root.join("runtime");
+    if runtime.join(".venv/Scripts/python.exe").is_file() {
+        return runtime.canonicalize().map_err(|e| e.to_string());
     }
     Err("Native Python runtime missing; provide MIKUCHIN_NATIVE_RUNTIME_HOME".into())
 }
@@ -132,8 +130,7 @@ fn validate_spec(spec: &LaunchSpec) -> Result<(), String> {
     if spec.key.len() < 12 {
         return Err("Gateway key is too short".into());
     }
-    if spec.data_dir.starts_with(spec.root.parent().unwrap_or(&spec.root).join("mikuchin"))
-       && !spec.data_dir.starts_with(spec.root.parent().unwrap_or(&spec.root).join("mikuchin-native")) {
+    if spec.data_dir.starts_with(spec.root.parent().unwrap_or(&spec.root).join("mikuchin-old")) {
         return Err("Stable data directory cannot be used by Native".into());
     }
     Ok(())

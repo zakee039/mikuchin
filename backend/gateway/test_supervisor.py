@@ -97,7 +97,12 @@ class SupervisorTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,"25239"):
                     NativeSupervisor(data_dir=d,gateway_port=port,api_key="isolated-test-token")
             with self.assertRaisesRegex(ValueError,"stable Mikuchin"):
-                NativeSupervisor(data_dir=ROOT.parent/"mikuchin"/"chat",api_key="isolated-test-token")
+                NativeSupervisor(data_dir=ROOT.parent/"mikuchin-old"/"chat",api_key="isolated-test-token")
+            # The production data directory is now nested inside the Native
+            # source tree, not inside the archived old-mixed deployment.
+            accepted = NativeSupervisor(data_dir=ROOT/"runtime"/"launcher-user-data",
+                                        api_key="isolated-test-token")
+            self.assertEqual(accepted.data_dir, ROOT/"runtime"/"launcher-user-data")
 
     def test_occupied_port_fails_closed_without_touching_listener(self):
         with tempfile.TemporaryDirectory() as d, socket.socket() as listener:

@@ -3,7 +3,7 @@
 # the dedicated Native runtime, not backend/polystrata.
 [CmdletBinding()]
 param(
-    [string]$RuntimeRoot = 'E:\LLM\deploy\mikuchin-native-runtime',
+    [string]$RuntimeRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'runtime'),
     [string]$ModelsRoot = 'E:\LLM\models',
     [string]$DataDir = '',
     [switch]$Force

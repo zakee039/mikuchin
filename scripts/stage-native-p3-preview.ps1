@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 if(-not $OutputDir){
-    $OutputDir=Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime\p3-preview-artifacts'
+    $OutputDir=Join-Path $root 'runtime\p3-preview-artifacts'
 }
 if(!(Test-Path $Installer -PathType Leaf) -or !(Test-Path $AndroidApk -PathType Leaf)){
     throw 'Both local Native NSIS and isolated Android preview APK must exist'

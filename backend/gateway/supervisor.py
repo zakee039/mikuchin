@@ -70,7 +70,7 @@ class NativeSupervisor:
            gateway_port == upstream_port or STABLE_PORT in (gateway_port, upstream_port):
             raise ValueError("Use separate unprivileged ports; old-mixed 25239 is reserved")
         self.data_dir = Path(data_dir).expanduser().resolve()
-        stable = (ROOT.parent / "mikuchin").resolve()
+        stable = (ROOT.parent / "mikuchin-old").resolve()
         if self.data_dir == stable or stable in self.data_dir.parents:
             raise ValueError("Native runtime must not use the stable Mikuchin data directory")
         if engine not in ("mock", "strata"):

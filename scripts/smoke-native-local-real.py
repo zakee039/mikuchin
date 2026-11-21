@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT.parent / "mikuchin-native-runtime"
+RUNTIME = ROOT / "runtime"
 
 
 def request(key, method, path, payload=None, timeout=10):

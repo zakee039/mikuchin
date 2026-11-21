@@ -3,7 +3,7 @@
 param([string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$runtime = if ($RuntimeRoot) {$RuntimeRoot} else {Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime'}
+$runtime = if ($RuntimeRoot) {$RuntimeRoot} else {Join-Path $root 'runtime'}
 $python = Join-Path $runtime '.venv\Scripts\python.exe'
 if (-not (Test-Path $python)) {throw "Isolated Python not installed: $python"}
 Push-Location $root

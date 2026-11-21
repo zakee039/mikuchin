@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $upstream = Join-Path $root 'backend\polystrata'
-$runtime = if ($RuntimeRoot) {$RuntimeRoot} else {Join-Path (Split-Path $root -Parent) 'mikuchin-native-runtime'}
+$runtime = if ($RuntimeRoot) {$RuntimeRoot} else {Join-Path $root 'runtime'}
 if (-not $Python) {$Python = Join-Path $runtime '.venv\Scripts\python.exe'}
 $logs = Join-Path $runtime 'smoke-logs'
 $smokeData = Join-Path $runtime ('smoke-data-' + [Guid]::NewGuid().ToString('N'))
