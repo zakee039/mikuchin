@@ -160,6 +160,21 @@ class GatewayContract(unittest.TestCase):
         conn.close()
         return result
 
+    def test_health_isolates_broken_image_database(self):
+        """A stuck SQLite WAL must not turn /health into a dropped socket."""
+        import sqlite3
+        with patch.object(self.images, "worker_healthy",
+                          side_effect=sqlite3.OperationalError("locking protocol")):
+            status, payload = self.request("GET", "/health")
+        self.assertEqual(status, 200)
+        state = json.loads(payload)
+        self.assertEqual(state["status"], "degraded")
+        self.assertTrue(state["official_polystrata_reachable"])
+        self.assertIn("image_job_store", state["degraded_components"])
+        self.assertFalse(state["image_worker_ready"])
+        self.assertEqual(state["native_image_jobs"]["phase"], "unknown")
+        self.assertEqual(state["active_inference_requests"], 0)
+
     def test_health_and_native_models_endpoint(self):
         status, data = self.request("GET", "/health")
         self.assertEqual(status, 200)

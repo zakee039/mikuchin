@@ -35,8 +35,8 @@ type Status = {
   host_gpu: Record<string, number> | null;
   supervisor_pid: number | null; children: Record<string, number>;
   supervisor_phase: string; child_restarts: Record<string, number>;
-  last_recovery: {role: string; at: number} | null;
-  gpu_busy: boolean; gpu_phase: string; image_jobs_running: number;
+  last_recovery: {role: string; at: number} | null; health_reason: string;
+  gpu_busy: boolean; gpu_phase: string; image_jobs_running: number | null;
   image_jobs_phase: string; image_worker_ready: boolean; upscaler_ready: boolean;
   log_path: string; data_dir: string;
   settings: NativePrefs; cf_running: boolean; cf_connections: number | null;
@@ -58,7 +58,8 @@ const phases: Record<string, [string, string]> = {
   unloaded: ["空闲卸载", "warn"],
   manual_unloaded: ["手动卸载", "warn"], unloading: ["正在卸载", "warn"],
   reading: ["Prefill", "good"], generating: ["生成中", "good"],
-  degraded: ["服务异常", "bad"], error: ["启动失败", "bad"],
+  degraded: ["服务异常 · 等待安全恢复", "bad"], recovering: ["正在自愈", "warn"],
+  error: ["启动失败", "bad"],
 };
 const handoff: Record<string, string> = {
   unloading: "释放 LLM 显存", generating: "Qwen-Image 推理",
@@ -265,11 +266,12 @@ function nativePage(): string {
       <div class="metric-row"><span>子进程恢复 / Tauri 重启</span><strong>${restarts} / ${s?.restarts || 0}</strong></div>
       <p class="native-hint">守护器状态：${esc(s?.supervisor_phase || "未知")}
         ${s?.last_recovery?.role ? " · 最近恢复：" + esc(s.last_recovery.role) : ""}</p>
+       ${s?.health_reason ? `<p class="native-hint">诊断：${esc(s.health_reason)}</p>` : ""}
     </div>
     <div class="setting-card native-card">
       <div class="native-title"><h3>GPU 与图像任务</h3><small>${s?.gateway_ready ? "实时状态" : "等待 Gateway"}</small></div>
       <div class="metric-row"><span>GPU 占用阶段</span><strong class="${s?.gpu_busy ? "active" : ""}">${s?.gpu_busy ? esc(handoff[s.gpu_phase] || s.gpu_phase) : "空闲"}</strong></div>
-      <div class="metric-row"><span>运行中的图像任务</span><strong>${s?.image_jobs_running || 0} 项</strong></div>
+      <div class="metric-row"><span>运行中的图像任务</span><strong>${s?.image_jobs_running == null ? "未知" : `${s.image_jobs_running} 项`}</strong></div>
       ${s?.image_jobs_running ? `<p class="native-hint">${esc(s.image_jobs_phase)}</p>` : ""}
       <div class="metric-row"><span>Image Worker</span><strong>${s?.image_worker_ready ? "已就绪" : "未就绪"}</strong></div>
       <div class="metric-row"><span>Real-ESRGAN 4×</span><strong>${s?.upscaler_ready ? "已配置" : "尚未配置"}</strong></div>
@@ -325,7 +327,7 @@ function mount() {
     <nav class="tabs" role="tablist">${(Object.keys(names) as Tab[]).map(key =>
       `<button role="tab" class="tab ${tab === key ? "selected" : ""}" data-tab="${key}">${names[key]}</button>`).join("")}</nav>
     <main id="content"></main>
-    <footer><span id="notice">${esc(notice)}</span><span>v0.5.0</span></footer>`;
+    <footer><span id="notice">${esc(notice)}</span><span>v0.5.1</span></footer>`;
   renderBody();
   translateDom(root);
 }
@@ -520,7 +522,7 @@ async function saveIdleTimeout() {
   const minutes=Number(raw);
   if(!raw||!Number.isInteger(minutes)||minutes<0||minutes>1440){mark("请输入 0–1440 分钟");return;}
   if(busy||!status?.settings)return;
-  const safe = !status.image_jobs_running && !status.gpu_busy
+  const safe = status.image_jobs_running === 0 && !status.gpu_busy
     && !(status.request_monitor?.active||0) && !["reading","generating","starting","stopping"].includes(status.phase);
   const wasRunning=status.managed;
   busy=true;

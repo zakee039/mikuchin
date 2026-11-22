@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import signal
@@ -66,6 +67,26 @@ class ImageWorker:
         self.store = ImageJobStore(self.root)
         self.poll = poll
         self.stop = threading.Event()
+        # Filesystem heartbeat survives an SQLite WAL locking failure.
+        # It contains NO job IDs, prompts, keys or provider request data.
+        self.health_path = self.root / "native-worker-health.json"
+        self._health_lock = threading.Lock()
+        self._boot_at = time.time()
+        self._active_count = 0
+        self._poll_errors = 0
+        self._heartbeat_errors = 0
+
+    def _publish_health(self, *, stopped=False):
+        with self._health_lock:
+            state = {"pid": os.getpid(), "started_at": self._boot_at,
+                     "updated": time.time(), "active": self._active_count,
+                     "poll_errors": self._poll_errors,
+                     "heartbeat_errors": self._heartbeat_errors,
+                     "stopped": stopped}
+            self.health_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.health_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(state), encoding="utf-8")
+            os.replace(temporary, self.health_path)
 
     def run_once(self):
         """Synchronous helper retained for deterministic tests."""
@@ -120,8 +141,13 @@ class ImageWorker:
                 while not self.stop.is_set():
                     try:
                         self.store.heartbeat()
+                        self._heartbeat_errors = 0
                     except Exception as exc:
-                        LOG.error("Worker heartbeat failure: %s",type(exc).__name__)
+                        self._heartbeat_errors += 1
+                        if self._heartbeat_errors <= 3 or self._heartbeat_errors % 20 == 0:
+                            LOG.error("Worker heartbeat failure (%d): %s",
+                                      self._heartbeat_errors, type(exc).__name__)
+                    self._publish_health()
                     self.stop.wait(0.6)
 
             heartbeat = threading.Thread(target=heartbeat_loop,daemon=True)
@@ -138,11 +164,17 @@ class ImageWorker:
                     active={}
                     while not self.stop.is_set():
                         self._collect_completed(active)
+                        self._active_count = len(active)
                         try:
                             item=self.store.take_pending(
                                 eligible=lambda req:self._eligible(req,active))
-                        except Exception:
-                            LOG.exception("Native Image Worker unable to claim pending task")
+                            self._poll_errors = 0
+                        except Exception as exc:
+                            self._poll_errors += 1
+                            if self._poll_errors <= 3 or self._poll_errors % 20 == 0:
+                                LOG.error("Native Image Worker queue probe failed (%d): %s",
+                                          self._poll_errors, type(exc).__name__)
+                            self._publish_health()
                             self.stop.wait(self.poll)
                             continue
                         if item is None:
@@ -153,13 +185,20 @@ class ImageWorker:
                         pool=local_pool if lane[0]=="local" else api_pool
                         future=pool.submit(self.store.execute_claimed,ident,request)
                         active[future]=(ident,lane)
+                        self._active_count = len(active)
+                        self._publish_health()
                     # On cooperative shutdown, let already-started jobs
                     # finish; never start new provider calls or reissue work.
                     self._collect_completed(active)
             finally:
                 self.stop.set()
                 heartbeat.join(timeout=3)
-                self.store.worker_offline()
+                self._active_count = 0
+                self._publish_health(stopped=True)
+                try:
+                    self.store.worker_offline()
+                except Exception as exc:
+                    LOG.error("Worker offline status update failed: %s",type(exc).__name__)
                 LOG.info("Native Image Worker stopped")
 
 

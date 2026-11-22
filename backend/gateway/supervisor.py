@@ -8,12 +8,14 @@ port 15239. Crash restarts are bounded; paid tasks are never auto-replayed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import json
 import logging
 import os
 import secrets
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -98,6 +100,12 @@ class NativeSupervisor:
         self.start_time = time.time()
         self.image_store = None
         self.status_file = self.data_dir / "supervisor-status.json"
+        self.health_reason = ""
+        self.health_failures = 0
+        self.health_last_probe = 0.0
+        self.health_recoveries = deque()
+        self.health_retry_after = 0.0
+        self.recovery_quarantined = False  # partial shutdown must not bypass safety gates
 
     def _watch_stdin(self):
         """A parent Launcher or test harness can request STOP without signals."""
@@ -167,7 +175,9 @@ class NativeSupervisor:
                   "children": {role: child.pid for role, child in self.children.items()
                                if child.poll() is None},
                   "child_restarts": dict(self.child_restarts),
-                  "last_recovery": self.last_recovery}
+                  "last_recovery": self.last_recovery,
+                  "health_reason": self.health_reason[:120],
+                  "health_failures": self.health_failures}
         self.data_dir.mkdir(parents=True, exist_ok=True)
         temp = self.status_file.with_suffix(".tmp")
         temp.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
@@ -205,8 +215,161 @@ class NativeSupervisor:
         self._wait_role(role)
         LOG.info("%s is healthy", role)
 
+    def _service_problem(self):
+        """Probe application health, not just child.poll(). Runs outside startup."""
+        response = _health(self.gateway_port, self.api_key)
+        if not response:
+            return "gateway-unresponsive", None
+        if response.get("status") != "ok":
+            names = response.get("degraded_components") or []
+            return "degraded:" + ",".join(str(n)[:40] for n in names[:4]), response
+        if not response.get("official_polystrata_reachable"):
+            return "official-unreachable", response
+        if not response.get("image_worker_ready"):
+            return "worker-unhealthy", response
+        return "", response
+
+    def _worker_idle(self):
+        """Independent freshness+active evidence survives a broken SQLite WAL."""
+        path = self.data_dir / "images" / "native-worker-health.json"
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+            return (not report.get("stopped") and
+                    report.get("started_at", 0) >= self.launch_times["image-worker"] - 1 and
+                    0 <= time.time() - report.get("updated", 0) < 4 and
+                    report.get("active") == 0)
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+    def _safe_to_recover(self, gateway_health):
+        """Fail closed on active/unknown work; NEVER replay a chargeable job."""
+        if read_state(self.data_dir).get("busy"):
+            return False, "gpu-handoff-active"
+        if not self._worker_idle():
+            return False, "worker-active-or-unknown"
+        if gateway_health is not None and gateway_health.get("active_inference_requests", 0) != 0:
+            return False, "inference-active"
+        # A Native Turn can be queued even when the provider has not begun.
+        turns = self.data_dir / "native-chat-turns.sqlite3"
+        if turns.exists():
+            try:
+                with contextlib.closing(sqlite3.connect(turns, timeout=.4)) as db:
+                    row = db.execute("""SELECT count(*) FROM turns
+                        WHERE state IN ('queued','running','image_done','vision_running',
+                                        'failure_running','deciding','awaiting_approval')
+                        OR start_state='running'""").fetchone()
+                    if row[0]:
+                        return False, "native-turn-active"
+            except (sqlite3.Error, OSError):
+                return False, "native-turn-state-unknown"
+        # Query the actual job queue, not only the Worker thread-count.
+        # When WAL locking is broken, *only* a recent independent idle
+        # Worker heartbeat permits a cooperative, non-forced recovery.
+        jobs = self.data_dir / "images" / "native-image-jobs.sqlite3"
+        try:
+            with contextlib.closing(sqlite3.connect(f"{jobs.as_uri()}?mode=ro", uri=True, timeout=.4)) as db:
+                row = db.execute("""SELECT count(*) FROM jobs
+                    WHERE state IN ('queued','working','running')""").fetchone()
+                if row[0]:
+                    return False, "image-jobs-pending"
+        except (sqlite3.Error, OSError):
+            if not self._worker_idle():
+                return False, "image-job-state-unknown"
+        return True, ""
+
+    def _checkpoint_image_jobs(self):
+        """All DB-owning children are stopped. Back up before WAL recovery."""
+        path = self.data_dir / "images" / "native-image-jobs.sqlite3"
+        if not path.is_file():
+            raise RuntimeError("Image task database disappeared during recovery")
+        backup_dir = self.data_dir / "recovery-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / ("image-jobs-health-" + time.strftime("%Y%m%d-%H%M%S") + ".sqlite3")
+        with contextlib.closing(sqlite3.connect(path, timeout=3)) as source:
+            result = source.execute("PRAGMA quick_check").fetchone()
+            if not result or result[0] != "ok":
+                raise RuntimeError("Image database integrity check failed; no automatic replay")
+            with contextlib.closing(sqlite3.connect(backup)) as destination:
+                source.backup(destination, pages=128, sleep=.05)
+            result = source.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if result and result[0]:
+                raise RuntimeError("Image database WAL checkpoint stayed busy")
+        LOG.warning("Image database recovered with SQLite online backup %s", backup.name)
+
+    def _recover_api_stack(self, cause):
+        # Do not restart official PolyStrata or discard its KV cache.
+        # First stop new Gateway submissions, then allow Worker to drain.
+        self.health_reason = cause
+        self._write_status("recovering")
+        for role, grace in (("gateway", 12), ("image-worker", 20)):
+            self._stop_role(role, grace)
+            if self.children[role].poll() is None:
+                raise RuntimeError(role + " did not exit cooperatively; recovery deferred")
+        self._checkpoint_image_jobs()
+        for role in ("image-worker", "gateway"):
+            if self.stop.is_set():
+                raise RuntimeError("Manual stop requested during health recovery")
+            self._start_role(role)
+            self.child_restarts[role] += 1
+        self.last_recovery = {"role": "api-stack-health", "at": time.time()}
+        self.health_reason = ""
+        self.health_failures = 0
+        self._write_status("running")
+
+    def _watch_health(self):
+        if self.recovery_quarantined:
+            return  # database or cooperative-stop failed after partial shutdown
+        if time.monotonic() - self.health_last_probe < 2:
+            return
+        self.health_last_probe = time.monotonic()
+        problem, gateway_health = self._service_problem()
+        if not problem:
+            if self.health_failures or self.health_reason:
+                self.health_failures = 0
+                self.health_reason = ""
+                self._write_status("running")
+            return
+        self.health_failures += 1
+        self.health_reason = problem
+        if self.health_failures < 3:
+            return  # avoid restarting for transient port / DB contention
+        if time.monotonic() < self.health_retry_after:
+            return
+        safe, reason = self._safe_to_recover(gateway_health)
+        if not safe:
+            if self.health_failures == 3 or self.health_failures % 15 == 0:
+                LOG.warning("Health degraded: %s; holding recovery: %s", problem, reason)
+            self.health_reason = problem + ";blocked:" + reason
+            self._write_status("degraded")
+            return
+        now = time.monotonic()
+        while self.health_recoveries and now - self.health_recoveries[0] > 300:
+            self.health_recoveries.popleft()
+        if len(self.health_recoveries) >= 3:
+            self.health_reason = "recovery-rate-limited"
+            self.health_retry_after = now + 60
+            self._write_status("degraded")
+            return
+        self.health_recoveries.append(now)
+        LOG.warning("Health probe failed %d times (%s); recovering idle API stack",
+                    self.health_failures, problem)
+        try:
+            self._recover_api_stack(problem)
+        except (OSError, sqlite3.Error, RuntimeError) as exc:
+            LOG.error("Cooperative recovery failed (%s): %s", type(exc).__name__, str(exc))
+            self.health_reason = "recovery-failed:" + type(exc).__name__
+            # Never allow the crash-only branch to blindly relaunch an
+            # intentionally stopped child after a failed WAL checkpoint.
+            self.recovery_quarantined = any(
+                self.children[role].poll() is not None
+                for role in ("gateway", "image-worker"))
+            self.health_retry_after = time.monotonic() + 20
+            self._write_status("degraded")
+
     def _watch(self):
         while not self.stop.wait(.5):
+            if self.recovery_quarantined:
+                continue  # fail closed; explicit operator intervention required
             for role in self.roles:
                 child = self.children[role]
                 if child.poll() is None:
@@ -239,6 +402,11 @@ class NativeSupervisor:
                 self.child_restarts[role] += 1
                 self.last_recovery = {"role": role, "at": time.time()}
                 self._write_status("running")
+            # All children are still alive, but may be *functionally* dead.
+            # Avoid an unbounded restart loop; recovery requires idle proof.
+            if not self.stop.is_set() and all(
+                    child.poll() is None for child in self.children.values()):
+                self._watch_health()
 
     def _stop_role(self, role, grace):
         child = self.children.get(role)

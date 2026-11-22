@@ -282,11 +282,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     conn.close()
             except (OSError, TimeoutError, http.client.HTTPException, ValueError):
                 reachable = False
-            image_catalog = ((image_providers.catalog(self.server.image_jobs) +
-                              local_images.catalog(self.server.image_jobs)[0])
-                             if self.server.image_jobs is not None else [])
+            image_catalog = []
+            degraded_components = []
+            worker_ready = False
+            image_activity = {"running": None, "drafts": None, "phase": "unknown"}
+            if self.server.image_jobs is not None:
+                try:
+                    image_catalog = (image_providers.catalog(self.server.image_jobs) +
+                                     local_images.catalog(self.server.image_jobs)[0])
+                except Exception:
+                    degraded_components.append("image_catalog")
+                try:
+                    worker_ready = self.server.image_jobs.worker_healthy()
+                    image_activity = self.server.image_jobs.activity()
+                except Exception:
+                    degraded_components.append("image_job_store")
+            if not worker_ready:
+                degraded_components.append("image_worker")
             self._json(200 if reachable else 503, {
-                "status": "ok" if reachable else "degraded",
+                "status": "ok" if reachable and not degraded_components else "degraded",
+                "degraded_components": sorted(set(degraded_components)),
+                # Active inference is separate from the independent image pool.
+                # The Supervisor must not interrupt a streaming reply.
+                "active_inference_requests": self.server.request_monitor.snapshot()["active"],
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
                 "official_polystrata_release": "v0.1.45-poly.10",
                 "model": str(upstream_health.get("model") or "official-polystrata")[:180],
@@ -317,12 +335,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # Pinned official PolyStrata can execute opt-in strata_mcp
                 # tools. GET /mcp remains behind Gateway authentication.
                 "chat_mcp": reachable,
-                "image_worker_ready": bool(self.server.image_jobs and
-                                           self.server.image_jobs.worker_healthy()),
+                "image_worker_ready": worker_ready,
                 "native_gpu": (read_state(self.server.image_jobs.root.parent)
                                if self.server.image_jobs else {"busy": False, "phase": "idle"}),
-                "native_image_jobs": (self.server.image_jobs.activity()
-                                      if self.server.image_jobs else {"running": 0, "drafts": 0, "phase": ""}),
+                "native_image_jobs": image_activity,
                 "native_upscaler_ready": bool(self.server.image_jobs and
                                               local_images.upscaler_ready(self.server.image_jobs)),
             })

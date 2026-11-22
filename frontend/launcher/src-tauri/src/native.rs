@@ -532,9 +532,10 @@ struct NativeStatus {
     supervisor_phase: String,
     child_restarts: Value,
     last_recovery: Value,
+    health_reason: String,
     gpu_busy: bool,
     gpu_phase: String,
-    image_jobs_running: u64,
+    image_jobs_running: Option<u64>,
     image_jobs_phase: String,
     image_worker_ready: bool,
     upscaler_ready: bool,
@@ -726,6 +727,9 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
     } else { "unknown" }.to_string();
     let children = if supervisor_phase == "unknown" { json!({}) }
         else { raw.as_ref().map(|v| v["children"].clone()).unwrap_or(json!({})) };
+    let health_reason = if supervisor_phase == "unknown" { String::new() }
+        else { raw.as_ref().and_then(|r| r["health_reason"].as_str())
+            .unwrap_or("").to_owned() };
     let child_restarts = if supervisor_phase == "unknown" { json!({}) }
         else { raw.as_ref().map(|v| v["child_restarts"].clone()).unwrap_or(json!({})) };
     let last_recovery = if supervisor_phase == "unknown" { json!(null) }
@@ -734,8 +738,8 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         .unwrap_or(false);
     let gpu_phase = health_value.as_ref().and_then(|v| v["native_gpu"]["phase"].as_str())
         .unwrap_or("unknown").to_string();
-    let image_jobs_running = health_value.as_ref().and_then(|v| v["native_image_jobs"]["running"].as_u64())
-        .unwrap_or(0);
+    let image_jobs_running = health_value.as_ref()
+        .and_then(|v| v["native_image_jobs"]["running"].as_u64());
     let image_jobs_phase = health_value.as_ref().and_then(|v| v["native_image_jobs"]["phase"].as_str())
         .unwrap_or("").to_string();
     let image_worker_ready = health_value.as_ref().and_then(|v| v["image_worker_ready"].as_bool())
@@ -744,8 +748,13 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
         .unwrap_or(false);
     let error = if error.is_empty() { spec.as_ref().err().cloned().unwrap_or_default() } else { error };
     let live_state = metrics.as_ref().and_then(|v| v["live"]["state"].as_str());
+    // The Supervisor can be alive while Gateway/Worker is unhealthy.
+    // Distinguish active recovery and persistent degradation from startup.
+    let gateway_degraded = health_value.as_ref().is_some_and(|h| h["status"] == "degraded");
     let phase = if prefs.manual_unloaded && stopping { "unloading" }
         else if prefs.manual_unloaded && !managed && !desired { "manual_unloaded" }
+        else if managed && supervisor_phase == "recovering" { "recovering" }
+        else if managed && (supervisor_phase == "degraded" || gateway_degraded) { "degraded" }
         else { runtime_phase(stopping, managed, gateway_ready,
                              model_loaded, live_state, gpu_busy, desired, !error.is_empty()) };
     let lan_effective = gateway_ready && supervisor_phase != "unknown" && raw.as_ref()
@@ -761,7 +770,7 @@ fn get_status(state: State<'_, AppState>) -> Result<NativeStatus, String> {
             .unwrap_or_else(|| "未配置".into()),
         available_configs: list_native_model_configs().unwrap_or_default(),
         metrics, request_monitor, host_gpu, supervisor_pid: pid, children, supervisor_phase,
-        child_restarts, last_recovery, gpu_busy, gpu_phase,
+        child_restarts, last_recovery, health_reason, gpu_busy, gpu_phase,
         image_jobs_running, image_jobs_phase, image_worker_ready, upscaler_ready,
         log_path: state_dir().join("supervisor.log").to_string_lossy().to_string(),
         data_dir: spec.map(|s| s.data_dir.to_string_lossy().to_string()).unwrap_or_default(),

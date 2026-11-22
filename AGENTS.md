@@ -1,5 +1,12 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-22 Native Health Watchdog（v0.5.1）
+
+- `backend/gateway/supervisor.py` 的自动恢复不再仅靠子进程 `poll()`：Gateway `/health` 的 `degraded` 以及 Worker 独立 JSON 心跳可触发持续健康异常检查。必须连续异常且空闲安全门通过后，才按 Gateway → Worker 顺序发送私有 STOP、备份 SQLite/WAL 后按 Worker → Gateway 启动；官方 PolyStrata 和已有 KV 不重启。
+- 健康状态隔离数据库异常，`/health` 在官方可用时返回 200 + `degraded_components`，不能导致前端卡在「启动中」。启动器需要体现 `recovering`/`degraded`；健康快照不记录 Key、Prompt、任务 ID。
+- **绝不能因为健康恢复重发收费图像请求**。数据库有 `running`/`queued`/`working`、Native Turn 非终态、活跃推理、GPU 忙碌、Worker 活跃或实时状态无法可信判断时，禁止强杀/重启；恢复频率受限。Worker 独立快照仅用于判断在锁故障时是否存在执行中的工作，不能当作数据库内容的替代。
+- 见 `docs/RELEASE_v0.5.1.md`、`backend/gateway/test_supervisor.py` 和 `test_app.py`，版本号的唯一权威仍是 `versions.json`。
+
 ## 2026-11-21 Native API 生图并发调度（最新修复）
 
 - 「API 生图服务」配置的 `concurrency` 是 **单个 API 服务真正同时请求提供商的上限**，取值 1–20。Native 独立 Image Worker 在全局 20 个 API 并行名额内按服务分别限流；不能退回原 `run_once()` 的全局单线程循环，否则即使配置为 5 也永远只能串行。

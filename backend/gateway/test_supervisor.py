@@ -91,6 +91,91 @@ class SupervisorTest(unittest.TestCase):
                     supervisor.stop.set()
                     thread.join(timeout=4)
 
+    def test_recovery_blocks_in_flight_native_turn_and_active_inference(self):
+        from backend.gateway.chat_turns import ChatTurnStore
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            supervisor = NativeSupervisor(data_dir=data, api_key="isolated-test-token")
+            store = ImageJobStore(data / "images")
+            turns = ChatTurnStore(data)
+            # New Worker status file is independent of the jobs SQLite WAL.
+            supervisor.launch_times["image-worker"] = time.time() - .2
+            report = {"pid": 123, "started_at": time.time(), "updated": time.time(),
+                      "active": 0, "stopped": False}
+            (data / "images" / "native-worker-health.json").write_text(json.dumps(report))
+            self.assertFalse(supervisor._safe_to_recover(
+                {"active_inference_requests": 1})[0])
+            with turns._db() as db:
+                db.execute("""INSERT INTO turns(turn_id,session_id,state,request_json,created,updated)
+                    VALUES(?,?,?,?,?,?)""",("a" * 32, "b" * 32,"running","{}",time.time(),time.time()))
+            self.assertEqual(supervisor._safe_to_recover(
+                {"active_inference_requests": 0}), (False, "native-turn-active"))
+            with turns._db() as db:
+                db.execute("UPDATE turns SET state='text_done' WHERE turn_id=?", ("a" * 32,))
+            self.assertTrue(supervisor._safe_to_recover(
+                {"active_inference_requests": 0})[0])
+
+    def test_live_degraded_gateway_recovers_without_restarting_official(self):
+        """Real local mock subprocesses: simulate a stuck-but-alive health API."""
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            upstream, gateway = spare_port(), spare_port()
+            while upstream == gateway: gateway = spare_port()
+            supervisor = NativeSupervisor(data_dir=data, api_key="isolated-test-token",
+                                          upstream_port=upstream, gateway_port=gateway,
+                                          python=sys.executable, startup_timeout=20)
+            normal_probe = supervisor._service_problem
+            def simulated_failure():
+                if not supervisor.child_restarts["gateway"]:
+                    return "degraded:image_job_store", {"active_inference_requests": 0}
+                return normal_probe()
+            supervisor._service_problem = simulated_failure
+            failures = []
+            def run():
+                try: supervisor.run()
+                except Exception as exc: failures.append(repr(exc))
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+            try:
+                started = None
+                deadline = time.monotonic() + 26
+                while time.monotonic() < deadline:
+                    try:
+                        status = json.loads(supervisor.status_file.read_text("utf-8"))
+                    except (OSError, ValueError):
+                        time.sleep(.1); continue
+                    if status.get("phase") == "running" and len(status.get("children",{})) == 3:
+                        started = status; break
+                    time.sleep(.1)
+                self.assertIsNotNone(started, failures)
+                official_pid = started["children"]["official"]
+                old_gateway = started["children"]["gateway"]
+                old_worker = started["children"]["image-worker"]
+                deadline = time.monotonic() + 28
+                recovered = None
+                while time.monotonic() < deadline:
+                    try: status = json.loads(supervisor.status_file.read_text("utf-8"))
+                    except (OSError, ValueError):
+                        time.sleep(.2); continue
+                    if (status.get("phase") == "running" and
+                            (status.get("last_recovery") or {}).get("role") == "api-stack-health"):
+                        recovered = status; break
+                    time.sleep(.2)
+                self.assertIsNotNone(recovered, failures)
+                self.assertEqual(recovered["children"]["official"], official_pid)
+                self.assertNotEqual(recovered["children"]["gateway"], old_gateway)
+                self.assertNotEqual(recovered["children"]["image-worker"], old_worker)
+                result = normal_probe()
+                self.assertEqual(result[0], "", result)
+                self.assertEqual(supervisor.child_restarts["gateway"], 1)
+                self.assertEqual(supervisor.child_restarts["image-worker"], 1)
+                self.assertEqual(supervisor.child_restarts["official"], 0)
+            finally:
+                supervisor.stop.set()
+                thread.join(timeout=28)
+                self.assertFalse(thread.is_alive(), "Safe stop failed")
+            self.assertEqual(failures, [])
+
     def test_rejects_stable_port_and_stable_data(self):
         with tempfile.TemporaryDirectory() as d:
             for port in (25239,):
