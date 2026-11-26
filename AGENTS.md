@@ -1,5 +1,14 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-26 混合聊天 API
+
+- 聊天服务独立于生图服务；配置与密钥由 Gateway 管理（Windows DPAPI），前端不返回 provider key。会话默认本地；在线选择需明确确认数据传输，保存服务 ID 与 revision，旧 Turn 及后续生图回复不得随切换迁移。服务配置变化时停止该旧路由，不回退或重复付费调用。在线后续回复不得读取之后新增的本地消息。支持 OpenAI Chat Completions、配置能力与已有生图工具；上游 PolyStrata 不修改。详见 `docs/NATIVE_CHAT_API_2026-11-26.md`。
+
+## 2026-11-26 本机安全重载入口
+
+- Supervisor 新增独立回环管理端口（见 `supervisor-status.json` 的 `admin_port`），使用 `scripts/native-admin.py eligibility` 或 `reload`。Windows Supervisor 启动时生成独立管理凭据（当前用户 DPAPI 加密、绑定 PID/端口/运行目录，正常停机删除）；CLI 自动使用专用凭据，无需锁屏解锁或手工输入。专用凭据不能访问 Gateway/聊天/生图；仅本机可信调用，不通过公开 Gateway 或 Tunnel 转发，不读取或打印原有用户密钥。首次部署需正常启动器重启。
+- 重载先冻结 Gateway 新 POST、严格复查任务/推理/GPU/Worker/数据库，再由 Supervisor 私有 STOP 与备份机制重载 Gateway 和 Worker。禁止强杀、自动重复收费请求、重启官方引擎或绕过失败安全门。见 `docs/NATIVE_ADMIN_RELOAD_2026-11-26.md`。
+
 ## 2026-11-22 Native Health Watchdog（v0.5.1）
 
 - `backend/gateway/supervisor.py` 的自动恢复不再仅靠子进程 `poll()`：Gateway `/health` 的 `degraded` 以及 Worker 独立 JSON 心跳可触发持续健康异常检查。必须连续异常且空闲安全门通过后，才按 Gateway → Worker 顺序发送私有 STOP、备份 SQLite/WAL 后按 Worker → Gateway 启动；官方 PolyStrata 和已有 KV 不重启。

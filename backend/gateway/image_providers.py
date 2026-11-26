@@ -14,13 +14,16 @@ import os
 import re
 import secrets
 import socket
+import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
 from PIL import Image
+from requests.adapters import HTTPAdapter
 
 _LOCK = threading.RLock()
 _IDENT = re.compile(r"^api-[a-z0-9-]{6,64}$")
@@ -29,7 +32,12 @@ _MAX_IMAGE = 12 * 1024 * 1024
 _MAX_OUTPUT = 20 * 1024 * 1024
 _MAX_API_JSON = 40 * 1024 * 1024  # 20 MB image encoded as base64 plus JSON overhead
 _MAX_REFERENCES = 8
-_CONNECT_TIMEOUT = 15
+_CONNECT_TIMEOUT = 30
+_READ_TIMEOUT = 300
+_QUALITIES = ("default", "auto", "low", "medium", "high")
+_OUTPUT_FORMATS = ("default", "png", "jpeg", "webp")
+_UPLOAD_MODES = ("chunked", "fixed")
+_MULTIPART_CHUNK = 65536
 LOCAL_SIZES = (384, 512, 768, 1024)
 STANDARD_SIZES = (
     (1024, 1024), (1536, 1536), (2048, 2048), (1536, 1024), (1024, 1536),
@@ -113,8 +121,11 @@ def public(entry):
     ) if k in entry} | {"has_key": bool(entry.get("api_key")),
                        "concurrency": entry.get("concurrency", 1),
                        "chat_confirm_each_call": entry.get("chat_confirm_each_call", False),
-                       "timeout_seconds": entry.get("timeout_seconds", 240),
-                       "connect_timeout_seconds": entry.get("connect_timeout_seconds", _CONNECT_TIMEOUT)}
+                       "timeout_seconds": entry.get("timeout_seconds", _READ_TIMEOUT),
+                       "connect_timeout_seconds": entry.get("connect_timeout_seconds", _CONNECT_TIMEOUT),
+                        "quality": entry.get("quality", "medium"),
+                        "output_format": entry.get("output_format", "jpeg"),
+                         "upload_mode": entry.get("upload_mode", "chunked")}
 
 
 def list_services(svc):
@@ -153,10 +164,17 @@ def save_service(svc, payload):
         concurrency = payload.get("concurrency", 1)
         if type(concurrency) is not int or not 1 <= concurrency <= 20:
             raise ImageServiceError("API concurrency must be between 1 and 20")
-        timeout_seconds = payload.get("timeout_seconds", 240)
+        timeout_seconds = payload.get("timeout_seconds", (prev or {}).get("timeout_seconds", _READ_TIMEOUT))
         if type(timeout_seconds) is not int or not 30 <= timeout_seconds <= 1200:
             raise ImageServiceError("API timeout must be between 30 and 1200 seconds")
-        connect_timeout = payload.get("connect_timeout_seconds", _CONNECT_TIMEOUT)
+        connect_timeout = payload.get("connect_timeout_seconds", (prev or {}).get("connect_timeout_seconds", _CONNECT_TIMEOUT))
+        quality = payload.get("quality", (prev or {}).get("quality", "medium"))
+        output_format = payload.get("output_format", (prev or {}).get("output_format", "jpeg"))
+        upload_mode = payload.get("upload_mode", (prev or {}).get("upload_mode", "chunked"))
+        if upload_mode not in _UPLOAD_MODES:
+            raise ImageServiceError("invalid image API upload mode")
+        if quality not in _QUALITIES or output_format not in _OUTPUT_FORMATS:
+            raise ImageServiceError("invalid image API quality or output format")
         if type(connect_timeout) is not int or not 5 <= connect_timeout <= 60:
             raise ImageServiceError("API connection timeout must be between 5 and 60 seconds")
         proxy = payload.get("proxy", False)
@@ -190,6 +208,7 @@ def save_service(svc, payload):
             "concurrency": concurrency,
             "timeout_seconds": timeout_seconds,
             "connect_timeout_seconds": connect_timeout,
+            "quality": quality, "output_format": output_format, "upload_mode": upload_mode,
         }
         entries = [s for s in entries if s.get("id") != ident]
         entries.append(entry)
@@ -322,15 +341,12 @@ def _reference(data_url):
         if not 0 < len(raw) <= _MAX_IMAGE:
             raise ValueError("size")
         with Image.open(io.BytesIO(raw)) as im:
-            if im.format not in ("PNG", "JPEG", "WEBP") or im.width * im.height > 28_000_000:
+            if im.format != {"png":"PNG", "jpeg":"JPEG", "webp":"WEBP"}[m.group(1)] or im.width * im.height > 28_000_000:
                 raise ValueError("format/dimensions")
-            image = im.convert("RGB")
-            output = io.BytesIO()
-            image.save(output, format="PNG")
-        if output.tell() > _MAX_IMAGE:
-            raise ValueError("converted image too large")
-        return output.getvalue()
-    except (ValueError, OSError, base64.binascii.Error) as exc:
+            im.verify()
+        ext = "jpg" if m.group(1) == "jpeg" else m.group(1)
+        return raw, "image/" + m.group(1), ext
+    except (ValueError, OSError, base64.binascii.Error, Image.DecompressionBombError) as exc:
         raise ImageServiceError("invalid reference image") from exc
 
 
@@ -380,8 +396,79 @@ def _png(raw):
         raise ImageProviderError("provider returned an invalid image") from exc
 
 
-def _session(service):
+def _multipart_chunks(params, refs, boundary):
+    """Miku Camera style UTF-8 multipart, streamed as HTTP/1.1 chunks.
+
+    The generator deliberately has no __len__, seek or file size. Requests
+    therefore emits Transfer-Encoding: chunked, with no Content-Length.
+    Each yielded body segment is at most 64 KiB, including large images.
+    No automatic fallback or replay is allowed after submission.
+    """
+    def segments():
+        for name, value in params.items():
+            yield (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode("utf-8")
+        for i, (raw, mime, ext) in enumerate(refs):
+            stem = "photo" if i == 0 else ("reference" if i == 1 else f"reference-{i}")
+            yield (f'--{boundary}\r\nContent-Disposition: form-data; name="image[]"; filename="{stem}.{ext}"\r\nContent-Type: {mime}\r\n\r\n').encode("ascii")
+            yield raw
+            yield b"\r\n"
+        yield f"--{boundary}--\r\n".encode("ascii")
+    for segment in segments():
+        for start in range(0, len(segment), _MULTIPART_CHUNK):
+            yield segment[start:start + _MULTIPART_CHUNK]
+
+
+class _ImageTraceAdapter(HTTPAdapter):
+    """Session-local urllib3 connection hooks; no global patches or extra HTTP calls."""
+
+    def __init__(self, on_event):
+        self._on_event = on_event
+        super().__init__(max_retries=0)
+
+    def _instrument(self, manager):
+        if getattr(manager, "_mikuchin_image_traced", False):
+            return manager
+        notify = self._on_event
+
+        class ConnectionTrace:
+            def connect(self):
+                notify("connecting")
+                super().connect()
+                notify("sending")
+
+            def request(self, method, url, *args, **kwargs):
+                # For HTTPS the pool may have already connected; for HTTP
+                # connect() can happen lazily inside the first socket send.
+                if self.sock is not None:
+                    notify("sending")
+                else:
+                    notify("connecting")
+                super().request(method, url, *args, **kwargs)
+                # Local socket writes completed, not a provider acknowledgement.
+                notify("request_sent")
+
+        manager.pool_classes_by_scheme = {
+            scheme: type("ImageTracePool", (pool,), {
+                "ConnectionCls": type("ImageTraceConnection", (ConnectionTrace, pool.ConnectionCls), {})
+            }) for scheme, pool in manager.pool_classes_by_scheme.items()
+        }
+        manager._mikuchin_image_traced = True
+        return manager
+
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self._instrument(self.poolmanager)
+
+    def proxy_manager_for(self, proxy, **kwargs):
+        # The returned pool classes are route-specific (HTTP CONNECT or SOCKS).
+        return self._instrument(super().proxy_manager_for(proxy, **kwargs))
+
+
+def _session(service, *, on_event=None):
     session = requests.Session()
+    if on_event is not None:
+        for scheme in ("http://", "https://"):
+            session.mount(scheme, _ImageTraceAdapter(on_event))
     session.trust_env = False   # direct means truly direct, without OS HTTP_PROXY
     if service["proxy"]:
         url = service["proxy_url"]
@@ -394,23 +481,35 @@ def _session(service):
     return session
 
 
-def _provider_error(response, payload=None):
-    try:
-        obj = payload if payload is not None else response.json()
-        message = obj.get("error", {}).get("message") if isinstance(obj.get("error"), dict) else obj.get("message")
-    except (ValueError, AttributeError):
-        message = None
-    return f"image API HTTP {response.status_code}: {str(message or response.reason)[:320]}"
+def _safe_error_text(value, *, secret=""):
+    text = str(value or "")
+    if secret:
+        text = text.replace(secret, "[private key]")
+    # Preserve the provider's actual diagnostic, including tool arguments,
+    # prompts and file IDs. Only credential-like values are redacted.
+    text = re.sub(r"(?i)(Bearer\s+)[^\s,;\"']+", r"\1[private key]", text)
+    text = re.sub(r"(?i)([\"']?(?:api[_-]?key|access_token|api_token)[\"']?\s*[:=]\s*[\"']?)[^\s,;\"'&}]+", r"\1[private key]", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}", "[private key]", text)
+    return text
 
 
-def _read_json_response(response, *, on_bytes=None):
-    """Read and bound a streamed API response; never silently accept partial JSON.
+def _provider_error(response, payload=None, *, secret=""):
+    obj = payload if isinstance(payload, dict) else {}
+    error = obj.get("error")
+    info = error if isinstance(error, dict) else {}
+    message = info.get("message") or (error if isinstance(error, str) else None) or obj.get("message") or obj.get("detail")
+    if not message and isinstance(payload, str):
+        message = payload
+    text = _safe_error_text(message or (json.dumps(payload,ensure_ascii=False) if payload else response.reason), secret=secret)
+    extras = []
+    for key in ("type", "code"):
+        value = info.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value):
+            extras.append(f"{key}={value}")
+    return f"image API HTTP {response.status_code}: {text}" + (" (" + ", ".join(extras) + ")" if extras else "")
 
-    A mock response without iter_content keeps compatibility with the existing
-    in-memory API tests. Real requests always use stream=True and this path.
-    """
-    if not callable(getattr(response, "iter_content", None)):
-        return response.json()
+
+def _read_response(response, *, on_bytes=None, limit=_MAX_API_JSON):
     chunks, total = [], 0
     for chunk in response.iter_content(chunk_size=65536):
         if not chunk:
@@ -418,14 +517,41 @@ def _read_json_response(response, *, on_bytes=None):
         total += len(chunk)
         if on_bytes is not None:
             on_bytes(total)
-        if total > _MAX_API_JSON:
-            raise ImageProviderError("image API JSON response exceeds 40 MB")
+        if total > limit:
+            raise ImageProviderError("image API response exceeds size limit")
         chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _read_json_response(response, *, on_bytes=None):
+    if not callable(getattr(response, "iter_content", None)):
+        return response.json()
+    raw = _read_response(response, on_bytes=on_bytes)
     try:
-        return json.loads(b"".join(chunks))
+        return json.loads(raw)
     except (UnicodeDecodeError, ValueError) as exc:
-        raise ImageProviderError(
-            f"image API returned incomplete/invalid JSON ({total} bytes received)") from exc
+        if not response.ok:
+            return raw.decode("utf-8", errors="replace")
+        raise ImageProviderError(f"image API returned incomplete/invalid JSON ({len(raw)} bytes received)") from exc
+
+
+def _image_item(obj):
+    if not isinstance(obj, dict):
+        raise ImageProviderError("provider returned an invalid image response")
+    candidates = []
+    for key in ("data", "images", "image"):
+        value = obj.get(key)
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            candidates.append(value[0])
+        elif isinstance(value, dict):
+            candidates.append(value)
+    candidates.append(obj)
+    for item in candidates:
+        for key in ("b64_json", "base64", "b64", "url", "image_url", "output_url"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return item, key, value
+    raise ImageProviderError("provider returned no recognized image field")
 
 
 def _network_trace(job_id, route, phase, elapsed, *, status=None, received=None, error=None):
@@ -451,7 +577,7 @@ def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
         raise ImageServiceError("image API service not found")
     if not service.get("api_key"):
         raise ImageServiceError("image API key not configured")
-    timeout_seconds = service.get("timeout_seconds", 240)
+    timeout_seconds = service.get("timeout_seconds", _READ_TIMEOUT)
     connect_timeout = service.get("connect_timeout_seconds", _CONNECT_TIMEOUT)
     prompt = req.get("prompt")
     if not isinstance(prompt, str) or not 0 < len(prompt.strip()) <= 16000:
@@ -463,115 +589,158 @@ def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
     if not allowed_image_size(service["sizes"], w, h):
         raise ImageServiceError("size is not available for this API service")
     refs = select_references(req, service["reference_mode"])
-    params = {"model": service["model"], "prompt": prompt, "size": size, "n": 1}
+    params = {"model": service["model"], "prompt": prompt}
+    if service.get("quality", "medium") != "default":
+        params["quality"] = service.get("quality", "medium")
+    params["size"] = size
+    if not refs:
+        params["n"] = 1
+    if service.get("output_format", "jpeg") != "default":
+        params["output_format"] = service.get("output_format", "jpeg")
     if service["negative"] and req.get("negative_prompt"):
         params["negative_prompt"] = req["negative_prompt"]
     if service["seed"] and req.get("seed") not in ("", None):
         params["seed"] = int(req["seed"])
     if service["steps"] and req.get("steps") is not None:
         params["steps"] = int(req["steps"])
-    auth = {"Authorization": "Bearer " + service["api_key"]}
+    auth = {"Authorization": "Bearer " + service["api_key"], "Accept": "application/json, image/*", "Connection": "close"}
     def stage(value):
         if on_status is not None:
-            on_status(value)
+            try:
+                on_status(value)
+            except sqlite3.Error:
+                # UI status is advisory; a transient DB lock must never abort
+                # an already submitted, potentially billed HTTP operation.
+                pass
 
     start = time.monotonic()
     route = "proxy" if service["proxy"] else "direct"
-    phase, received, http_status = "request_headers", 0, None
+    phase, received, http_status = "connecting", 0, None
     def trace(event, *, error=None):
         _network_trace(diagnostic_id, route, event, time.monotonic()-start,
                        status=http_status, received=received, error=error)
 
-    stage("连接 API / 等待响应头")
+    def network_event(event):
+        nonlocal phase
+        # The same session may download an image afterwards. Keep its own
+        # stage and diagnostics instead of relabelling it as a generation POST.
+        if phase.startswith("download_") or phase == "response_body":
+            return
+        if event == phase:
+            return
+        phase = event
+        trace(event)
+        stage({"connecting": "正在建立 API 连接",
+               "sending": "正在发送生图请求",
+               "request_sent": "等待服务商响应"}[event])
+
+    stage("正在建立 API 连接")
     trace("request_start")
     url = service["base_url"] + ("/images/edits" if refs else "/images/generations")
     try:
-        with _session(service) as session:
+        with _session(service, on_event=network_event) as session:
             if refs:
-                files = [("image" if len(refs) == 1 else "image[]",
-                          (f"ref-{i}.png", raw, "image/png")) for i, raw in enumerate(refs)]
-                response = session.post(url, headers=auth, data=params, files=files,
-                                        timeout=(connect_timeout, timeout_seconds), stream=True)
+                upload_mode = service.get("upload_mode", "chunked")
+                trace("upload_" + upload_mode)
+                if upload_mode == "chunked":
+                    boundary = "----MikuCamera" + str(uuid.uuid4())
+                    response = session.post(url, headers={**auth, "Content-Type": f"multipart/form-data; boundary={boundary}"},
+                                            data=_multipart_chunks(params, refs, boundary),
+                                            timeout=(connect_timeout, timeout_seconds), stream=True, allow_redirects=False)
+                else:
+                    files = [("image[]", (f"ref-{i}.{ext}", raw, mime))
+                             for i, (raw, mime, ext) in enumerate(refs)]
+                    response = session.post(url, headers=auth, data=params, files=files,
+                                            timeout=(connect_timeout, timeout_seconds), stream=True, allow_redirects=False)
             else:
                 response = session.post(url, headers={**auth, "Content-Type":"application/json"},
                                         json=params, timeout=(connect_timeout, timeout_seconds),
-                                        stream=True)
+                                        stream=True, allow_redirects=False)
             http_status = getattr(response, "status_code", None)
             trace("response_headers")
             phase = "response_body"
             stage("正在接收 API 响应体")
             try:
+                if 300 <= response.status_code < 400:
+                    raise ImageProviderError(
+                        f"image API HTTP {response.status_code}: redirect refused; "
+                        "configure the final API Base URL to avoid replaying a paid POST")
                 def count_response_bytes(value):
                     nonlocal received
                     received = value
-                obj = _read_json_response(response, on_bytes=count_response_bytes)
-            except ImageProviderError as exc:
-                if not response.ok:
-                    raise ImageProviderError(
-                        f"image API HTTP {response.status_code}: incomplete/invalid response body") from exc
-                raise
+                direct_image = response.ok and getattr(response, "headers", {}).get("Content-Type", "").lower().startswith("image/")
+                if direct_image:
+                    image = _read_response(response, on_bytes=count_response_bytes, limit=_MAX_OUTPUT)
+                    obj = None
+                else:
+                    obj = _read_json_response(response, on_bytes=count_response_bytes)
             finally:
                 if callable(getattr(response, "close", None)):
                     response.close()
             trace("response_body_complete")
             if not response.ok:
-                raise ImageProviderError(_provider_error(response, obj))
-            try:
-                data = obj["data"]
-                item = data[0]
-                if not isinstance(item, dict):
-                    raise TypeError()
-            except (ValueError, KeyError, IndexError, TypeError) as exc:
-                raise ImageProviderError("provider returned an invalid OpenAI Images response") from exc
-            if item.get("b64_json"):
-                try:
-                    image = base64.b64decode(item["b64_json"], validate=True)
-                except (ValueError, base64.binascii.Error) as exc:
-                    raise ImageProviderError("invalid base64 image response") from exc
-            elif item.get("url"):
-                stage("正在下载生成图片")
-                uri = item["url"]
-                if not _is_public_address(uri, service["proxy"]):
-                    raise ImageProviderError("provider returned an unsafe image URL; use base64 response")
-                phase, received, http_status = "download_headers", 0, None
-                trace("download_start")
-                result = session.get(uri, timeout=(connect_timeout,timeout_seconds),
-                                     allow_redirects=False, stream=True)
-                http_status = getattr(result, "status_code", None)
-                trace("download_headers")
-                phase = "download_body"
-                try:
-                    if not result.ok or 300 <= result.status_code < 400:
-                        raise ImageProviderError("could not download provider image")
-                    chunks, total = [], 0
-                    for chunk in result.iter_content(65536):
-                        total += len(chunk)
-                        received = total
-                        if total > _MAX_OUTPUT:
-                            raise ImageProviderError("provider image exceeds 20 MB")
-                        chunks.append(chunk)
-                    image = b"".join(chunks)
-                finally:
-                    result.close()
-                trace("download_complete")
+                raise ImageProviderError(_provider_error(response, obj, secret=service["api_key"]))
+            item = {}
+            if direct_image:
+                pass
             else:
-                raise ImageProviderError("provider returned no b64_json or image URL")
+                item, key, value = _image_item(obj)
+                if key in ("b64_json", "base64", "b64") or value.startswith("data:image/"):
+                    try:
+                        if value.startswith("data:image/"):
+                            if not re.match(r"data:image/(png|jpeg|webp);base64,", value):
+                                raise ValueError("invalid data URL")
+                            value = value.split(",", 1)[1]
+                        image = base64.b64decode(re.sub(r"\s+", "", value), validate=True)
+                    except (ValueError, base64.binascii.Error) as exc:
+                        raise ImageProviderError("invalid base64 image response") from exc
+                else:
+                    uri = value
+                    stage("正在下载生成图片")
+                    if not _is_public_address(uri, service["proxy"]):
+                        raise ImageProviderError("provider returned an unsafe image URL; use base64 response")
+                    phase, received, http_status = "download_headers", 0, None
+                    trace("download_start")
+                    result = session.get(uri, timeout=(connect_timeout,timeout_seconds),
+                                         allow_redirects=False, stream=True)
+                    http_status = getattr(result, "status_code", None)
+                    trace("download_headers")
+                    phase = "download_body"
+                    try:
+                        if not result.ok or 300 <= result.status_code < 400:
+                            raise ImageProviderError("could not download provider image")
+                        chunks, total = [], 0
+                        for chunk in result.iter_content(65536):
+                            total += len(chunk)
+                            received = total
+                            if total > _MAX_OUTPUT:
+                                raise ImageProviderError("provider image exceeds 20 MB")
+                            chunks.append(chunk)
+                        image = b"".join(chunks)
+                    finally:
+                        result.close()
+                    trace("download_complete")
     except requests.ConnectTimeout as exc:
         trace("network_error", error="ConnectTimeout")
         raise ImageProviderError(
             f"API 连接建立超时：实际 {time.monotonic()-start:.1f}s，"
-            f"连接上限 {connect_timeout}s，路线 {route}，阶段 {phase}。"
+            f"连接上限 {connect_timeout}s，路线 {route}。"
             "请求是否到达上游未知，请先核对用量再重试。") from exc
     except requests.ReadTimeout as exc:
         elapsed = time.monotonic() - start
         trace("network_error", error="ReadTimeout")
-        if phase in ("request_headers", "download_headers"):
-            detail = ("尚未收到响应头；可能在 DNS/TCP/TLS 或等待首次响应。"
-                      "不能仅凭 requests.ReadTimeout 判定已等待完整的读取超时。")
+        if phase == "connecting":
+            detail = "尚未确认连接建立（DNS/TCP/TLS 或代理握手）。"
+        elif phase == "sending":
+            detail = "连接已建立，但尚未确认请求写入完成。"
+        elif phase == "request_sent":
+            detail = "本地请求写入完成，但尚未收到响应头；上游是否接收或生成完成未知。"
+        elif phase == "download_headers":
+            detail = "下载图片时尚未收到响应头。"
         else:
             detail = f"响应体接收中断（已收到 {received} 字节）。"
         raise ImageProviderError(
-            f"API 网络超时：实际 {elapsed:.1f}s，阶段 {phase}，路线 {route}；"
+            f"API 网络超时：实际 {elapsed:.1f}s，路线 {route}；"
             f"连接上限 {connect_timeout}s，读取上限 {timeout_seconds}s。{detail}"
             "上游可能仍在处理，勿盲目重试。") from exc
     except requests.RequestException as exc:
@@ -585,7 +754,7 @@ def generate(svc, req, *, ident=None, on_status=None, diagnostic_id=None):
         else:
             explanation = "网络连接异常"
         raise ImageProviderError(
-            f"API {explanation}：实际 {elapsed:.1f}s，阶段 {phase}，路线 {route}，"
+            f"API {explanation}：实际 {elapsed:.1f}s，路线 {route}，"
             f"已接收 {received} 字节；{type(exc).__name__}。"
             "请求是否在上游完成未知，请先核对用量。") from exc
     except ImageProviderError:

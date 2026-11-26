@@ -26,6 +26,7 @@ from pathlib import Path
 from .image_jobs import ImageJobStore
 from .worker import singleton_lock
 from .gpu_gate import read_state
+from .admin_control import ControlServer
 
 
 LOG = logging.getLogger("mikuchin.supervisor")
@@ -106,6 +107,8 @@ class NativeSupervisor:
         self.health_recoveries = deque()
         self.health_retry_after = 0.0
         self.recovery_quarantined = False  # partial shutdown must not bypass safety gates
+        self.admin = None
+        self.admin_thread = None
 
     def _watch_stdin(self):
         """A parent Launcher or test harness can request STOP without signals."""
@@ -177,7 +180,8 @@ class NativeSupervisor:
                   "child_restarts": dict(self.child_restarts),
                   "last_recovery": self.last_recovery,
                   "health_reason": self.health_reason[:120],
-                  "health_failures": self.health_failures}
+                  "health_failures": self.health_failures,
+                  "admin_port": self.admin.server_port if self.admin else None}
         self.data_dir.mkdir(parents=True, exist_ok=True)
         temp = self.status_file.with_suffix(".tmp")
         temp.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
@@ -241,7 +245,7 @@ class NativeSupervisor:
         except (OSError, ValueError, KeyError, TypeError):
             return False
 
-    def _safe_to_recover(self, gateway_health):
+    def _safe_to_recover(self, gateway_health, *, strict=False):
         """Fail closed on active/unknown work; NEVER replay a chargeable job."""
         if read_state(self.data_dir).get("busy"):
             return False, "gpu-handoff-active"
@@ -267,13 +271,20 @@ class NativeSupervisor:
         # Worker heartbeat permits a cooperative, non-forced recovery.
         jobs = self.data_dir / "images" / "native-image-jobs.sqlite3"
         try:
-            with contextlib.closing(sqlite3.connect(f"{jobs.as_uri()}?mode=ro", uri=True, timeout=.4)) as db:
+            # Tauri on Windows passes a verbatim drive path. pathlib.as_uri()
+            # would make its \? prefix a URI authority, which SQLite rejects.
+            # Normalize only the drive prefix, retaining read-only mode.
+            uri_path = jobs
+            raw_path = str(jobs)
+            if os.name == "nt" and raw_path.startswith("\\\\?\\") and len(raw_path)>6 and raw_path[5:7]==":\\":
+                uri_path = Path(raw_path[4:])
+            with contextlib.closing(sqlite3.connect(f"{uri_path.as_uri()}?mode=ro", uri=True, timeout=.4)) as db:
                 row = db.execute("""SELECT count(*) FROM jobs
                     WHERE state IN ('queued','working','running')""").fetchone()
                 if row[0]:
                     return False, "image-jobs-pending"
         except (sqlite3.Error, OSError):
-            if not self._worker_idle():
+            if strict or not self._worker_idle():
                 return False, "image-job-state-unknown"
         return True, ""
 
@@ -315,6 +326,61 @@ class NativeSupervisor:
         self.health_reason = ""
         self.health_failures = 0
         self._write_status("running")
+
+    def _manual_eligibility(self):
+        try:
+            if self.stop.is_set() or self.recovery_quarantined or not all(
+                    role in self.children and self.children[role].poll() is None for role in self.roles):
+                return False, "stack-not-ready"
+            health = _health(self.gateway_port, self.api_key)
+            if not health or health.get("status") != "ok" or health.get("active_mutation_requests") != 0:
+                return False, "gateway-busy-or-unknown"
+            return self._safe_to_recover(health, strict=True)
+        except (OSError, ValueError, sqlite3.Error, RuntimeError):
+            return False, "state-unknown"
+
+    def _set_gateway_drain(self, enabled):
+        conn = http.client.HTTPConnection("127.0.0.1", self.gateway_port, timeout=2)
+        try:
+            conn.request("POST", "/internal/admin/" + ("drain" if enabled else "resume"),
+                         body=b"", headers={"Authorization": "Bearer " + self.upstream_key})
+            response = conn.getresponse()
+            response.read(4096)
+            return response.status == 200
+        except (OSError, http.client.HTTPException):
+            return False
+        finally:
+            conn.close()
+
+    def _manual_reload(self):
+        if not self.admin or not self.admin.claim():
+            return
+        allowed, reason = self._manual_eligibility()
+        if not allowed:
+            self.admin.update("blocked", reason)
+            return
+        if not self._set_gateway_drain(True):
+            self._set_gateway_drain(False)
+            self.admin.update("blocked", "gateway-drain-not-confirmed")
+            return
+        allowed, reason = self._manual_eligibility()
+        if not allowed:
+            self._set_gateway_drain(False)
+            self.admin.update("blocked", reason)
+            return
+        self.admin.update("reloading")
+        try:
+            self._recover_api_stack("manual-admin-reload")
+            self.admin.update("done")
+        except (OSError, sqlite3.Error, RuntimeError) as exc:
+            LOG.error("Manual cooperative reload failed: %s", type(exc).__name__)
+            self.recovery_quarantined = any(self.children[role].poll() is not None
+                                            for role in ("gateway", "image-worker"))
+            if not self.recovery_quarantined:
+                self._set_gateway_drain(False)
+            self.health_reason = "manual-reload-failed:" + type(exc).__name__
+            self._write_status("degraded")
+            self.admin.update("failed", self.health_reason)
 
     def _watch_health(self):
         if self.recovery_quarantined:
@@ -406,6 +472,7 @@ class NativeSupervisor:
             # Avoid an unbounded restart loop; recovery requires idle proof.
             if not self.stop.is_set() and all(
                     child.poll() is None for child in self.children.values()):
+                self._manual_reload()
                 self._watch_health()
 
     def _stop_role(self, role, grace):
@@ -446,11 +513,18 @@ class NativeSupervisor:
             try:
                 for role in self.roles:
                     self._start_role(role)
+                self.admin = ControlServer(self)
+                self.admin_thread = threading.Thread(target=self.admin.serve_forever, daemon=True, name="native-admin")
+                self.admin_thread.start()
                 self._write_status("running")
                 LOG.info("Native stack ready at http://127.0.0.1:%d", self.gateway_port)
                 self._watch()
             finally:
                 self.stop.set()
+                if self.admin:
+                    self.admin.shutdown()
+                    self.admin.server_close()
+                    self.admin = None
                 self._write_status("stopping")
                 for role, seconds in (("gateway", 12), ("image-worker", 300), ("official", 30)):
                     self._stop_role(role, seconds)

@@ -37,6 +37,24 @@
       return {state:"queued",text:"推理引擎暂不可用"};
     return null;
   }
+  function errorText(value){
+    return String(value || "图像任务失败");
+  }
+  function errorLabel(value,category){
+    const raw=errorText(value);
+    // Fallback for persisted chat messages created before error_category.
+    const http=raw.match(/^(?:ImageProviderError: )?image API HTTP (\d{3}):/i);
+    let code=raw.match(/\s\((?:type=[a-z0-9_.-]+, )?code=([a-z0-9_.-]+)\)\s*$/i)?.[1]?.toLowerCase();
+    if(!code && http)code=raw.slice(http[0].length).match(/^\s*([a-z_]+)(?:\s*\([a-z_ -]{1,80}\))?\s*$/i)?.[1]?.toLowerCase();
+    if(!category){
+      if(http && ["content_policy_violation","moderation_block","safety_filter","content_filter","content_filter_violation","responsible_ai_policy_violation"].includes(code))category="moderation_block";
+      else if(http){const n=Number(http[1]);category=n===429?"quota_error":n===401||n===403?"auth_error":n===408||n===504?"timeout":n>=500?"service_unavailable":"unknown_provider_error";}
+      else if(/超时|timed out|timeout/i.test(raw))category="timeout";
+      else if(/网络|network|connection refused|connection reset/i.test(raw))category="network_error";
+    }
+    const labels={moderation_block:"内容审核拒绝",quota_error:"额度或限流",auth_error:"鉴权或权限失败",timeout:"服务响应超时",network_error:"网络连接异常",service_unavailable:"服务暂不可用",invalid_reference_image:"参考图无效",unsupported_edit_mode:"接口或模型不支持",unknown_provider_error:"请求失败（原因未明）"};
+    return labels[category] || "生图失败";
+  }
   function recordStage(tool,label){
     if(!label)return;
     const stages=Array.isArray(tool.phase_history)?tool.phase_history:[];
@@ -130,7 +148,10 @@
     } else if(turn.state==="failure_running"){
       t.state="error";t.ok=false;
       t.status_label="失败 · 正在解释";
-      t.result=turn.error || "图像任务失败";
+      t.result=errorText(turn.error || "图像任务失败");
+      t.error_detail=job.error || t.result;
+      t.error_category=job.error_category;
+      if(job.state==="failed")t.status_label=errorLabel(t.error_detail,t.error_category);
       message.text=message.native_background ?
         (message.native_start_text || "正在整理这次调用的错误信息…") : "";
     } else if(turn.state==="vision_done" || turn.state==="vision_failed"){
@@ -154,7 +175,10 @@
     } else {
       t.state="error";t.ok=false;
       t.status_label="失败";
-      t.result=turn.error || "该图像工具请求未执行";
+      t.result=errorText(turn.error || "该图像工具请求未执行");
+      t.error_detail=job.error || t.result;
+      t.error_category=job.error_category;
+      if(job.state==="failed")t.status_label=errorLabel(t.error_detail,t.error_category);
       if(turn.state==="image_failed" && message.native_background){
         message.native_completion_type="failed";
         message.native_completion_text=turn.text || "图像生成失败了，请查看任务卡片。本次没有自动重试。";
@@ -167,7 +191,7 @@
     recordStage(t,t.status_label);
     return message;
   }
-  const api=Object.freeze({apply,stage,healthStage,
+  const api=Object.freeze({apply,stage,healthStage,errorText,errorLabel,
     unfinished,terminal:is => terminal.has(is),active:is => active.has(is)});
   if(typeof module!=="undefined" && module.exports) module.exports=api;
   if(root) root.MikuchinNativeToolClient=api;

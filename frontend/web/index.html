@@ -7,9 +7,9 @@
 <link rel="icon" href="web/mikuchin-logo.svg?v=1" type="image/svg+xml">
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css?v=20261121-header-indicators">
-<link rel="stylesheet" href="web/app.css?v=20261121-api-image-layout">
+<link rel="stylesheet" href="web/app.css?v=20261126-chat-api">
 <link rel="stylesheet" href="web/mobile.css?v=20261103-2">
-<link rel="stylesheet" href="web/image-api.css?v=20261121-local-model-import">
+<link rel="stylesheet" href="web/image-api.css?v=20261126-error-category">
 <link rel="stylesheet" href="web/gallery.css?v=20261119-instant-swipe">
 <link rel="stylesheet" href="web/chat-image-viewer.css?v=20261121-fullscreen-floating">
 <script>
@@ -82,7 +82,7 @@
     <div class="composer-wrap">
       <form class="st-composer" id="composer">
         <div class="attachments" id="attachments" hidden></div>
-        <textarea id="input" rows="2" placeholder="Ask anything&hellip;" aria-label="Message"></textarea>
+        <textarea id="input" rows="2" enterkeyhint="enter" placeholder="Ask anything&hellip;" aria-label="Message"></textarea>
         <div class="st-composer__bar">
           <button type="button" class="st-btn st-btn--icon" id="attach-btn" title="Attach a text file (or drop it here)" aria-label="Attach a file">
             <svg class="st-icon"><use href="web/sprite.svg#i-attach"/></svg></button>
@@ -99,6 +99,7 @@
             <span id="character-chat-status" hidden aria-live="polite"></span>
             <div class="chat-role-menu" id="chat-role-menu" role="menu" aria-label="选择角色" hidden></div>
           </div>
+          <select class="st-input chat-model-select" id="chat-model-select" aria-label="聊天模型" title="聊天模型" disabled><option value="local">本地模型</option></select>
           <span class="spacer"></span>
           <span class="composer-hint" id="composer-hint"></span>
           <button type="button" class="st-btn st-btn--secondary" id="stop-btn" hidden>
@@ -549,6 +550,13 @@
         </div>
       </div>
 
+      <div class="st-card mk-image-services" id="mk-chat-services">
+        <div class="mk-image-services-head"><span class="card-title">聊天服务</span><button type="button" class="st-btn st-btn--secondary" id="mk-chat-api-add">＋ 添加 API 服务</button></div>
+        <div class="mk-image-model-section-title">本地模型</div>
+        <div class="mk-api-list"><div class="mk-api-item"><div class="mk-api-item-info"><strong id="mk-chat-local-model">PolyStrata</strong><div class="muted small">本地推理</div></div></div></div>
+        <div class="mk-image-model-section-title">API 服务</div><div class="mk-api-list" id="mk-chat-api-list" aria-live="polite"></div>
+        <p class="muted small" id="mk-chat-api-note">选择在线聊天模型时，当前聊天上下文、角色设定与相关附件会发送给对应服务商。</p>
+      </div>
       <div class="st-card mk-image-services">
         <div class="mk-image-services-head"><span class="card-title">生图服务</span>
           <div class="mk-image-service-actions">
@@ -657,6 +665,23 @@
     </div>
   </div>
 </aside>
+<div class="mk-api-backdrop" id="mk-chat-api-backdrop" hidden>
+  <div class="st-card mk-api-dialog" role="dialog" aria-modal="true" aria-labelledby="mk-chat-api-title">
+    <div class="mk-api-heading"><span class="card-title" id="mk-chat-api-title">添加 API 服务</span><button class="st-btn st-btn--secondary" id="mk-chat-api-close" type="button" aria-label="关闭">✕</button></div>
+    <form id="mk-chat-api-form" class="mk-api-form">
+      <div class="mk-api-two"><label class="st-field">服务名称<input class="st-input" id="mk-chat-name" maxlength="80" required></label><label class="st-field">API 类型<select class="st-input" disabled><option>OpenAI Chat Completions</option></select></label></div>
+      <label class="st-field">Base URL<input class="st-input" id="mk-chat-url" required placeholder="https://api.example.com/v1" spellcheck="false"></label>
+      <label class="st-field">API Key<input class="st-input" id="mk-chat-key" type="password" autocomplete="new-password" placeholder="留空保留现有密钥"></label>
+      <div class="st-field mk-api-model-field"><label for="mk-chat-model">Model ID</label><div class="mk-api-model-row"><input class="st-input" id="mk-chat-model" required maxlength="200" spellcheck="false"><button class="st-btn st-btn--secondary" type="button" id="mk-chat-discover">获取模型</button></div><select class="st-input" id="mk-chat-model-list" aria-label="获取到的模型" hidden></select><span class="muted small" id="mk-chat-discover-status" role="status"></span></div>
+      <label class="mk-api-check"><input id="mk-chat-proxy" type="checkbox">通过代理访问</label>
+      <label class="st-field mk-api-proxy-address" id="mk-chat-proxy-wrap" hidden>代理地址<input class="st-input" id="mk-chat-proxy-url" placeholder="http://127.0.0.1:7897"></label>
+      <div class="mk-api-two"><label class="mk-api-check"><input id="mk-chat-stream" type="checkbox" checked>流式输出</label><label class="mk-api-check"><input id="mk-chat-vision" type="checkbox">视觉理解</label><label class="mk-api-check"><input id="mk-chat-tools" type="checkbox">Tool Calling</label><label class="mk-api-check"><input id="mk-chat-reasoning" type="checkbox">思考能力</label></div>
+      <details class="mk-chat-advanced"><summary>高级设置</summary><label class="st-field">最大输出 Token<input class="st-input" id="mk-chat-max-tokens" type="number" min="128" max="65536" placeholder="留空使用服务商默认值"></label></details>
+      <label class="st-field">请求超时（秒）<input class="st-input" id="mk-chat-timeout" type="number" min="30" max="1200" value="240" required></label>
+      <p class="muted small" id="mk-chat-error" role="status"></p><div class="mk-api-heading"><button class="st-btn st-btn--secondary" type="button" id="mk-chat-api-cancel">取消</button><button class="st-btn st-btn--primary" type="submit" id="mk-chat-api-save">保存</button></div>
+    </form>
+  </div>
+</div>
 <div class="mk-api-backdrop" id="mk-api-backdrop" hidden>
   <div class="st-card mk-api-dialog" role="dialog" aria-modal="true" aria-labelledby="mk-api-title">
     <div class="mk-api-heading"><span class="card-title" id="mk-api-title">添加 API 服务</span>
@@ -701,14 +726,23 @@
         <option value="custom">自定义（宽高分别输入，16 的倍数）</option>
         <option value="square">仅 1024 × 1024（兼容旧配置）</option></select></label>
       <div class="mk-api-two">
+        <label class="st-field">生图质量<select class="st-input" id="mk-api-quality">
+          <option value="default">服务商默认</option><option value="auto">自动</option><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></label>
+        <label class="st-field">返回图片格式<select class="st-input" id="mk-api-output-format">
+          <option value="default">服务商默认</option><option value="jpeg" selected>JPEG</option><option value="png">PNG</option><option value="webp">WebP</option></select></label>
+      </div>
+      <label class="st-field">图生图上传方式<select class="st-input" id="mk-api-upload-mode">
+        <option value="chunked" selected>分块上传（Miku Camera 兼容）</option>
+        <option value="fixed">定长上传（Content-Length）</option></select></label>
+      <div class="mk-api-two">
         <label class="st-field">API 并发数
           <input class="st-input" id="mk-api-concurrency" type="number"
             min="1" max="20" step="1" value="1" required></label>
         <label class="st-field">连接 / TLS 超时（秒）
           <input class="st-input" id="mk-api-connect-timeout" type="number"
-            min="5" max="60" step="1" value="15" required></label>
+            min="5" max="60" step="1" value="30" required></label>
         <label class="st-field">生图读取超时（秒）
-          <input class="st-input" id="mk-api-timeout" type="number" min="30" max="1200" step="10" value="240" required></label>
+          <input class="st-input" id="mk-api-timeout" type="number" min="30" max="1200" step="10" value="300" required></label>
       </div>
       <p class="muted small">每个 API 独立设置连接 / TLS 超时和读取超时。高并发可能造成网络拥塞或上游限流；不会自动重试付费请求。</p>
       <p class="muted small">云端请求会向该服务发送提示词及使用的参考图。</p>
@@ -762,24 +796,25 @@
   </div>
 </div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/versions.js?v=0.5.1"></script>
+<script src="web/versions.js?v=0.5.2"></script>
 <script src="web/chat-capabilities.js?v=20261121-no-answer-cap"></script>
-<script src="web/native-tool-client.js?v=20261121-image-followup"></script>
+<script src="web/native-tool-client.js?v=20261126-error-category"></script>
 <script src="web/native-header-status.js?v=20261121-unified-header"></script>
 <script src="web/native-turn-stream.js?v=20261121-native-stream-fix"></script>
-<script src="web/app.js?v=20261121-engine-pin-immediate"></script>
+<script src="web/app.js?v=20261126-chat-api"></script>
+<script src="web/chat-api-settings.js?v=20261126-chat-discovery"></script>
 <script src="web/image-resolution.js?v=20261119-square-1536"></script>
 <script src="web/auth-images.js?v=20261120-secure-image-blob"></script>
 <script src="web/chat-image-viewer.js?v=20261121-readonly"></script>
 <script src="web/reference-normalize.js?v=20261121-reference-normalize"></script>
-<script src="web/image-studio.js?v=20261121-reference-normalize"></script>
+<script src="web/image-studio.js?v=20261126-error-category"></script>
 <script src="web/sessions.js?v=20261121-native-switch-fix"></script>
 <script src="web/characters.js?v=20261121-api-hide-runtime"></script>
-<script src="web/i18n-data.js?v=20261121-stateless-context"></script>
+<script src="web/i18n-data.js?v=20261126-chat-discovery"></script>
 <script src="web/gallery-i18n.js?v=20261119-mobile-viewer"></script>
 <script src="web/i18n.js"></script>
 <script src="web/dropdown.js?v=20261103-v023"></script>
-<script src="web/image-api-settings.js?v=20261121-chat-confirm"></script>
+<script src="web/image-api-settings.js?v=20261126-chunked"></script>
 <script src="web/local-model-settings.js?v=20261121-sdxl-adapter"></script>
 <script src="web/gallery.js?v=20261121-download-button"></script>
 </body>

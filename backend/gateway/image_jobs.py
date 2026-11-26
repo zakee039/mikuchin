@@ -173,6 +173,12 @@ class ImageJobStore:
         start, finish = result.get("started_at"),result.get("finished_at")
         result["elapsed_s"] = round(max(0,(finish or time.time()) - start),1) if start else None
         result["legacy_timer_unknown"] = start is None and result["state"] != "draft"
+        if result["state"] == "failed":
+            try:
+                from .image_tool_feedback import classify_error
+            except ImportError:  # standalone unittest discovery
+                from image_tool_feedback import classify_error
+            result["error_category"] = classify_error(result.get("error"))[0]
         return result
 
     @staticmethod
@@ -709,13 +715,14 @@ class ImageJobStore:
                                   updated=?,finished_at=? WHERE id=?""",
                                (json.dumps(result),time.time(),time.time(),ident))
             except Exception as exc:
-                # Provider exception details may contain URLs with API keys in
-                # their query strings. Keep only a bounded, redacted diagnostic.
-                detail = re.sub(r"(?:https?://|socks5h?://)[^\s'\")]+",
-                                "[private endpoint]", str(exc))
-                detail = re.sub(r"(?i)(?:Bearer\s+|api[_-]?key[=:]\s*)\S+",
-                                "[private key]", detail)
-                message=(type(exc).__name__+": "+detail)[:350]
+                # API adapter already redacts credentials. Keep its diagnostic
+                # intact rather than clipping the upstream tool call or prompt.
+                if isinstance(exc, providers.ImageProviderError):
+                    detail = providers._safe_error_text(str(exc))
+                else:
+                    detail = re.sub(r"(?:https?://|socks5h?://)[^\s'\")]+", "[private endpoint]", str(exc))
+                    detail = providers._safe_error_text(detail)
+                message=type(exc).__name__+": "+detail
                 with self.lock,self._db() as db:
                     db.execute("""UPDATE jobs SET state='failed',phase='任务失败',error=?,
                                   updated=?,finished_at=? WHERE id=?""",

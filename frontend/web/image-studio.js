@@ -626,8 +626,12 @@
     const top = part("div", "img-job-top");
     top.append(part("span", "img-job-state"), part("span", "img-job-meta"),
       part("span", "img-job-timer"));
+    const errorDetails = part("details", "img-job-error-details");
+    errorDetails.hidden = true;
+    const errorSummary = part("summary", "img-job-error-toggle", "查看错误详情");
+    errorDetails.append(errorSummary, part("div", "img-job-error-text"));
     info.append(top, part("div", "img-job-prompt"), part("div", "img-job-phase"),
-      part("div", "img-job-ops"));
+      errorDetails, part("div", "img-job-ops"));
     row.append(info, part("div", "img-job-output", "尚无图片"));
     taskRows.set(job.id, row);
     return row;
@@ -723,7 +727,12 @@
     } catch (error) {toast("error","重试未提交",String(error.message||error),8500);}
   }
 
+  function taskErrorText(value) {
+    return String(value || "");
+  }
+
   async function copyTaskError(message) {
+    message = taskErrorText(message);
     try {
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(message);
       else {
@@ -824,10 +833,26 @@
       const phase = row.querySelector(".img-job-phase");
       const step = Number.isInteger(job.step) && job.steps ?
         ` · ${job.step}/${job.steps} 步` : "";
-      const message = [job.error || job.phase || "等待桌面端处理", step,
-        job.result?.upscale_error ? " · 超分提示：" + job.result.upscale_error : ""].join("");
-      phase.textContent = message;
-      phase.title = message;
+      const errorDetails = row.querySelector(".img-job-error-details");
+      const failed = job.state === "failed";
+      phase.hidden = failed;
+      errorDetails.hidden = !failed;
+      if (failed) {
+        const detail = taskErrorText(job.error || "任务失败");
+        const code = detail.match(/HTTP\s+\d{3}/i)?.[0];
+        const label = window.MikuchinNativeToolClient.errorLabel(detail,job.error_category);
+        errorDetails.querySelector("summary").textContent = `${label}${code ? " · " + code : ""} · 错误详情`;
+        const body = errorDetails.querySelector(".img-job-error-text");
+        if (body.textContent !== detail) body.textContent = detail;
+        phase.textContent = "";
+        phase.removeAttribute("title");
+      } else {
+        errorDetails.open = false;
+        const message = [job.phase || "等待桌面端处理", step,
+          job.result?.upscale_error ? " · 超分提示：" + job.result.upscale_error : ""].join("");
+        phase.textContent = message;
+        phase.title = message;
+      }
       updateTaskActions(row, job);
       const output = row.querySelector(".img-job-output");
       const ids = (job.result?.image_ids || []).filter(validImageId);

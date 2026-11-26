@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.5.1** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.1)
+**主程序 v0.5.2** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.2)
 
-**独立版本：**主程序 `0.5.1` · Windows 启动器 `0.5.1` · Android 客户端 `0.5.1`（versionCode 501）。本次三个组件均重新构建，详见 GitHub Release 资产清单。后续仍允许独立升级，所有版本号统一记录在 versions.json。
+**独立版本：**主程序 `0.5.2` · Windows 启动器 `0.5.2` · Android 客户端 `0.5.2`（versionCode 502）。本次三个组件均重新构建，详见 GitHub Release 资产清单。后续仍允许独立升级，所有版本号统一记录在 versions.json。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -99,7 +99,7 @@ Mikuchin 的模型推理、会话和生成图片保存在运行服务的主机�
   - **不使用 Android `VpnService`**：不占用系统 VPN 槽位，可在系统代理 VPN 运行时使用，但具体路由仍取决于设备与代理配置，无需 Root 权限，也无需安装官方 Tailscale 客户端。
 - **凭据与本地通信保护**：API Key 使用 **Android Keystore（`AES/GCM/NoPadding`）** 加密保存；应用内部以仅绑定 `127.0.0.1` 随机端口的 SOCKS5 和一次性会话 Token 校验的 HTTP 反向代理承载校验、SSE 流式聊天和图片上传。
 
-**升级提醒：** v0.5.1 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+**升级提醒：** v0.5.2 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
 
 #### 7.3 苹果设备访问（iPhone / iPad / Mac）
 

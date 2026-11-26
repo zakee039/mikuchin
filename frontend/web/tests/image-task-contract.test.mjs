@@ -104,3 +104,12 @@ test("failed submission does not delete a failed source or show success",async()
   assert.equal(ctx.taskRecords.has("new-task"),false);
   assert.ok(ctx.calls.some(entry=>entry[0]==="toast"&&entry[1]==="error"));
 });
+
+test("failed tasks use a persistent collapsed details element rather than the phase row",()=>{
+ assert.match(source,/part\("details", "img-job-error-details"\)/);
+ assert.match(source,/phase\.hidden = failed/);
+ assert.match(source,/errorDetails\.hidden = !failed/);
+ const ctx=harness();
+ assert.equal(ctx.taskErrorText("ImageProviderError: API 网络超时，阶段 request_sent，路线 proxy"),"ImageProviderError: API 网络超时，阶段 request_sent，路线 proxy");
+ assert.match(ctx.taskErrorText('HTTP 400: {"prompt":"private","referenced_image_ids":["file_private"]}'),/file_private|"prompt"/);
+});

@@ -17,7 +17,7 @@ from PIL import Image
 try:
     from .chat_tool_dispatch import TOOL_SCHEMAS, InvalidToolCall, parse_decision, resolve_image_request
     from .chat_turns import ChatTurnStore, TurnForbidden
-    from . import gallery
+    from . import gallery, chat_providers
     from .gpu_gate import gpu_turn, GPUUnavailable
     from .chat_streaming import ToolStreamAssembler, StreamIncomplete
     from .image_tool_feedback import classify_error, FAILURE_INSTRUCTION
@@ -25,13 +25,14 @@ except ImportError:
     from chat_tool_dispatch import TOOL_SCHEMAS, InvalidToolCall, parse_decision, resolve_image_request
     from chat_turns import ChatTurnStore, TurnForbidden
     import gallery
+    import chat_providers
     from gpu_gate import gpu_turn, GPUUnavailable
     from chat_streaming import ToolStreamAssembler, StreamIncomplete
     from image_tool_feedback import classify_error, FAILURE_INSTRUCTION
 
 LOG = logging.getLogger("mikuchin.gateway.turns")
 TURN_FIELDS = frozenset(("session_id","turn_id","messages","model","reasoning_effort",
-                         "reasoning_budget_tokens","temperature","top_p","top_k","seed"))
+                         "reasoning_budget_tokens","temperature","top_p","top_k","seed","chat_profile","chat_revision"))
 IMAGE_NAME = re.compile(r"[a-f0-9]{32}\.png\Z")
 
 
@@ -128,6 +129,12 @@ class TurnCoordinator:
                 outcome="completed" if status==200 and result.done
                          else "upstream_error")
 
+    def _chat_complete(self, payload, ref=None, on_delta=None, timeout=240):
+        if ref:
+            return chat_providers.complete(self.store.path.parent,ref,payload,self.server.request_monitor,on_delta)
+        if on_delta is not None:return self._official_stream(payload,on_delta,timeout=timeout)
+        return self._official(payload,timeout=timeout)
+
     def _validate(self, request):
         if not isinstance(request,dict) or set(request)-TURN_FIELDS:
             raise ValueError("Unsupported model-turn request fields")
@@ -186,6 +193,18 @@ class TurnCoordinator:
                 if not isinstance(v,(int,float)) or isinstance(v,bool) or not (-1e8 <= v <= 1e8):
                     raise ValueError("Invalid sampling parameter")
                 payload[item]=v
+        profile=request.get("chat_profile","local")
+        if profile!="local":
+            ref={"id":profile,"revision":request.get("chat_revision")}
+            entry=chat_providers.resolve(self.store.path.parent,ref)
+            payload["model"]=entry["model"]
+            payload.pop("max_tokens",None)
+            if entry.get("max_tokens") is not None:payload["max_tokens"]=entry["max_tokens"]
+            payload["_chat_provider"]=ref
+            if not entry["tools"]:
+                payload.pop("tools",None);payload.pop("tool_choice",None);payload.pop("parallel_tool_calls",None)
+            # Reject unsupported attachments before persisting or calling any provider.
+            chat_providers._wire_payload(entry,payload)
         return session,turn,payload
 
     def submit(self, request, *, on_delta=None):
@@ -194,13 +213,16 @@ class TurnCoordinator:
             return self.store.public(session,turn,self.server.image_jobs)
         try:
             with self._session_decision_lock(session):
-                result=(self._official_stream(payload,on_delta) if on_delta is not None
-                        else self._official(payload))
+                ref=payload.get("_chat_provider")
+                result=self._chat_complete(payload,ref,on_delta) if ref else (
+                    self._official_stream(payload,on_delta) if on_delta is not None else self._official(payload))
             # The user may have cancelled while the official model was
             # computing. Its answer must then be discarded, never dispatched.
             if self.store.get(session,turn)["state"]!="deciding":
                 return self.store.public(session,turn,self.server.image_jobs)
             decision=parse_decision(result)
+            if payload.get("_chat_provider") and decision["kind"]!="text" and not payload.get("tools"):
+                raise InvalidToolCall("当前聊天 API 未启用工具调用")
             message=result.get("choices",[{}])[0].get("message") or {}
             reasoning=message.get("reasoning_content") or ""
             if not isinstance(reasoning,str):reasoning=""
@@ -254,6 +276,7 @@ class TurnCoordinator:
         if isinstance(exc,GPUUnavailable): return "GPU 正忙于图像任务，未执行本次模型决策"
         if isinstance(exc,TimeoutError): return "模型决策超时；未创建图片任务"
         if isinstance(exc,InvalidToolCall): return str(exc)
+        if isinstance(exc,chat_providers.ChatProviderError): return str(exc)[:160]
         if isinstance(exc,ValueError):
             msg=str(exc)
             if any(s in msg for s in ("全局","生图","图像","model","Model","Official","Worker")):
@@ -293,6 +316,7 @@ class TurnCoordinator:
     def _session_context(self,session,request,limit=30):
         """Attach only messages settled in THIS same session after its user turn."""
         context=list(request["messages"][-45:])
+        if request.get("_chat_provider"):return context
         try:
             web=self.server.conversations.get(session)["web_messages"]
             original_user=next((m for m in reversed(request["messages"])
@@ -336,10 +360,10 @@ class TurnCoordinator:
                 "Do not call tools. Keep under 90 Chinese characters."
                 if kind=="started" else FAILURE_INSTRUCTION)
             context.append({"role":"user","content":guide})
-            response=self._official({"model":saved["model"],"stream":False,
+            response=self._chat_complete({"model":saved["model"],"stream":False,
                 "messages":context[-85:],"tool_choice":"none","strata_mcp":False,
                 "reasoning_effort":"none","reasoning_budget_tokens":0,
-                "max_tokens":max_tokens},timeout=180)
+                "max_tokens":max_tokens},saved.get("_chat_provider"),timeout=180)
         return self._reply_text(response)
 
     def _start_announcement(self,session,turn):
@@ -476,6 +500,10 @@ class TurnCoordinator:
             image="data:image/jpeg;base64,"+base64.b64encode(out.getvalue()).decode("ascii")
             saved=json.loads(row["request_json"])
             original=json.loads(row["decision_json"])
+            ref=saved.get("_chat_provider")
+            if ref and not chat_providers.resolve(self.store.path.parent,ref)["vision"]:
+                self.store.transition(session,turn,"vision_running","vision_done",text="图片已生成。当前聊天模型未启用视觉理解，请直接查看图片。")
+                return
             context=list(saved["messages"][-40:])
             context.append({"role":"assistant","content":"",
                 "tool_calls":[{"id":original["tool_call_id"],"type":"function",
@@ -487,7 +515,7 @@ class TurnCoordinator:
             # Then load the freshest settled messages before visual feedback.
             with self._session_decision_lock(session):
                 try:
-                    web=self.server.conversations.get(session)["web_messages"]
+                    web=[] if ref else self.server.conversations.get(session)["web_messages"]
                     original_user=next((m for m in reversed(saved["messages"])
                                         if m.get("role")=="user"),{})
                     body=original_user.get("content","")
@@ -516,10 +544,10 @@ class TurnCoordinator:
                         "without falsely claiming those changes were applied. Avoid generic flattery, "
                         "invisible details, and new tool calls. Keep it brief, up to 150 Chinese chars.")},
                     {"type":"image_url","image_url":{"url":image}}]})
-                response=self._official({"model":saved["model"],"stream":False,
+                response=self._chat_complete({"model":saved["model"],"stream":False,
                     "messages":context[-85:],"tool_choice":"none","strata_mcp":False,
                     "reasoning_effort":"none","reasoning_budget_tokens":0,
-                    "max_tokens":256},timeout=180)
+                    "max_tokens":256},ref,timeout=180)
             choice=(response.get("choices") or [{}])[0]
             text=(choice.get("message") or {}).get("content")
             if not isinstance(text,str) or not text.strip() or choice.get("finish_reason")=="tool_calls":

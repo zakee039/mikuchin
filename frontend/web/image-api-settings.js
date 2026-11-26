@@ -45,8 +45,8 @@
       meta.className = "muted small";
       meta.textContent = item.model + (item.proxy ? " · 代理" : " · 直连") +
         " · 并发 " + (item.concurrency || 1) +
-        " · 连接 " + (item.connect_timeout_seconds || 15) + "s" +
-        " / 读取 " + (item.timeout_seconds || 240) + "s" +
+        " · 连接 " + (item.connect_timeout_seconds || 30) + "s" +
+        " / 读取 " + (item.timeout_seconds || 300) + "s" +
         (item.has_key ? "" : " · 未配置密钥");
       detail.append(name, meta);
       const edit = document.createElement("button");
@@ -94,9 +94,12 @@
     get("mk-api-steps").checked = !!item?.steps;
     get("mk-api-chat-confirm").checked = item?.chat_confirm_each_call === true;
     get("mk-api-sizes").value = item?.sizes || "standard";
+    get("mk-api-quality").value = item?.quality || "medium";
+    get("mk-api-output-format").value = item?.output_format || "jpeg";
+    get("mk-api-upload-mode").value = item?.upload_mode || "chunked";
     get("mk-api-concurrency").value = String(item?.concurrency || 1);
-    get("mk-api-connect-timeout").value = String(item?.connect_timeout_seconds || 15);
-    get("mk-api-timeout").value = String(item?.timeout_seconds || 240);
+    get("mk-api-connect-timeout").value = String(item?.connect_timeout_seconds || 30);
+    get("mk-api-timeout").value = String(item?.timeout_seconds || 300);
     for (const radio of document.querySelectorAll('input[name="mk-api-ref"]'))
       radio.checked = radio.value === (item?.reference_mode || "multi");
     get("mk-api-backdrop").hidden = false;
@@ -230,6 +233,9 @@
       seed: get("mk-api-seed").checked, steps: get("mk-api-steps").checked,
       chat_confirm_each_call: get("mk-api-chat-confirm").checked,
       sizes: get("mk-api-sizes").value,
+      quality: get("mk-api-quality").value,
+      output_format: get("mk-api-output-format").value,
+      upload_mode: get("mk-api-upload-mode").value,
       concurrency: Number(get("mk-api-concurrency").value),
       connect_timeout_seconds: Number(get("mk-api-connect-timeout").value),
       timeout_seconds: Number(get("mk-api-timeout").value),

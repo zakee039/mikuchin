@@ -89,3 +89,20 @@ test("running image tool displays Status, never Error while generating",()=>{
  assert.match(app,/t\.state === "running" \|\| t\.state === "writing" \? "Status"/);
  assert.match(app,/t\.arguments == null \? "" : JSON\.stringify\(t\.arguments/);
 });
+
+test("native image error details preserve raw diagnostics",()=>{
+ assert.equal(client.errorText("ImageProviderError: API 网络超时，阶段 request_sent，路线 proxy"),"ImageProviderError: API 网络超时，阶段 request_sent，路线 proxy");
+ const error=client.errorText('ImageProviderError: image API HTTP 400: {"referenced_image_ids":["file_private"],"prompt":"private"}');
+ assert.match(error,/HTTP 400/);assert.match(error,/file_private|"prompt"/);
+ assert.match(app,/!nativeFailed && Array\.isArray\(t\.phase_history\)/);
+ assert.match(app,/查看错误详情/);
+});
+
+ test("policy suffix is distinct from ordinary HTTP 400 or transport failures",()=>{
+   const raw="ImageProviderError: image API HTTP 400: "+"prompt ".repeat(1000)+" (type=invalid_request_error, code=content_policy_violation)";
+   assert.equal(client.errorLabel(raw),"内容审核拒绝");
+   assert.equal(client.errorLabel("image API HTTP 400: echoed nsfw prompt"),"请求失败（原因未明）");
+   assert.equal(client.errorLabel("ImageProviderError: API 网络超时"),"服务响应超时");
+   assert.equal(client.errorLabel("image API HTTP 503: unavailable"),"服务暂不可用");
+   assert.equal(client.errorText(raw),raw);
+ });

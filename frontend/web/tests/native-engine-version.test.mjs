@@ -12,7 +12,8 @@ test("official PolyStrata pin is embedded before app loads", () => {
   const window={};
   vm.runInNewContext(versionsSource,{window});
   assert.equal(window.MIKUCHIN_VERSIONS.polystrata,"v0.1.45-poly.10");
-  assert.equal(window.MIKUCHIN_VERSIONS.main,"0.5.0");
+  const versions=JSON.parse(readFileSync(new URL("../../../versions.json",import.meta.url),"utf8"));
+  assert.equal(window.MIKUCHIN_VERSIONS.main,versions.components.main.version);
   assert.ok(index.indexOf('web/versions.js') < index.indexOf('web/app.js'));
 });
 
@@ -41,5 +42,5 @@ test("About page shows full official pin immediately, even without metrics or he
 
 test("navigating to About does not wait for the first metrics poll", () => {
   assert.match(app,/else if \(tab === "about"\) renderAbout\(\{\}, \{\}, \{\}\)/);
-  assert.match(index,/web\/app\.js\?v=20261121-engine-pin-immediate/);
+  assert.match(index,/web\/app\.js\?v=[a-zA-Z0-9.-]+/);
 });

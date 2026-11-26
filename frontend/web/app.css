@@ -494,3 +494,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .img-actions .composer-hint{flex:1 1 260px}
 @media(max-width:760px){.img-prompt-pair{grid-template-columns:1fr}.img-row--primary,.img-row--secondary{grid-template-columns:1fr 1fr}.img-row .st-field{max-width:none}}
 @media(max-width:520px){.img-row--primary,.img-row--secondary{grid-template-columns:1fr}}
+
+/* Independent chat model picker; keep the mobile composer compact. */
+.chat-model-select{width:auto;min-width:0;max-width:155px;height:36px;font-size:var(--st-fs-xs);padding:0 8px;color:var(--st-ink);}
+@media(max-width:720px){.chat-model-select{max-width:105px;height:32px;padding:0 4px;font-size:11px;}.st-composer__bar{flex-wrap:wrap;}}

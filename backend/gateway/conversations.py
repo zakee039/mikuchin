@@ -105,6 +105,11 @@ class ConversationStore:
                 json_value TEXT NOT NULL
             );
             """)
+            columns={c[1] for c in db.execute("PRAGMA table_info(conversations)")}
+            if "chat_revision" not in columns:
+                db.execute("ALTER TABLE conversations ADD COLUMN chat_revision TEXT NOT NULL DEFAULT ''")
+            if "chat_profile" not in columns:
+                db.execute("ALTER TABLE conversations ADD COLUMN chat_profile TEXT NOT NULL DEFAULT 'local'")
             if version == 0:
                 db.execute("PRAGMA user_version=1")
             db.execute("PRAGMA journal_mode=WAL")
@@ -134,6 +139,8 @@ class ConversationStore:
         }
         if full:
             result["sampling"] = json.loads(row["sampling"])
+            result["chat_profile"] = row["chat_profile"]
+            result["chat_revision"] = row["chat_revision"]
             result["web_messages"] = json.loads(row["web_messages"])
         return result
 
@@ -193,15 +200,27 @@ class ConversationStore:
             field, value = "pinned", int(value)
         elif action == "sampling":
             field, value = "sampling", _json(valid_sampling(request.get("sampling")))
+        elif action == "chat_profile":
+            value=request.get("chat_profile")
+            if not isinstance(value,str) or not re.fullmatch(r"local|chat-api-[a-f0-9]{16}",value):
+                raise ValueError("Invalid chat profile")
+            revision=request.get("chat_revision", "")
+            if value=="local":revision=""
+            elif not isinstance(revision,str) or not re.fullmatch(r"[a-f0-9]{24}",revision):
+                raise ValueError("Invalid chat profile revision")
+            field="chat_profile"
         else:
             raise ValueError("unknown conversation action")
         now = time.time()
         with self._db() as db:
-            if action == "sampling":
+            if action in ("sampling","chat_profile"):
                 db.execute("""INSERT OR IGNORE INTO conversations(id,title,created,updated)
                               VALUES(?,?,?,?)""", (ident, "New chat", now, now))
-            cursor = db.execute(f"UPDATE conversations SET {field}=?,updated=? WHERE id=?",
-                                (value, now, ident))
+            if action=="chat_profile":
+                cursor=db.execute("UPDATE conversations SET chat_profile=?,chat_revision=?,updated=? WHERE id=?",(value,revision,now,ident))
+            else:
+                cursor = db.execute(f"UPDATE conversations SET {field}=?,updated=? WHERE id=?",
+                                    (value, now, ident))
             if cursor.rowcount != 1:
                 raise MissingConversation("conversation not found")
         return self.get(ident)

@@ -102,7 +102,7 @@ function headers(json = false) {
   return h;
 }
 $("api-key").value = store.get("apikey", "");
-$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); void loadHealth(); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); };
+$("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); void loadHealth(); enableServerSessions(); window.polyCharactersLoad?.(); window.MikuchinImageStudio?.refresh(); window.MikuchinChatApi?.refresh(); };
 
 let health = {model: "strata", images: false, max_context: 0};
 // Chat image generation is routed through authenticated ImageJobStore tasks.
@@ -116,6 +116,7 @@ async function loadHealth() {
     $("chat-empty-sub").dataset.model = health.model;
     const tail = window.MikuchinI18n?.translate("runs on this PC. Nothing leaves it.") || "runs on this PC. Nothing leaves it.";
     $("chat-empty-sub").textContent = `${health.model} ${tail}`;
+    window.MikuchinChatApi?.refresh();
     $("tab-btn-images").hidden = !health.image_generation;
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
@@ -158,7 +159,7 @@ $("model-select").onchange = async () => {
   }
   messages = [];
   settings = {...globalSampling};
-  if (sessionV1) { sessionId = makeSessionId(); store.set("session-id", sessionId); }
+  if (sessionV1) { sessionId = makeSessionId(); chatProfile = "local"; chatRevision=""; window.MikuchinChatApi?.render(); store.set("session-id", sessionId); }
   saveChat();
   renderChat();
   toast("success", `${name} is loaded`, "A new chat was started.");
@@ -669,6 +670,7 @@ const makeSessionId = () => {
   crypto.getRandomValues(bytes);
   return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
 };
+let chatProfile = "local", chatRevision = "";
 let sessionId = store.get("session-id", ""); // purely a pointer to a server-side conversation
 let sessionV1 = false;
 let sessionSaveChain = Promise.resolve();
@@ -706,6 +708,8 @@ async function loadServerChat(id) {
       (Array.isArray(m.content) ? m.content.filter((p) => p.type === "text").map((p) => p.text).join("\n") : ""),
       time: Date.now()}));
   sessionId = id;
+  chatProfile = saved.chat_profile || "local"; chatRevision=saved.chat_revision||"";
+  window.MikuchinChatApi?.render();
   settings = {...DEFAULTS, ...(saved.sampling || {})};
   store.set("session-id", id);
   store.set("chat", safeChat()); // do not put base64 images in browser storage
@@ -745,12 +749,13 @@ async function enableServerSessions() {
     } else if (!messages.length && list.length) {
       await loadServerChat(list[0].id);
     } else if (!list.length || !sessionId) {
-      sessionId = makeSessionId();
+      sessionId = makeSessionId(); chatProfile = "local"; chatRevision=""; window.MikuchinChatApi?.render();
       store.set("session-id", sessionId);
       await window.polyCharacterNewSession?.();
     }
     await refreshSessionPicker();
     window.polyCharacterRefresh?.();
+    window.MikuchinChatApi?.render();
   } catch (e) {
     console.warn("Server chat history unavailable; keeping browser fallback", e);
   }
@@ -808,7 +813,7 @@ function swipeInit(m) {
   }
 }
 function swipeSnapshot(m) {
-  return {text: m.text || "", reasoning: m.reasoning || "", tools: m.tools || null, meta: m.meta || null};
+  return {text: m.text || "", reasoning: m.reasoning || "", tools: m.tools || null, meta: m.meta || null, chat_model: m.chat_model || null};
 }
 function swipeSave(m) {
   swipeInit(m);
@@ -817,7 +822,7 @@ function swipeSave(m) {
 function swipeLoad(m) {
   swipeInit(m);
   const s = m.swipes[m.swipeIndex] || {};
-  m.text = s.text || ""; m.reasoning = s.reasoning || ""; m.tools = s.tools || null; m.meta = s.meta || null;
+  m.text = s.text || ""; m.reasoning = s.reasoning || ""; m.tools = s.tools || null; m.meta = s.meta || null; m.chat_model=s.chat_model||null;
   m.thinkSecs = null; m.stopped = false; m.error = null; m.limit = null;
 }
 
@@ -939,7 +944,8 @@ async function streamInto(m, el, signal) {
 // Regenerates the answer at messages[i]: keeps the previous one as a variant, discards any variants after
 // the current one, streams a new answer into the same message. On failure the previous answer is restored.
 async function regenerateMessage(i) {
-  if (busy) { toast("warn", "Still writing", "Stop the answer first."); return; }
+  if (busy || window.MikuchinChatApi?.changing()) { toast("warn", "Still writing", "Stop the answer first."); return; }
+  if(chatProfile!=="local" && (!window.MikuchinChatApi?.selected() || window.MikuchinChatApi.selected().revision!==chatRevision)){toast("warn","聊天 API 服务不可用","请重新选择并确认聊天模型");return;}
   const m = messages[i];
   if (!m || m.role !== "assistant") return;
   const el = $("chat").querySelector(`.st-msg[data-i="${i}"]`);
@@ -961,7 +967,7 @@ async function regenerateMessage(i) {
   setBusy(true);
   updateAssistant(el, m, true);
   try {
-    if (health.chat_tool_calling) {
+    if (health.chat_tool_calling || chatProfile !== "local") {
       if (window.MikuchinNativeToolClient?.unfinished(m))
         throw Error("当前工具调用尚未结束，请先完成该任务");
       delete m.native_turn_id;
@@ -1062,17 +1068,19 @@ function toolHtml(t, k) {
     ${Number.isFinite(t.image_job_finished_at) ? `data-native-tool-clock-end="${t.image_job_finished_at}"` : ""}
     aria-label="图像生成耗时"></span>` : "";
   const args = t.arguments == null ? "" : JSON.stringify(t.arguments, null, 2);
-  const preview = t.result != null ? t.result : args.replace(/\s+/g, " ");
+  const nativeFailed = Boolean(t.native_turn_id && t.state === "error");
+  const resultText = nativeFailed ? window.MikuchinNativeToolClient.errorText(t.error_detail || t.result) : t.result;
+  const preview = nativeFailed ? (window.MikuchinNativeToolClient.errorLabel(resultText,t.error_category) + " · 查看错误详情") : (t.result != null ? t.result : args.replace(/\s+/g, " "));
   let body = "";
   if (t.open) {
     body = `<div class="tool-call__label">Arguments</div><pre class="tool-call__pre">${esc(args || "(being written)")}</pre>`;
-    if (Array.isArray(t.phase_history) && t.phase_history.length) {
+    if (!nativeFailed && Array.isArray(t.phase_history) && t.phase_history.length) {
       body += `<div class="tool-call__label">执行阶段（已观察到的状态）</div>`+
         `<div class="muted small">${t.phase_history.map(esc).join(" · ")}</div>`;
     }
     if (t.result != null) {
       body += `<div class="tool-call__label">${t.state === "running" || t.state === "writing" ? "Status" : (t.ok ? "Result" : "Error")}${t.chars ? ` · ${fmt(t.chars)} characters` : ""}` +
-              `${t.truncated ? ", cut for the model" : ""}</div><pre class="tool-call__pre">${esc(t.result)}</pre>`;
+              `${t.truncated ? ", cut for the model" : ""}</div><pre class="tool-call__pre">${esc(resultText)}</pre>`;
     }
   }
   if (t.image_request_id && (t.state === "running" ||
@@ -1390,10 +1398,19 @@ function assistantMessages(m) {
   return out;
 }
 
+function chatVisionAvailable(){return chatProfile==="local" ? !!health.images : !!window.MikuchinChatApi?.selected()?.vision;}
+function updateChatModelNotice(){
+  const p=window.MikuchinChatApi?.selected();
+  const sub=$("chat-empty-sub");
+  if(sub && chatProfile==="local"){sub.dataset.model=health.model||"";sub.textContent=`${health.model||"PolyStrata"} ${ui("The model runs on this PC. Nothing leaves it.")}`;}
+  else if(sub && p){sub.removeAttribute("data-model");sub.textContent=`${p.name} · ${p.model} · ${ui("聊天上下文将发送给服务商")}`;}
+  $("attach-btn").title=ui(chatVisionAvailable()?"Attach a text file or a picture (or drop it here)":"Attach a text file (or drop it here)");
+}
 function setBusy(on) {
   $("stop-btn").hidden = !on;
   $("send-btn").disabled = on || sessionTransition;
-  $("composer-hint").textContent = on ? "" : "Shift+Enter: new line";
+  $("composer-hint").textContent = on ? "" : "Shift+Enter: send";
+  window.MikuchinChatApi?.render();
 }
 
 // Do not enqueue an image into a stale session while New Chat is still
@@ -1402,6 +1419,8 @@ let sessionTransition = false;
 async function send() {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy || sessionTransition) return;
+  if (window.MikuchinChatApi?.changing()) return;
+  if (chatProfile!=="local" && (!window.MikuchinChatApi?.ready() || !window.MikuchinChatApi.selected() || window.MikuchinChatApi.selected().revision!==chatRevision)) { toast("warn","聊天 API 服务不可用","请选择已配置的模型");return; }
   if (chatImageVisionPending || messages.some(x => x.role === "assistant" &&
         !x.native_background &&
         ((x.tools || []).some(t => t.image_request_id && t.state === "running") ||
@@ -1425,7 +1444,7 @@ async function send() {
   const responseSession=sessionId;
   setBusy(true);
   try {
-    if (health.chat_tool_calling) {
+    if (health.chat_tool_calling || chatProfile !== "local") {
       await submitModelToolTurn(m,el,controller.signal);
     } else {
       // No keyword route. The model must explicitly emit validated
@@ -1466,7 +1485,13 @@ async function receiveNativeToolStream(request,m,el,fixedSession) {
     // Deliberately no AbortSignal: the server may already have accepted a
     // model decision; disconnects are recovered with GET, never POST retry.
   });
-  if(!response.ok)throw Error("Tool stream HTTP "+response.status);
+  if(!response.ok){
+    const data=await response.json().catch(()=>({}));
+    const err=Error(data.error?.message||("Tool stream HTTP "+response.status));
+    // Validation/auth/maintenance rejection is a confirmed non-submission.
+    err.notSubmitted=[400,401,403,404,409,413,503].includes(response.status);
+    throw err;
+  }
   if(!response.body)throw Error("Tool stream has no readable body");
   let decision=null,thinkStart=null,lastPaint=0,lastSave=0;
   const paint=()=>{
@@ -1536,7 +1561,7 @@ function deliverNativeBackgroundCompletions() {
       messages.push({role:"assistant",text:parent.native_completion_text ||
         (failed?"这次生图失败了，请查看任务卡片中的错误。":"画好了，你看看这张图片！"),
         reasoning:"",time:Date.now(),tools:visibleTool?[visibleTool]:null,
-        native_completion_of:ident});
+        native_completion_of:ident,chat_model:parent.chat_model||null});
     }
     parent.native_completion_ready=false;
     changed=true;
@@ -1563,14 +1588,18 @@ async function submitModelToolTurn(m,el,signal) {
   if (signal?.aborted || fixedSession!==sessionId) return;
   // A regenerated variant always has its own fresh turn id.
   const turnId=makeSessionId();
+  const cloud=chatProfile!=="local" ? window.MikuchinChatApi?.selected() : null;
+  if(chatProfile!=="local" && (!cloud || cloud.revision!==chatRevision))throw Error("当前聊天 API 服务已变更，请重新选择并确认");
   const request={session_id:fixedSession,turn_id:turnId,
-    model:health.model,messages:context,reasoning_effort:settings.thinking,
+    ...(cloud?{chat_profile:cloud.id,chat_revision:chatRevision}:{}),
+    model:cloud?.model||health.model,messages:context,reasoning_effort:settings.thinking,
     reasoning_budget_tokens:Math.min(16384,thinkingBudget(settings))};
   if (!(settings.temperature > 0)) request.temperature=0;
   else if (!samplingUntouched(settings))
     Object.assign(request,{temperature:+settings.temperature,
       top_p:+settings.top_p,top_k:+settings.top_k});
   if (settings.seed) request.seed=+settings.seed;
+  m.chat_model=cloud?{name:cloud.name,model:cloud.model,online:true}:{name:health.model,model:health.model,online:false};
   m.native_turn_id=turnId;
   m.native_abort_requested=false;
   m.native_stream_active=true;
@@ -1586,6 +1615,10 @@ async function submitModelToolTurn(m,el,signal) {
     m.native_stream_active=false;
     // A read-only GET can reconcile an accepted POST without re-submitting.
     if(sessionId!==fixedSession)return;
+    if(error.notSubmitted){
+      delete m.native_turn_id;delete m.native_tool_state;m.native_tool_finished=true;
+      m.error=error.message;saveChat();renderChat();return;
+    }
     m.meta="请求连接中断，正在恢复任务状态";
     m.native_tool_error=String(error).slice(0,160);
     saveChat();renderChat();
@@ -1848,7 +1881,7 @@ async function describeNativeChatImage(message, tool, currentId) {
   } finally { chatImageVisionPending = false; }
 }
 $("input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  if (e.key === "Enter" && e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (!e.repeat) send(); }
 });
 function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, innerHeight * 0.4)}px`; }
 $("input").addEventListener("input", autosize);
@@ -1860,6 +1893,7 @@ $("new-btn").onclick = async () => {
   if (sessionV1) {
     const previous = sessionId;
     const previousSettings = settings;
+    const previousChatProfile = chatProfile, previousChatRevision=chatRevision;
     const button = $("new-btn");
     button.disabled = true;
     sessionTransition = true;
@@ -1871,7 +1905,7 @@ $("new-btn").onclick = async () => {
         setTimeout(() => reject(new Error("Saving the previous chat timed out")), 10000))]);
       // Another device may have changed the default since this page was opened.
       try { await loadGlobalSampling(); } catch (e) { console.warn("Default refresh failed", e); }
-      sessionId = makeSessionId();
+      sessionId = makeSessionId(); chatProfile = "local"; chatRevision=""; window.MikuchinChatApi?.render();
       settings = {...globalSampling};
       store.set("session-id", sessionId);
       await window.polyCharacterNewSession?.();
@@ -1885,6 +1919,7 @@ $("new-btn").onclick = async () => {
       toast("info", "New chat", "Previous conversations remain in the history.");
     } catch (e) {
       sessionId = previous;
+      chatProfile = previousChatProfile; chatRevision=previousChatRevision; window.MikuchinChatApi?.render();
       settings = previousSettings;
       store.set("session-id", previous);
       window.polyCharacterRefresh?.();
@@ -1893,6 +1928,7 @@ $("new-btn").onclick = async () => {
       sessionTransition = false;
       button.disabled = false;
       $("send-btn").disabled = !!busy;
+      window.MikuchinChatApi?.render();
     }
     return;
   }
@@ -1910,7 +1946,7 @@ $("export-btn").onclick = () => {
     `<details><summary>Tool ${t.server ? `${t.server} / ` : ""}${t.tool || t.name}${t.ok ? "" : " (error)"}</summary>\n\n` +
     `\`\`\`json\n${JSON.stringify(t.arguments || {}, null, 2)}\n\`\`\`\n\n\`\`\`\n${t.result}\n\`\`\`\n\n</details>\n\n`).join("");
   const md = messages.map((m) => m.role === "user" ? `## You\n\n${m.text}\n` :
-    `## ${health.model}\n\n${m.reasoning ? `<details><summary>Thinking</summary>\n\n${m.reasoning}\n\n</details>\n\n` : ""}${tools(m)}${m.text || m.error || ""}\n`).join("\n");
+    `## ${m.chat_model?.name || health.model}\n\n${m.reasoning ? `<details><summary>Thinking</summary>\n\n${m.reasoning}\n\n</details>\n\n` : ""}${tools(m)}${m.text || m.error || ""}\n`).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([md], {type: "text/markdown"}));
   a.download = `strata-chat-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
@@ -1928,14 +1964,14 @@ function isTextFile(f) {
 function addFiles(files) {
   for (const f of files) {
     if (f.type.startsWith("image/")) {
-      if (!health.images) { toast("warn", "Pictures are off", "This model was set up for text only."); continue; }
+      if (!chatVisionAvailable()) { toast("warn", "Pictures are off", "This model was set up for text only."); continue; }
       if (f.size > 20e6) { toast("warn", "Picture too large", `${f.name} is over 20 MB.`); continue; }
       const r = new FileReader();
       r.onload = () => { attachments.push({kind: "image", name: f.name || "pasted image", url: r.result}); renderAttachments(); };
       r.readAsDataURL(f);
       continue;
     }
-    if (!isTextFile(f)) { toast("warn", "Not a text file", `${f.name}: attach text files (code, notes, logs, data)${health.images ? " or pictures" : ""}.`); continue; }
+    if (!isTextFile(f)) { toast("warn", "Not a text file", `${f.name}: attach text files (code, notes, logs, data)${chatVisionAvailable() ? " or pictures" : ""}.`); continue; }
     if (f.size > MAX_TEXT_FILE) { toast("warn", "File too large", `${f.name} is over 512 KB.`); continue; }
     const r = new FileReader();
     r.onload = () => {
@@ -1994,7 +2030,7 @@ for (const id of ["chat", "composer"]) {
 }
 $("file").onchange = () => { addFiles($("file").files); $("file").value = ""; };
 $("input").addEventListener("paste", (e) => {
-  if (!health.images) return;
+  if (!chatVisionAvailable()) return;
   const files = [...(e.clipboardData || {}).files || []].filter((f) => f.type.startsWith("image/"));
   if (files.length) { e.preventDefault(); addFiles(files); }
 });

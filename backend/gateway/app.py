@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -28,7 +29,7 @@ try:
     from .workflows import WorkflowRuntime
     from .lore import search_sources
     from .image_jobs import ImageJobStore
-    from . import image_providers
+    from . import image_providers, chat_providers
     from . import gallery
     from . import local_images
     from .gpu_gate import gpu_turn, GPUUnavailable, read_state
@@ -42,6 +43,7 @@ except ImportError:  # unittest discover -s backend/gateway imports app as a top
     from lore import search_sources
     from image_jobs import ImageJobStore
     import image_providers
+    import chat_providers
     import gallery
     import local_images
     from gpu_gate import gpu_turn, GPUUnavailable, read_state
@@ -67,6 +69,7 @@ CHARACTERS = "/v1/strata/characters"
 REFERENCE = CHARACTERS + "/reference/"
 IMAGE_JOBS = "/v1/mikuchin/image-jobs"
 IMAGE_SERVICES = "/v1/mikuchin/image-api-services"
+CHAT_SERVICES = "/v1/mikuchin/chat-api-services"
 IMAGE_MODELS = "/v1/mikuchin/image-models"
 LOCAL_IMAGE_MODELS = "/v1/mikuchin/local-image-models"
 IMAGE_REFERENCE = "/v1/mikuchin/image-job-reference/"
@@ -108,6 +111,9 @@ class GatewayServer(ThreadingHTTPServer):
         self.characters = characters
         self.image_jobs = image_jobs
         self.request_monitor = RequestMonitor()
+        self.admission_lock = threading.Lock()
+        self.admission_draining = False
+        self.active_posts = 0
         super().__init__(address, GatewayHandler)
         # Read-only state recovery remains available even if the new feature
         # has been disabled after a failed rollout.
@@ -256,6 +262,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path in (GALLERY,GALLERY_ITEM) or path.startswith(GALLERY_THUMB):
             self._handle_gallery_get(path)
             return
+        if path == CHAT_SERVICES:
+            self._handle_chat_services()
+            return
         if path in (IMAGE_JOBS,IMAGE_SERVICES,IMAGE_MODELS) or path.startswith(IMAGE_REFERENCE):
             self._handle_image_get(path)
             return
@@ -305,6 +314,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # Active inference is separate from the independent image pool.
                 # The Supervisor must not interrupt a streaming reply.
                 "active_inference_requests": self.server.request_monitor.snapshot()["active"],
+                "active_mutation_requests": self.server.active_posts,
+                "admin_draining": self.server.admission_draining,
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
                 "official_polystrata_release": "v0.1.45-poly.10",
                 "model": str(upstream_health.get("model") or "official-polystrata")[:180],
@@ -325,6 +336,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # No hidden paid submissions during ordinary text responses.
                 "chat_image_jobs": bool(self.server.image_jobs),
                 # Image Studio capabilities do not imply model-driven tools.
+                "chat_api_services": bool(self.server.chat_turns and self.server.tool_calling_enabled),
                 "chat_tool_calling": bool(reachable and self.server.tool_calling_enabled
                                           and self.server.chat_turns),
                 # The official engine counts thinking and answer together in
@@ -395,6 +407,39 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        # Only the Supervisor knows the private upstream credential. This
+        # command is not exposed by the public Gateway API credential.
+        if self.path in ("/internal/admin/drain", "/internal/admin/resume"):
+            auth = self.headers.get("Authorization", "")
+            local = (self.client_address[0] == "127.0.0.1" and
+                     self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}" and
+                     not any(self.headers.get(h) for h in ("Origin", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP", "CF-Connecting-IP", "CF-Ray")))
+            if not local or not hmac.compare_digest(auth, "Bearer " + self.server.upstream_key):
+                self._error(403, "Private supervisor control only", "forbidden")
+                return
+            if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+                self._error(400, "Empty body required")
+                return
+            with self.server.admission_lock:
+                blocked = self.path.endswith("/drain") and self.server.active_posts != 0
+                if not blocked:
+                    self.server.admission_draining = self.path.endswith("/drain")
+            self._json(409 if blocked else 200, {"accepted": not blocked})
+            return
+        with self.server.admission_lock:
+            blocked = self.server.admission_draining
+            if not blocked:
+                self.server.active_posts += 1
+        if blocked:
+            self._error(503, "API stack is being safely reloaded", "maintenance")
+            return
+        try:
+            self._do_post()
+        finally:
+            with self.server.admission_lock:
+                self.server.active_posts -= 1
+
+    def _do_post(self):
         if not self._authorized():
             return
         if not self.path.startswith("/") or self.path.startswith("//"):
@@ -403,7 +448,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         private = (path == SESSIONS or path.startswith(SESSIONS + "/")
                    or path in (SAMPLING_DEFAULT, UI_LANGUAGE) or path == CHARACTERS
-                   or path in (IMAGE_JOBS,IMAGE_SERVICES,LOCAL_IMAGE_MODELS,GALLERY,CHAT_TURNS,
+                   or path in (IMAGE_JOBS,IMAGE_SERVICES,CHAT_SERVICES,LOCAL_IMAGE_MODELS,GALLERY,CHAT_TURNS,
                                CHAT_TURNS_STREAM)
                    or bool(CHAT_TURN_PATH.fullmatch(path)))
         if path not in INFERENCE_POSTS and not private:
@@ -441,6 +486,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._handle_chat_turn_post(path, request)
             elif path == GALLERY:
                 self._handle_gallery_post(request)
+            elif path == CHAT_SERVICES:
+                self._handle_chat_services(request)
             elif path in (IMAGE_JOBS,IMAGE_SERVICES):
                 self._handle_image_post(path,request)
             elif path == LOCAL_IMAGE_MODELS:
@@ -625,6 +672,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     if request.get("action") == "lock_kv":
                         self._error(410, "Manual KV locking has been retired", "feature_retired")
                         return
+                    if request.get("action")=="chat_profile" and request.get("chat_profile")!="local":
+                        if not self.server.chat_turns:raise ValueError("Native chat services unavailable")
+                        chat_providers.resolve(self.server.chat_turns.store.path.parent,{"id":request.get("chat_profile"),"revision":request.get("chat_revision")})
                     result = store.change(ident, request.get("action"), request)
                 elif method == "DELETE":
                     result = store.delete(ident)
@@ -754,6 +804,25 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.end_headers()
         self.wfile.write(raw)
+
+    def _handle_chat_services(self,request=None):
+        service=self.server.chat_turns
+        if service is None:
+            self._error(503,"Native chat services unavailable","unavailable")
+            return
+        root=service.store.path.parent
+        try:
+            if request is None:result={"services":chat_providers.listing(root)}
+            elif request.get("action")=="save":result={"service":chat_providers.save(root,request.get("service"))}
+            elif request.get("action")=="discover":result=chat_providers.discover(root,request.get("connection"))
+            elif request.get("action")=="delete":
+                chat_providers.delete(root,request.get("id"));result={"deleted":True}
+            else:raise ValueError("Unknown chat service action")
+            self._json(200,result)
+        except (ValueError,TypeError,OverflowError) as exc:
+            self._error(400,str(exc)[:160],"invalid_request")
+        except (OSError,sqlite3.Error):
+            self._error(503,"Native chat service registry unavailable","unavailable")
 
     def _handle_image_get(self,path):
         jobs=self.server.image_jobs

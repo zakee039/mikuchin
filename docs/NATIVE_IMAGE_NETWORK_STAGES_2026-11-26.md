@@ -1,0 +1,6 @@
+# Native API image request stages
+
+- Session-local HTTPAdapter instruments urllib3 pool connection classes for direct, HTTP proxy and SOCKS routes without global monkeypatching. The sending stage follows successful connect (including TLS/proxy setup); request_sent means local writes succeeded, not provider acknowledgement or generation completion. Existing receiving, download, decode and save stages remain unchanged. Network logs contain phase/timing/status/byte counts only.
+- A status-only SQLite exception must not interrupt a potentially billed HTTP operation. No automatic retry. Redirects of generation/edit POST are rejected (configure final Base URL) to avoid replay. Existing URL downloads keep their original stage.
+- Offline verification: 7 new real loopback tests, 15 existing image job tests, 9 frontend native tool tests, plus a verified local TLS request using an ephemeral certificate. No public image API calls. Current production runtime requests 2.34.2 / urllib3 2.8.0.
+- Production source updated; existing Worker must be cooperatively reloaded before changes take effect. Existing supervisor has no manual selective reload command; avoid full stack restart or force-kill solely for UI state changes. Preserve official PolyStrata and KV. No version bump, commit or release requested.
