@@ -6,9 +6,9 @@
 
 **Self-hosted Multimodal AI Companion & Image Studio**
 
-**Main app v0.5.2** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.2)
+**Main app v0.5.3** · [Download / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.3)
 
-**Independent versions:** main app `0.5.2` · Windows launcher `0.5.2` · Android client `0.5.2` (versionCode 502). All three artifacts were rebuilt for this release; see the release manifest. They remain independently versioned for future changes.
+**Independent versions:** main app `0.5.3` · Windows launcher `0.5.3` · Android client `0.5.3` (versionCode 503). All three artifacts were rebuilt for this release; see the release manifest. They remain independently versioned for future changes.
 
 [Official Site](https://mikuchin.zakee.fun) · [Personal Website](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -80,7 +80,7 @@ Inference, conversations and generated images remain on your Mikuchin host. Othe
 - **User-Space Tailscale**: Powered by official `tailscale.com/tsnet` compiled into a native AAR via `gomobile`. **Does not use Android `VpnService`**—can operate without taking over the VPN slot used by Clash Mi / Mihomo (actual routing depends on the phone configuration), without requiring root access or the official Tailscale app.
 - **Credential and local transport protection**: API keys are encrypted with **Android Keystore (`AES/GCM/NoPadding`)**. Native checks, SSE chat streams and uploads use an internal localhost-only (`127.0.0.1`) reverse proxy guarded by per-session random tokens.
 
-**Upgrade note:** v0.5.2 is release-signed. An APK signed with the same certificate can generally update in place; Debug-signed builds might require uninstalling first. Back up app-local settings before doing so.
+**Upgrade note:** v0.5.3 is release-signed. An APK signed with the same certificate can generally update in place; Debug-signed builds might require uninstalling first. Back up app-local settings before doing so.
 
 #### 7.3 Apple device access (iPhone / iPad / Mac)
 
@@ -152,7 +152,7 @@ Used for in-chat drawing and the Image Studio:
 - `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — Vision projector for native `--ref-image` editing ([`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF))
 - `qwen_image_2.1_vae_bf16.safetensors` — Shared BF16 VAE ([`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) under `vae/`)
 
-> You can also run PolyStrata's helper script `python backend/polystrata/tools/image/install.py --models-dir models` to build the image backend and fetch core weights, or use standard SDXL checkpoints (`Animagine XL 4.0 Opt`, `SDXL Base 1.0`).
+> You can also run PolyStrata's helper script `python backend/polystrata/terminal/tools/image/install.py --models-dir models` to build the image backend and fetch core weights, or use standard SDXL checkpoints (`Animagine XL 4.0 Opt`, `SDXL Base 1.0`).
 
 ## 📦 Download and build
 
@@ -163,7 +163,7 @@ git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
 # Existing clone: git submodule update --init --recursive
 ```
 
-Native main pins the **official upstream PolyStrata** as a Git submodule (v0.1.45-poly.10), with no private fork or upstream source changes. Model weights, Python/CUDA, and image backends must be installed separately; the current Windows Launcher installer is **not a self-contained runtime**. The old mixed architecture is preserved as old-mixed. See [Native migration notes](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md), [upstream MIT license](backend/polystrata/LICENSE), and [third-party notices](THIRD_PARTY_NOTICES.md).
+Native main pins the **official upstream PolyStrata** as a Git submodule (v0.2.20-poly.5), with no private fork or upstream source changes. Model weights, Python/CUDA, and image backends must be installed separately; the current Windows Launcher installer is **not a self-contained runtime**. The old mixed architecture is preserved as old-mixed. See [Native migration notes](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md), [upstream MIT license](backend/polystrata/LICENSE), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ```powershell
 python scripts/build-locales.py

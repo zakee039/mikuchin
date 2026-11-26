@@ -5,13 +5,15 @@ import test from "node:test";
 
 const file = name => readFileSync(new URL("../" + name, import.meta.url), "utf8");
 const versionsSource=file("versions.js");
+const gatewaySource=readFileSync(new URL("../../../backend/gateway/app.py",import.meta.url),"utf8");
+const pin=gatewaySource.match(/"official_polystrata_release": "(v\d+\.\d+\.\d+-poly\.\d+)"/)[1];
 const app=file("app.js");
 const index=file("index.html");
 
 test("official PolyStrata pin is embedded before app loads", () => {
   const window={};
   vm.runInNewContext(versionsSource,{window});
-  assert.equal(window.MIKUCHIN_VERSIONS.polystrata,"v0.1.45-poly.10");
+  assert.equal(window.MIKUCHIN_VERSIONS.polystrata,pin);
   const versions=JSON.parse(readFileSync(new URL("../../../versions.json",import.meta.url),"utf8"));
   assert.equal(window.MIKUCHIN_VERSIONS.main,versions.components.main.version);
   assert.ok(index.indexOf('web/versions.js') < index.indexOf('web/app.js'));
@@ -32,12 +34,12 @@ test("About page shows full official pin immediately, even without metrics or he
   vm.runInNewContext(source + "\nthis.render=renderAbout;",ctx);
   ctx.render({},{},{});
   const engine=tables["facts-engine"].find(([name])=>name==="Engine");
-  assert.equal(engine[1],"PolyStrata v0.1.45-poly.10");
+  assert.equal(engine[1],`PolyStrata ${pin}`);
   ctx.health={component:"mikuchin-gateway",official_polystrata_release:"v0.1.45",
               official_polystrata_reachable:false};
   ctx.render({version:"0.1.45"},{},{});
   assert.equal(tables["facts-engine"].find(([name])=>name==="Engine")[1],
-               "PolyStrata v0.1.45-poly.10");
+               `PolyStrata ${pin}`);
 });
 
 test("navigating to About does not wait for the first metrics poll", () => {

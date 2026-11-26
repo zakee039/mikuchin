@@ -25,8 +25,8 @@ android {
         applicationId = "com.mikuchin.client"
         minSdk = 26
         targetSdk = 34
-        versionCode = 502
-        versionName = "0.5.2"
+        versionCode = 503
+        versionName = "0.5.3"
         manifestPlaceholders["appLabel"] = "Mikuchin"
     }
 

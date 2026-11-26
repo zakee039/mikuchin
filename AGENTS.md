@@ -1,5 +1,12 @@
 # Mikuchin 版本与发布规则（仓库级指令）
 
+## 2026-11-26 PolyStrata v0.2.20-poly.5 正式切换（引擎新 pin，覆盖旧引擎 pin 记录）
+
+- 用户明确授权直接在 `main` 升级，不新建分支。官方子模块现锁定 `v0.2.20-poly.5` / `d62dfacbe185dfbb447e79c5fb1091ae189afc64`，官方源码零修改；产品仍为 0.5.2，原 GitHub `v0.5.2` tag/release 不动。
+- 官方 server/requirements 迁至 `terminal/`，Mikuchin 自有 layout resolver、启动器、CI、transport smoke 和版本显示已适配。Pin 脚本在正式端口仍监听时拒绝切换。正式引擎与视觉二进制位于 `runtime/polystrata-v0.2.20-poly.5/prebuilt`，配置保留 131072 context、14 threads、INT8 KV，tokenizer/profile 独立保留。
+- 已完成 191 后端、103 前端回归及官方 Mock transport；同硬件真实 A/B、SSE、CPU vision、auto Tool Calling、103-token KV save/unload/load/restore 通过。强制 function tool_choice 的文本解析限制新旧均存在，勿放宽安全 parser；RAM Prefix Cache 尚未接入。
+- 旧 Launcher 正常安全退出后替换新版，五份 SQLite 备份及新库 quick_check、行数一致。正式模型已实际加载，Gateway/Worker/Supervisor 正常，独立管理 CLI eligibility 成功。备份及回退资料见 `docs/NATIVE_POLYSTRATA_V0220_MIGRATION_2026-11-26.md`。
+
 ## 2026-11-26 混合聊天 API
 
 - 聊天服务独立于生图服务；配置与密钥由 Gateway 管理（Windows DPAPI），前端不返回 provider key。会话默认本地；在线选择需明确确认数据传输，保存服务 ID 与 revision，旧 Turn 及后续生图回复不得随切换迁移。服务配置变化时停止该旧路由，不回退或重复付费调用。在线后续回复不得读取之后新增的本地消息。支持 OpenAI Chat Completions、配置能力与已有生图工具；上游 PolyStrata 不修改。详见 `docs/NATIVE_CHAT_API_2026-11-26.md`。

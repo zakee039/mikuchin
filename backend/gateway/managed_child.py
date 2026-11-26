@@ -64,9 +64,12 @@ def main():
 
     if args.engine == "strata" and not args.config:
         parser.error("Official model config is required for the strata engine")
-    if not (OFFICIAL / "serve" / "server.py").is_file():
-        parser.error("Pinned official PolyStrata checkout is missing")
-    sys.path.insert(0, str(OFFICIAL))
+    from .official_layout import serving_root
+    try:
+        upstream = serving_root(OFFICIAL)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    sys.path.insert(0, str(upstream))
     from serve import server
     cmd = ["serve.server", "--engine", args.engine, "--host", "127.0.0.1",
            "--port", str(args.upstream_port)]

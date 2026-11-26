@@ -84,7 +84,10 @@ def expected_files(data: dict) -> dict[str, str]:
     replace("frontend/web/versions.js",
             r'(?m)^  polystrata: "v\d+\.\d+\.\d+-poly\.\d+",',
             f'  polystrata: "{engine_pin}",')
-    replace("frontend/web/index.html", r'web/versions\.js\?v=\d+\.\d+\.\d+', f'web/versions.js?v={m}')
+    replace("frontend/web/index.html", r'web/versions\.js\?v=\d+\.\d+\.\d+(?:-v\d+\.\d+\.\d+-poly\.\d+)?', f'web/versions.js?v={m}-{engine_pin}')
+    replace("frontend/launcher/src-tauri/src/native.rs",
+            r'engine: "PolyStrata v\d+\.\d+\.\d+-poly\.\d+"\.into\(\),',
+            f'engine: "PolyStrata {engine_pin}".into(),')
 
     replace("frontend/launcher/package.json", r'(?m)^  "version": "\d+\.\d+\.\d+",', f'  "version": "{l}",')
     replace("frontend/launcher/package-lock.json", r'(?m)^  "version": "\d+\.\d+\.\d+",', f'  "version": "{l}",')

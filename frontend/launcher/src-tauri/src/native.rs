@@ -44,7 +44,8 @@ pub(crate) fn state_dir() -> PathBuf {
 fn project_root() -> Result<PathBuf, String> {
     fn has_native_backend(root: &Path) -> bool {
         root.join("backend/gateway/supervisor.py").is_file()
-            && root.join("backend/polystrata/serve/server.py").is_file()
+            && (root.join("backend/polystrata/terminal/serve/server.py").is_file()
+                || root.join("backend/polystrata/serve/server.py").is_file())
     }
     if let Some(explicit) = std::env::var_os("MIKUCHIN_NATIVE_HOME") {
         let root = PathBuf::from(explicit);
@@ -597,7 +598,7 @@ fn describe_model_config(file: String, path: &Path, value: &Value) -> NativeMode
         vram_reserve_mib: arg_value("--vram-reserve-mib").and_then(|v| v.parse().ok()),
         idle_unload_s: value["idle_unload_s"].as_u64(),
         conversation_cache_mib: arg_value("--conversation-cache-mib"),
-        engine: "PolyStrata v0.1.45-poly.10".into(),
+        engine: "PolyStrata v0.2.20-poly.5".into(),
         path: path.to_string_lossy().to_string(),
     }
 }

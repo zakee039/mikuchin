@@ -6,9 +6,9 @@
 
 **ローカル・マルチモーダル AI コンパニオン＆画像制作ワークスペース**
 
-**メインアプリ v0.5.2** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.2)
+**メインアプリ v0.5.3** · [ダウンロード / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.3)
 
-**個別バージョン：**メインアプリ `0.5.2` · Windows ランチャー `0.5.2` · Android クライアント `0.5.2`（versionCode 502）。今回は全 3 コンポーネントを再ビルドしました。Release のマニフェストを参照してください。 以降のバージョンは個別に管理し、versions.json に記録します。
+**個別バージョン：**メインアプリ `0.5.3` · Windows ランチャー `0.5.3` · Android クライアント `0.5.3`（versionCode 503）。今回は全 3 コンポーネントを再ビルドしました。Release のマニフェストを参照してください。 以降のバージョンは個別に管理し、versions.json に記録します。
 
 [公式サイト](https://mikuchin.zakee.fun) · [個人サイト](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -80,7 +80,7 @@
 - **ユーザー空間 Tailscale 統合**：公式 `tailscale.com/tsnet`（Go + `gomobile` AAR）をアプリ内に内蔵。**Android の `VpnService` を一切使用しない**ため、Android の VPN スロットを占有しません。実際の接続経路は端末の設定に依存し、Root 化や公式 Tailscale アプリのインストールも不要です。
 - **認証情報の保護**：API キーは Android Keystore（`AES/GCM/NoPadding`）で暗号化保存されます。接続設定は認証済みのアプリ内で管理されます。
 
-**アップグレード時の注意：** v0.5.2 は正式署名済み APK です。同じ証明書の旧版は通常上書きできますが、Debug 署名版では再インストールが必要になる場合があります。先にアプリ内設定をバックアップしてください。
+**アップグレード時の注意：** v0.5.3 は正式署名済み APK です。同じ証明書の旧版は通常上書きできますが、Debug 署名版では再インストールが必要になる場合があります。先にアプリ内設定をバックアップしてください。
 
 #### 7.3 Apple デバイスからアクセス（iPhone / iPad / Mac）
 
@@ -152,7 +152,7 @@ Windows インストーラーおよびリポジトリにはモデルの重みフ
 - `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — ネイティブ参照画像編集（`--ref-image`）用視覚プロジェクター（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
 - `qwen_image_2.1_vae_bf16.safetensors` — 共有 BF16 VAE デコーダー（[`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) `vae/` ディレクトリ）
 
-> PolyStrata 同梱スクリプト `python backend/polystrata/tools/image/install.py --models-dir models` での自動セットアップや、標準 SDXL チェックポイント（`Animagine XL 4.0 Opt`、`SDXL Base 1.0`）にも対応しています。
+> PolyStrata 同梱スクリプト `python backend/polystrata/terminal/tools/image/install.py --models-dir models` での自動セットアップや、標準 SDXL チェックポイント（`Animagine XL 4.0 Opt`、`SDXL Base 1.0`）にも対応しています。
 
 ## 📦 ダウンロードとビルド
 
@@ -163,7 +163,7 @@ git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
 # クローン済みの場合：git submodule update --init --recursive
 ```
 
-Native main は**公式 PolyStrata**を Git サブモジュール（v0.1.45-poly.10）として固定し、上流ソースを改変しません。モデルの重み、Python/CUDA と画像生成のランタイムは別途必要です。現行 Windows Launcher のインストーラーだけでは**単体動作できません**。旧構成は old-mixed に保存されています。[Native 移行記録](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[MIT ライセンス](backend/polystrata/LICENSE)、[第三者ライセンス表示](THIRD_PARTY_NOTICES.md) を参照してください。
+Native main は**公式 PolyStrata**を Git サブモジュール（v0.2.20-poly.5）として固定し、上流ソースを改変しません。モデルの重み、Python/CUDA と画像生成のランタイムは別途必要です。現行 Windows Launcher のインストーラーだけでは**単体動作できません**。旧構成は old-mixed に保存されています。[Native 移行記録](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[MIT ライセンス](backend/polystrata/LICENSE)、[第三者ライセンス表示](THIRD_PARTY_NOTICES.md) を参照してください。
 
 ```powershell
 python scripts/build-locales.py

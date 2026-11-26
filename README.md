@@ -6,9 +6,9 @@
 
 **本地多模态 AI 伴侣与图像创作工作台**
 
-**主程序 v0.5.2** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.2)
+**主程序 v0.5.3** · [下载 / GitHub Releases](https://github.com/zakee039/mikuchin/releases/tag/v0.5.3)
 
-**独立版本：**主程序 `0.5.2` · Windows 启动器 `0.5.2` · Android 客户端 `0.5.2`（versionCode 502）。本次三个组件均重新构建，详见 GitHub Release 资产清单。后续仍允许独立升级，所有版本号统一记录在 versions.json。
+**独立版本：**主程序 `0.5.3` · Windows 启动器 `0.5.3` · Android 客户端 `0.5.3`（versionCode 503）。本次三个组件均重新构建，详见 GitHub Release 资产清单。后续仍允许独立升级，所有版本号统一记录在 versions.json。
 
 [产品官网](https://mikuchin.zakee.fun) · [个人主页](https://zakee.fun) · [Buy Me a Coffee](https://ifdian.net/a/zakee/plan)
 
@@ -99,7 +99,7 @@ Mikuchin 的模型推理、会话和生成图片保存在运行服务的主机�
   - **不使用 Android `VpnService`**：不占用系统 VPN 槽位，可在系统代理 VPN 运行时使用，但具体路由仍取决于设备与代理配置，无需 Root 权限，也无需安装官方 Tailscale 客户端。
 - **凭据与本地通信保护**：API Key 使用 **Android Keystore（`AES/GCM/NoPadding`）** 加密保存；应用内部以仅绑定 `127.0.0.1` 随机端口的 SOCKS5 和一次性会话 Token 校验的 HTTP 反向代理承载校验、SSE 流式聊天和图片上传。
 
-**升级提醒：** v0.5.2 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
+**升级提醒：** v0.5.3 的 APK 已使用项目发布证书签名。如果你之前安装的是 Android Debug 证书签名的 APK，通常需要先卸载旧版再安装；请提前备份需要保留的应用内设置。可用性取决于模型文件、驱动、设备和网络环境，不能把构建成功视为全部真机功能已验证。
 
 #### 7.3 苹果设备访问（iPhone / iPad / Mac）
 
@@ -162,7 +162,7 @@ git clone --recurse-submodules https://github.com/zakee039/mikuchin.git
 # 已有仓库，请在其根目录执行：git submodule update --init --recursive
 ```
 
-新版 main 将官方 PolyStrata 固定为 Git 子模块（v0.1.45-poly.10），不修改其源码，也不依赖个人 Fork。推理权重、驱动、Python/CUDA 运行时和生图后端需要单独安装；现有 Windows Launcher 安装包并不是完整的可搬迁运行时。旧版混合架构保留于 old-mixed。详见 [Native 迁移记录](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[官方引擎 MIT 许可](backend/polystrata/LICENSE) 和 [第三方声明](THIRD_PARTY_NOTICES.md)。
+新版 main 将官方 PolyStrata 固定为 Git 子模块（v0.2.20-poly.5），不修改其源码，也不依赖个人 Fork。推理权重、驱动、Python/CUDA 运行时和生图后端需要单独安装；现有 Windows Launcher 安装包并不是完整的可搬迁运行时。旧版混合架构保留于 old-mixed。详见 [Native 迁移记录](docs/NATIVE_V040_MAIN_MIGRATION_2026-11-21.md)、[官方引擎 MIT 许可](backend/polystrata/LICENSE) 和 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ### 2. 构建多语言词典与 Windows 桌面管理器
 ```powershell
@@ -202,7 +202,7 @@ Windows 安装包与源码仓库不包含模型权重文件，请按需准备以
 - `mmproj-Qwen3VL-8B-Instruct-F16.gguf` — 原生参考图编辑（`--ref-image`）视觉投影器（[`Qwen/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)）
 - `qwen_image_2.1_vae_bf16.safetensors` — 共享 BF16 VAE 解码器（[`unsloth/Qwen-Image-2.1-FP8`](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8) `vae/` 目录）
 
-> 也可使用 PolyStrata 内置脚本一键编译生图后端并拉取基础组件：`python backend/polystrata/tools/image/install.py --models-dir models`。此外，图像工作台同样兼容标准 SDXL 单文件权重（如 `Animagine XL 4.0 Opt`、`SDXL Base 1.0`）。
+> 也可使用 PolyStrata 内置脚本一键编译生图后端并拉取基础组件：`python backend/polystrata/terminal/tools/image/install.py --models-dir models`。此外，图像工作台同样兼容标准 SDXL 单文件权重（如 `Animagine XL 4.0 Opt`、`SDXL Base 1.0`）。
 
 ## 📦 下载安装
 

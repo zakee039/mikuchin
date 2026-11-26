@@ -30,7 +30,11 @@ jobs:
           python-version: '3.12'
       - name: Install pinned official Python and Gateway test dependencies (no GPU runtime)
         run: |
-          python -m pip install -r backend/polystrata/requirements.txt
+          if test -f backend/polystrata/terminal/requirements.txt; then
+            python -m pip install -r backend/polystrata/terminal/requirements.txt
+          else
+            python -m pip install -r backend/polystrata/requirements.txt
+          fi
           python -m pip install -r backend/gateway/requirements.txt
       - name: Verify official PolyStrata pin and clean upstream checkout
         shell: bash

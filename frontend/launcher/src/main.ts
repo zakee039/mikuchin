@@ -327,7 +327,7 @@ function mount() {
     <nav class="tabs" role="tablist">${(Object.keys(names) as Tab[]).map(key =>
       `<button role="tab" class="tab ${tab === key ? "selected" : ""}" data-tab="${key}">${names[key]}</button>`).join("")}</nav>
     <main id="content"></main>
-    <footer><span id="notice">${esc(notice)}</span><span>v0.5.2</span></footer>`;
+    <footer><span id="notice">${esc(notice)}</span><span>v0.5.3</span></footer>`;
   renderBody();
   translateDom(root);
 }

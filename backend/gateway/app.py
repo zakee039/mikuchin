@@ -317,7 +317,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 "active_mutation_requests": self.server.active_posts,
                 "admin_draining": self.server.admission_draining,
                 "component": "mikuchin-gateway", "official_polystrata_reachable": reachable,
-                "official_polystrata_release": "v0.1.45-poly.10",
+                "official_polystrata_release": "v0.2.20-poly.5",
                 "model": str(upstream_health.get("model") or "official-polystrata")[:180],
                 # None is intentional when the upstream lacks a loaded flag:
                 # never misreport an unknown model as idle-unloaded.

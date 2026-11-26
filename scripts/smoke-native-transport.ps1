@@ -16,6 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $upstream = Join-Path $root 'backend\polystrata'
+if (Test-Path (Join-Path $upstream 'terminal\serve\server.py')) { $upstream = Join-Path $upstream 'terminal' }
 $runtime = if ($RuntimeRoot) {$RuntimeRoot} else {Join-Path $root 'runtime'}
 if (-not $Python) {$Python = Join-Path $runtime '.venv\Scripts\python.exe'}
 $logs = Join-Path $runtime 'smoke-logs'

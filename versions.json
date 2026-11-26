@@ -1,21 +1,21 @@
 {
   "schema": 1,
-  "release": "v0.5.2",
-  "previous_release": "v0.5.1",
+  "release": "v0.5.3",
+  "previous_release": "v0.5.2",
   "components": {
     "main": {
-      "version": "0.5.2",
-      "previous_version": "0.5.1"
+      "version": "0.5.3",
+      "previous_version": "0.5.2"
     },
     "launcher": {
-      "version": "0.5.2",
-      "previous_version": "0.5.1"
+      "version": "0.5.3",
+      "previous_version": "0.5.2"
     },
     "android": {
-      "version": "0.5.2",
-      "versionCode": 502,
-      "previous_version": "0.5.1",
-      "previous_versionCode": 501
+      "version": "0.5.3",
+      "versionCode": 503,
+      "previous_version": "0.5.2",
+      "previous_versionCode": 502
     }
   }
 }
