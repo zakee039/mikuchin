@@ -14,3 +14,7 @@
 
 - 14 项版本同步校验与 103 项 Web 回归通过。Windows EXE、NSIS 文件版本均为 0.5.3，Android APK 包名 `com.mikuchin.client`、版本 0.5.3 / 503，签名有效且与 v0.5.2 一致。Android 未真机安装测试。
 - 构建文件已保存至 `dist/release/`，发行状态以 GitHub Release 为准。
+
+## Source bundle availability / 源码包说明
+
+完整（含官方子模块）源码 ZIP 生成期间，本机安全软件隔离了官方 PolyStrata 的集成测试脚本 `terminal/integrations/harness/tool_flow_e2e.py`（TrojanDownloader/Python.NetLoader.o）。目前未确认误报；不恢复、执行或重新分发该文件。官方子模块指针保持原始 release SHA，Mikuchin GitHub 自动生成的源码归档不包含子模块文件。此次仅上传独立构建的 Windows Launcher EXE/NSIS、Android APK 与三项资产校验清单；完整源码 ZIP 及其校验文件暂缓发布。已有引擎升级与隔离测试不等于安全认证。
